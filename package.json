@@ -1,0 +1,46 @@
+{
+  "name": "@ours.network/messenger-server",
+  "version": "0.1.0",
+  "description": "Self-hosted messenger backend for ours.network — attaches to a running ours daemon, exposes a REST API for a frontend, and sends WebPush from the server the moment a message lands in the packet.",
+  "type": "module",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Adapt Toolkit",
+  "keywords": [
+    "ours",
+    "a2a",
+    "adapt",
+    "e2e",
+    "messaging",
+    "messenger",
+    "webpush",
+    "rest"
+  ],
+  "bin": {
+    "ours-messenger-server": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "tsx src/cli.ts serve",
+    "serve": "node dist/cli.js serve",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "for f in tests/*.test.mjs; do echo \"# $f\"; node_modules/.bin/tsx \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "@ours.network/sdk": "1.0.1",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/web-push": "^3.6.4",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
