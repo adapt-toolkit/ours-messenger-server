@@ -79,6 +79,19 @@ function boolOrUndefined(raw: string | undefined, name: string): boolean | undef
   throw new Error(`${name} must be true/false (or 1/0), got ${JSON.stringify(raw)}`);
 }
 
+/**
+ * OUR state directory, resolved WITHOUT requiring the rest of the config.
+ *
+ * Split out because `src/boot-env.ts` needs it before anything else runs, and it
+ * must not fail on a missing identity: `ours-messenger-server --help` has to print
+ * usage on a box with no environment set at all. Folding this back into
+ * `loadConfig` is how `--help` starts throwing "OURS_MESSENGER_IDENTITY is
+ * required" at a user who is trying to find out what to set.
+ */
+export function resolveOwnStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(env.OURS_MESSENGER_STATE_DIR ?? join(homedir(), '.ours-messenger'));
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfig {
   const identity = env.OURS_MESSENGER_IDENTITY;
   if (!identity) {
@@ -92,7 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfi
     port: intOrUndefined(env.OURS_MESSENGER_PORT, 'OURS_MESSENGER_PORT') ?? DEFAULT_HTTP_PORT,
     identity,
     force: boolOrUndefined(env.OURS_MESSENGER_FORCE, 'OURS_MESSENGER_FORCE') ?? false,
-    stateDir: resolve(env.OURS_MESSENGER_STATE_DIR ?? join(homedir(), '.ours-messenger')),
+    stateDir: resolveOwnStateDir(env),
     keepHistory: boolOrUndefined(env.OURS_MESSENGER_KEEP_HISTORY, 'OURS_MESSENGER_KEEP_HISTORY') ?? true,
     daemon: {
       endpoint: env.OURS_MESSENGER_DAEMON_URL || undefined,

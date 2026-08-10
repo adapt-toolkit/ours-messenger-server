@@ -4,6 +4,13 @@
 // One command, `serve`. Everything else is environment, because this is a thing an
 // operator puts in a unit file and forgets, not a thing they drive interactively.
 
+// THESE TWO IMPORTS ARE ORDERED, NOT ALPHABETISED. `./boot-env.js` redirects the
+// SDK's module-load state-directory side effects away from the operator's live
+// `~/.ours`, and it only works if it is evaluated BEFORE the first module that
+// imports @ours.network/sdk — which `./server.js` does. ES module evaluation is
+// depth-first in import order, so this ordering is a guarantee rather than a hope.
+// tests/state-dir-isolation.test.mjs is the guard, and it fails if these swap.
+import './boot-env.js';
 import { loadConfig } from './config.js';
 import { start } from './server.js';
 
