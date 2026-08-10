@@ -105,7 +105,17 @@ t.ok(true, 'dist/cli.js contains no startDaemon and no bootWrapper — the shipp
 // And the same must-have-something-to-read check: a bundle that failed to build,
 // or one truncated to nothing, would satisfy every assertion above.
 t.ok(bundle.length > 100_000, `the bundle is real (${Math.round(bundle.length / 1024)} KB), not an empty file passing by default`);
-t.ok(bundle.includes('OursClient'), 'and it does contain OursClient — the attach path is in the shipped artefact');
+// THE POSITIVE MARKERS MUST BE STRING LITERALS, NOT IDENTIFIERS. `OursClient` and
+// `resolveDaemonConfig` are renamed by the bundler and appear NOWHERE in
+// dist/cli.js — asserting on them fails on a perfectly good bundle. (It did, and
+// chasing that failure is how the createRequire collision was found, so the
+// mistake earned its keep.) String literals survive: these three are the lease
+// header OursClient sends, the typed operation prefix it posts to, and the
+// unauthenticated route assertDaemonStateDir reads.
+for (const marker of ['x-ours-lease-token', '/api/v1/', 'state-dir']) {
+  assert.ok(bundle.includes(marker), `dist/cli.js should contain the literal ${JSON.stringify(marker)}`);
+}
+t.ok(true, 'and it contains the attach path — lease header, /api/v1/ prefix and the state-dir probe are all in the shipped artefact');
 
 console.log(`\nno-engine OK (${t.count} checks)`);
 process.exit(0);

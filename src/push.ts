@@ -149,7 +149,7 @@ export class PushStore {
    * Every other failure is left in place and reported: a 500 from a push service,
    * or a network blip, must not cost a real device its subscription.
    */
-  async send(event: PushEvent): Promise<{ sent: number; pruned: number; failed: number }> {
+  async send(event: PushEvent): Promise<{ sent: number; pruned: number; failed: number; errors: string[] }> {
     const payload = JSON.stringify(event);
     const vapidDetails = {
       subject: this.state.vapid.subject,
@@ -160,6 +160,12 @@ export class PushStore {
     let sent = 0;
     let failed = 0;
     const dead: string[] = [];
+    // THE REASON, NOT JUST THE COUNT. An earlier version returned `failed: 1` and
+    // nothing else; the first time a push failed in a test the only evidence was
+    // "1 subscription(s) failed (kept for retry)", which names neither the status
+    // nor the endpoint nor the library's message. A counter without a cause turns
+    // a five-second diagnosis into a bisect.
+    const errors: string[] = [];
 
     await Promise.all(
       this.list().map(async (sub) => {
@@ -172,13 +178,26 @@ export class PushStore {
           sent++;
         } catch (e) {
           const status = (e as { statusCode?: number }).statusCode;
-          if (status === 404 || status === 410) dead.push(sub.endpoint);
-          else failed++;
+          if (status === 404 || status === 410) {
+            dead.push(sub.endpoint);
+          } else {
+            failed++;
+            // The endpoint's ORIGIN only. A full push endpoint is a capability —
+            // anyone holding it can send that device notifications — and this
+            // string goes to a log file.
+            let origin = 'unparseable-endpoint';
+            try {
+              origin = new URL(sub.endpoint).origin;
+            } catch {
+              /* keep the placeholder */
+            }
+            errors.push(`${origin}: ${status ?? 'no status'}: ${(e as Error).message}`);
+          }
         }
       }),
     );
 
     for (const endpoint of dead) this.unsubscribe(endpoint);
-    return { sent, pruned: dead.length, failed };
+    return { sent, pruned: dead.length, failed, errors };
   }
 }

@@ -78,7 +78,9 @@ export function startWatcher(
             const result = await push.send({ kind, from, count: 1 });
             stats.pushes += result.sent;
             if (result.pruned) log.info(`push: pruned ${result.pruned} dead subscription(s)`);
-            if (result.failed) log.warn(`push: ${result.failed} subscription(s) failed (kept for retry)`);
+            if (result.failed) {
+              log.warn(`push: ${result.failed} subscription(s) failed (kept for retry): ${result.errors.join('; ')}`);
+            }
           } catch (e) {
             // A PUSH FAILURE MUST NOT KILL THE WATCH. The message is already in the
             // packet and readable over REST; losing the notification is a degraded
