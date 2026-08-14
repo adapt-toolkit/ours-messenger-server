@@ -411,8 +411,10 @@ identity, contacts, and the selected conversation in parallel.
   delivery state.
 - An old history row with empty `wire_id` remains readable but cannot gain a
   receipt and is not a stable page cursor.
-- Existing stored packet history requires no migration. The receipt map is already
-  part of the actor's state and existing merge logic remains authoritative.
+- Existing stored packet history and its receipt map remain part of the actor's
+  state. Moving an identity into messenger uses the explicit offline `migrate`
+  command, which backs up and byte-verifies the complete SDK state rather than
+  translating or partially recreating actor fields.
 - Keep `keep_history` and `readvertiseOnUpgrade`; the receipt receive capability
   must be advertised after deployment.
 - Pin the messenger server to the first published SDK/actor release that provides
@@ -427,8 +429,10 @@ identity, contacts, and the selected conversation in parallel.
 - REST additions and event fields are additive. Existing clients, CLI usage, and
   push subscriptions continue to operate.
 
-No on-disk server schema migration is introduced. The only new server state is
-ephemeral SSE subscribers and bounded queues.
+Lifecycle adds two owner-only provenance records at the messenger state root:
+`initialization.json` pins the explicitly created Human/root name and CID, while
+`migration.json` records explicit source/backup paths and matching content
+manifests. Neither record contains actor secrets or conversation content.
 
 ## 12. File-level implementation map
 
@@ -437,7 +441,8 @@ ephemeral SSE subscribers and bounded queues.
 | File | Change |
 | --- | --- |
 | `src/boot-env.ts` | Fix owned config/state/broker/port/auth before the first dynamic SDK import; ignore ambient ours selection. |
-| `src/daemon.ts` | Start/close the SDK daemon without MCP, retain the internal owner token only in `OursClient`, bind/bootstrap the configured identity. |
+| `src/daemon.ts` | Start/close the SDK daemon without MCP, retain the internal owner token only in `OursClient`, and bind (never bootstrap) the configured identity. |
+| `src/lifecycle.ts` | Gate empty serve read-only; perform confirmed offline Human/root initialization and byte-complete, backed-up migration with provenance receipts. |
 | `mufl_code/actor.mu` or the package's messenger actor source | Add authenticated `sender_id` and `wire_id` to `message_received`; add `sender_id`, `wire_ids`, and available timestamp to `receipt_received`. Preserve body-free notifications. |
 | `src/mufl/handlers.ts` | Recognize and persist normalized `receipt_received`; preserve new message metadata; safely pass unknown events. |
 | `src/events.ts` | Export the expanded discriminated union and receipt kind. |
@@ -586,17 +591,18 @@ port `0`, owner visibility, and no ambient API token. `src/daemon.ts` then calls
 `startDaemon({ version })` without `mcp`, reads the freshly minted private token,
 and creates `OursClient` against `127.0.0.1:<handle.port>`.
 
-An exclusive `.messenger-runtime.lock` is created atomically before SDK import,
-so concurrent processes cannot reuse one state directory. Close/rollback removes
-only the exact record this process wrote; stale crash locks require an operator to
-verify the recorded PID is dead before removal.
+An OS-held advisory `flock` is acquired on `.messenger-runtime.lock` before SDK
+import, so concurrent processes cannot reuse one state directory. The persistent
+inode and its PID JSON are diagnostic only. Ownership is the open descriptor:
+close/rollback, `SIGKILL`, and reboot release it automatically, while PID reuse
+or edited/stale record text cannot steal a live lock.
 
 `src/server.ts` rolls back every completed stage on failure. Shutdown stops the
 public HTTP surface first, then the notification watcher/event fan-out, releases
 the identity lease while the runtime is alive, and finally closes the SDK daemon.
 The same close path is idempotent. `tests/state-dir-isolation.test.mjs` exercises
 normal close and a bind failure after runtime startup; both lifecycle paths must
-leave no listening server handles or state lock. Signal-listener ownership is
+leave no listening server handles or held advisory lock. Signal-listener ownership is
 covered by the separate SDK blocker.
 
 The remaining signal-order acceptance is

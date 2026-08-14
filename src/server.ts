@@ -11,6 +11,7 @@ import { MessengerEventBus } from './events.js';
 import { PushStore } from './push.js';
 import { startWatcher, type WatcherHandle } from './watch.js';
 import type { MessengerConfig } from './config.js';
+import { assertStateInitializedForServe } from './lifecycle.js';
 
 export interface ServerHandle {
   readonly port: number;
@@ -89,6 +90,9 @@ export async function start(
   };
 
   try {
+    // This read-only gate precedes owned-runtime configuration. An empty serve
+    // therefore creates no directory, lock, token, registrar, or listener.
+    assertStateInitializedForServe(cfg);
     runtime = await startRuntime(cfg, buildInfo);
     log.info(`owned runtime ${JSON.stringify(runtime.described)}`);
 
