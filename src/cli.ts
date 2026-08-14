@@ -5,8 +5,8 @@
 // operator puts in a unit file and forgets, not a thing they drive interactively.
 
 import { loadConfig } from './config.js';
-
-const BUILD = { name: '@ours.network/messenger-server', version: '0.1.0' };
+import { BUILD_INFO } from './build-info.js';
+import { operatorError, reportFailure } from './security.js';
 
 const USAGE = `ours-messenger-server serve
 
@@ -19,6 +19,8 @@ Required:
 HTTP:
   OURS_MESSENGER_HOST              default 127.0.0.1  (see README: there is no auth)
   OURS_MESSENGER_PORT              default 8420
+  OURS_MESSENGER_PUBLIC_ORIGIN     required exact browser origin, e.g.
+                                   https://messenger.example.com
   OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger
                                    runtime state lives under <state>/runtime
 
@@ -52,7 +54,7 @@ async function main(): Promise<void> {
   // Keep the SDK-bearing server graph out of `--help`; start() configures the
   // owned runtime environment before dynamically importing the SDK.
   const { start } = await import('./server.js');
-  const handle = await start(cfg, BUILD);
+  const handle = await start(cfg, BUILD_INFO);
 
   let closing = false;
   const shutdown = (signal: string) => {
@@ -62,8 +64,8 @@ async function main(): Promise<void> {
     handle
       .close()
       .then(() => process.exit(0))
-      .catch((e: Error) => {
-        console.error(`[messenger] shutdown error: ${e.message}`);
+      .catch((error: unknown) => {
+        reportFailure((message) => console.error(`[messenger] ${message}`), 'shutdown', error);
         process.exit(1);
       });
   };
@@ -71,10 +73,8 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-main().catch((e: Error) => {
-  // The startup failures an operator actually hits — an unreachable daemon, a
-  // state dir that does not match, an identity held elsewhere — arrive here. Print
-  // the message alone: the stack is noise for all three, and OursError.message is
-  // already the engine's own words.
-  process.stderr.write(`[messenger] ${e.message}\n`, () => process.exit(1));
+main().catch((error: unknown) => {
+  operatorError(error, 'startup', (message) => {
+    process.stderr.write(`[messenger] ${message}\n`, () => process.exit(1));
+  });
 });

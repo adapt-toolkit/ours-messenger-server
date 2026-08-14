@@ -23,6 +23,7 @@ assert.ok(ROUTE_NAMES.includes('GET /api/events'), 'SSE route is part of the pub
 assert.ok(html.includes('/app.js') && html.includes('/styles.css'), 'built entry document loads only same-origin assets');
 assert.ok(built.includes('/api/events'), 'built client opens the same-origin SSE invalidation stream');
 assert.ok(built.includes('/read') && built.includes('/api/messages/send'), 'built client has explicit read and send mutations');
+assert.ok(source.includes("'X-Ours-Messenger-CSRF': '1'"), 'every web mutation carries the fixed CSRF intent header');
 assert.ok(!source.includes('localStorage') && !source.includes('sessionStorage'), 'messages and receipts are not browser-persisted');
 assert.ok(source.includes("aria-label', label") || source.includes('aria-label", label'), 'receipt marks have accessible labels');
 assert.ok(css.includes('@media (max-width: 859px)') && css.includes('prefers-reduced-motion'), 'mobile detail and reduced motion are explicit');

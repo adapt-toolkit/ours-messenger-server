@@ -7,9 +7,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const mutating = method !== 'GET' && method !== 'HEAD';
   const res = await fetch(path, {
     ...init,
-    headers: init?.body ? { 'content-type': 'application/json', ...init.headers } : init?.headers,
+    headers: mutating
+      ? { 'content-type': 'application/json', 'X-Ours-Messenger-CSRF': '1', ...init?.headers }
+      : init?.headers,
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
