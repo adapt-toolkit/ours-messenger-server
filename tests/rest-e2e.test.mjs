@@ -73,18 +73,23 @@ const auth = randomBytes(16).toString('base64url');
 
 // ---- boot the real server and the runtime IT owns ----------------------------
 const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-state-'));
+const publicOrigin = 'http://messenger.test';
 const { start } = await import('../src/server.ts');
 const server = await start(
   {
     host: '127.0.0.1',
     port: 0,
+    publicOrigin,
     identity: 'Me',
     force: false,
     stateDir: ownStateDir,
     keepHistory: true,
     runtime: { brokerUrl: 'wss://invalid.local/none' },
   },
-  { name: '@ours.network/messenger-server', version: '0.1.0' },
+  {
+    name: '@ours.network/messenger-server', version: '0.1.0',
+    sha: '3fb10cc41af69e1a15cb99eab1c1b408ec245de0', dirty: false,
+  },
 );
 
 // ---- a second session in the same owned runtime -----------------------------
@@ -106,9 +111,14 @@ await until('the contact link', async () => {
 });
 const base = `http://127.0.0.1:${server.port}`;
 const api = async (method, path, body) => {
+  const mutating = method !== 'GET' && method !== 'HEAD';
   const res = await fetch(base + path, {
     method,
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    headers: mutating ? {
+      'content-type': 'application/json',
+      origin: publicOrigin,
+      'x-ours-messenger-csrf': '1',
+    } : {},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
@@ -139,16 +149,20 @@ t.eq(who.json.name, 'Me', 'and reports the bound identity — this is the old ge
 
 const state = await api('GET', '/api/state');
 t.eq(state.json.runtime.ownership, 'embedded-sdk', '/api/state reports messenger-owned runtime provenance');
-t.eq(state.json.runtime.stateDir, join(ownStateDir, 'runtime'), 'and the isolated runtime state subtree');
 t.eq(state.json.keepHistory, true, 'and the retention policy in force');
-t.eq(state.json.runtime.tokenSource, 'owned-file', '/api/state reports token provenance');
 t.ok(
-  !JSON.stringify(state.json).includes(runtimeToken),
-  'and the real owner token is absent from the unauthenticated response',
+  !JSON.stringify(state.json).includes(runtimeToken) &&
+    !JSON.stringify(state.json).includes(ownStateDir) &&
+    state.json.runtime.port === undefined && state.json.runtime.brokerUrl === undefined,
+  'and owner token, state path, internal port, and broker are absent from the state response',
 );
 
 const build = await api('GET', '/api/build-info');
 t.eq(build.json.name, '@ours.network/messenger-server', 'GET /api/build-info identifies the server');
+t.eq(build.json.sha, '3fb10cc41af69e1a15cb99eab1c1b408ec245de0', 'and reports its build-time full commit');
+const health = await api('GET', '/api/healthz');
+t.eq(health.status, 200, 'GET /api/healthz proves the owned runtime is ready');
+t.eq(health.json.identityCid, who.json.cid, 'and matches the startup-bound identity CID');
 
 // ---- contacts and invites ----------------------------------------------------
 const contacts = await api('GET', '/api/contacts');
@@ -171,6 +185,7 @@ const sub = await api('POST', '/api/push/subscribe', {
 });
 t.eq(sub.status, 200, 'POST /api/push/subscribe accepts a subscription');
 t.ok(sub.json.keys === undefined, 'and does not echo the subscription keys back');
+t.ok(sub.json.endpoint === undefined, 'and does not echo the push endpoint back');
 
 // Idempotent on endpoint: a device re-subscribing must not double-push.
 await api('POST', '/api/push/subscribe', { endpoint: `https://127.0.0.1:${pushPort}/push/device-1`, keys: { p256dh, auth } });
@@ -239,7 +254,7 @@ t.ok(bad.json.error.message.includes('text'), 'naming the field that was missing
 const engineErr = await api('POST', '/api/messages/send', { contact: 'NoSuchContact', text: 'x' });
 t.eq(engineErr.status, 400, 'an engine error is a 400');
 t.ok(typeof engineErr.json.error.code === 'string' && engineErr.json.error.code.length > 0,
-     `and keeps the engine's own code (${engineErr.json.error.code}) rather than being flattened to INTERNAL`);
+     `and returns a fixed public code (${engineErr.json.error.code}) rather than raw engine text`);
 
 const badCursor = await api('GET', '/api/conversations/Peer/page?before=NOPE');
 t.eq(badCursor.status, 400, 'an unresolvable page cursor is a 400, not a silent reset to the newest page');

@@ -11,6 +11,8 @@ import { MessengerEventBus } from './events.js';
 import { PushStore } from './push.js';
 import { startWatcher, type WatcherHandle } from './watch.js';
 import type { MessengerConfig } from './config.js';
+import type { BuildInfo } from './build-info.js';
+import { publicInternalError, reportFailure } from './security.js';
 
 export interface ServerHandle {
   readonly port: number;
@@ -59,7 +61,7 @@ async function closeHttp(http: Server | undefined): Promise<void> {
 
 export async function start(
   cfg: MessengerConfig,
-  buildInfo: { name: string; version: string },
+  buildInfo: BuildInfo,
 ): Promise<ServerHandle> {
   let runtime: Runtime | undefined;
   let watcher: WatcherHandle | undefined;
@@ -73,8 +75,8 @@ export async function start(
 
     // Stop accepting public work first, while the runtime still exists to finish
     // any request already inside the handler.
-    await closeHttp(http).catch((error) => log.warn(`HTTP close failed: ${(error as Error).message}`));
-    await watcher?.stop().catch((error) => log.warn(`watcher stop failed: ${(error as Error).message}`));
+    await closeHttp(http).catch((error) => reportFailure(log.warn, 'HTTP close', error));
+    await watcher?.stop().catch((error) => reportFailure(log.warn, 'watcher stop', error));
     watcher = undefined;
     events?.close();
 
@@ -82,21 +84,22 @@ export async function start(
       try {
         await runtime.client.releaseLease();
       } catch (error) {
-        log.warn(`releaseLease failed on shutdown: ${(error as Error).message}`);
+        reportFailure(log.warn, 'lease release', error);
       }
       await runtime.close();
     }
   };
 
   try {
+    log.info(`build ${buildInfo.name}@${buildInfo.version} sha=${buildInfo.sha} dirty=${buildInfo.dirty}`);
     runtime = await startRuntime(cfg, buildInfo);
-    log.info(`owned runtime ${JSON.stringify(runtime.described)}`);
+    log.info('owned runtime ready');
 
     const bound = await bindIdentity(runtime, cfg);
-    log.info(`bound identity ${bound.name} (keep_history=${bound.keepHistory})`);
+    log.info(`bound identity ready (keep_history=${bound.keepHistory})`);
 
     const push = PushStore.open(cfg.stateDir);
-    log.info(`push state ${cfg.stateDir} (${push.list().length} subscription(s))`);
+    log.info(`push state ready (${push.list().length} subscription(s))`);
 
     events = new MessengerEventBus();
     watcher = startWatcher(runtime.client, cfg.identity, push, log, events);
@@ -133,10 +136,10 @@ export async function start(
         ? serveApi(req, res, deps)
         : serveApp(req, res, appDir);
       void serving.catch((error: Error) => {
-        log.warn(`unhandled request error: ${error.message}`);
+        const publicError = publicInternalError(error, 'unhandled request', log.warn);
         if (!res.headersSent) {
           res.writeHead(500, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: { code: 'INTERNAL', message: error.message } }));
+          res.end(JSON.stringify({ error: publicError }));
         } else {
           res.end();
         }
@@ -153,11 +156,11 @@ export async function start(
 
     const address = http.address();
     const port = typeof address === 'object' && address ? address.port : cfg.port;
-    log.info(`listening on http://${cfg.host}:${port}`);
+    log.info('public HTTP listener ready');
     if (cfg.host !== '127.0.0.1' && cfg.host !== 'localhost' && cfg.host !== '::1') {
       log.warn(
-        `BOUND TO ${cfg.host}, WHICH IS NOT LOOPBACK. This server has NO AUTHENTICATION. ` +
-          `Anyone who can reach this port can read every conversation and send as ${cfg.identity}. ` +
+        'BOUND TO A NON-LOOPBACK INTERFACE. This server has NO AUTHENTICATION. ' +
+          'Anyone who can reach this port can read every conversation and send as the configured identity. ' +
           'Put a reverse proxy with auth in front of it, or bind 127.0.0.1.',
       );
     }
@@ -167,7 +170,7 @@ export async function start(
     try {
       await cleanup();
     } catch (cleanupError) {
-      log.warn(`startup rollback failed: ${(cleanupError as Error).message}`);
+      reportFailure(log.warn, 'startup rollback', cleanupError);
     }
     throw error;
   }

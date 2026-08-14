@@ -22,6 +22,7 @@ const before = { signals: signalCounts(), servers: listeningServers() };
 const cfg = {
   host: '127.0.0.1',
   port: 0,
+  publicOrigin: 'http://messenger.test',
   identity: mode === 'rollback' ? 'Bad/Name' : 'Messenger',
   force: false,
   stateDir,
@@ -30,7 +31,9 @@ const cfg = {
 };
 
 if (mode === 'rollback') {
-  await assert.rejects(() => start(cfg, { name: 'test', version: 'rollback' }), /name|invalid/i);
+  await assert.rejects(() => start(cfg, {
+    name: 'test', version: 'rollback', sha: '0000000000000000000000000000000000000001', dirty: true,
+  }), /name|invalid/i);
   await new Promise((resolve) => setImmediate(resolve));
   writeFileSync(resultPath, JSON.stringify({
     rejected: true,
@@ -43,7 +46,9 @@ if (mode === 'rollback') {
   process.exit(0);
 }
 
-const handle = await start(cfg, { name: 'test', version: 'lifecycle' });
+const handle = await start(cfg, {
+  name: 'test', version: 'lifecycle', sha: '0000000000000000000000000000000000000001', dirty: true,
+});
 const outer = `http://127.0.0.1:${handle.port}`;
 const inner = `http://127.0.0.1:${handle.runtime.port}`;
 const token = readFileSync(`${handle.runtime.stateDir}/daemon-token`, 'utf8').trim();
