@@ -24,6 +24,7 @@
 import type { OursClient } from '@ours.network/sdk';
 import { MessengerEventBus, normalizeNotification } from './events.js';
 import type { PushEvent, PushStore } from './push.js';
+import { reportFailure } from './security.js';
 
 /** Events that mean "something arrived for the human". Anything else is not a push. */
 const PUSHABLE: Record<string, PushEvent['kind']> = {
@@ -119,13 +120,13 @@ export function startWatcher(
             stats.pushes += result.sent;
             if (result.pruned) log.info(`push: pruned ${result.pruned} dead subscription(s)`);
             if (result.failed) {
-              log.warn(`push: ${result.failed} subscription(s) failed (kept for retry): ${result.errors.join('; ')}`);
+              log.warn(`push: ${result.failed} subscription(s) failed (kept for retry)`);
             }
           } catch (e) {
             // A PUSH FAILURE MUST NOT KILL THE WATCH. The message is already in the
             // packet and readable over REST; losing the notification is a degraded
             // UX, losing the watcher is a broken one.
-            log.warn(`push: send threw: ${(e as Error).message}`);
+            reportFailure(log.warn, 'push send', e);
           }
         }
         if (!controller.signal.aborted) throw new Error('notification stream ended');
@@ -134,7 +135,7 @@ export function startWatcher(
         stats.reconnects++;
         reconnecting = true;
         events.publish({ type: 'sync_required', reason: 'daemon_unavailable' });
-        log.warn(`watch: stream ended (${(e as Error).message}); reconnecting in ${backoffMs}ms`);
+        reportFailure(log.warn, `watch stream; reconnecting in ${backoffMs}ms`, e);
         await wait(backoffMs, controller.signal);
         backoffMs = Math.min(backoffMs * 2, 30_000);
       }

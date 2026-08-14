@@ -64,6 +64,7 @@ npm install
 npm run build
 
 OURS_MESSENGER_IDENTITY=Me \
+OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
   node dist/cli.js serve
 ```
 
@@ -72,11 +73,18 @@ Open `http://127.0.0.1:8420/`. Useful configuration:
 ```text
 OURS_MESSENGER_HOST              default 127.0.0.1
 OURS_MESSENGER_PORT              default 8420; 0 selects a dynamic public port
+OURS_MESSENGER_PUBLIC_ORIGIN     required exact external http(s) origin
 OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger
 OURS_MESSENGER_BROKER_URL        default wss://broker1.ours.network
 OURS_MESSENGER_KEEP_HISTORY      default true
 OURS_MESSENGER_FORCE             default false
 ```
+
+Every state-changing HTTP request must carry `Content-Type: application/json`,
+an exact single `Origin` equal to `OURS_MESSENGER_PUBLIC_ORIGIN`, and
+`X-Ours-Messenger-CSRF: 1`. The check runs before body parsing and route handlers;
+the server supplies no permissive CORS or successful preflight path. Browser file
+sends accept bounded inline base64 only and reject the `path` key.
 
 The public messenger REST surface has no built-in user authentication. Keep the
 default loopback bind or put an authenticated reverse proxy in front of a
@@ -115,7 +123,13 @@ cannot mark a message read or include its text.
 Routes live under `/api/`; `src/api.ts` is the executable route list. Principal
 routes include identity/contact/invite operations, conversation snapshots,
 explicit read, send/file mutations, WebPush compatibility routes, `/api/state`,
-and `/api/events`. Unknown `/api/*` routes remain JSON 404 responses. `/mcp` is a
+`/api/healthz`, `/api/build-info`, and `/api/events`. Health returns 200 only when
+the owned runtime responds before its deadline with the startup-bound identity
+CID; failures use one fixed 503 shape. State excludes runtime paths, broker,
+internal port and token provenance. Build metadata is injected by `build.mjs` as
+the full Git SHA plus clean/dirty provenance; `OURS_MESSENGER_RELEASE_BUILD=1`
+refuses dirty tracked or untracked source. Unknown `/api/*` routes remain JSON
+404 responses. `/mcp` is a
 plain 404 and never falls through to the SPA.
 
 Legacy browser naming maps as follows:
@@ -135,7 +149,9 @@ npm run build
 npm test
 ```
 
-The suite covers the owned-runtime source boundary, bundle execution, ambient
+The suite covers mutation intent gates, safe inline-file bounds, health identity
+and timeout behavior, response/log redaction, immutable build identity, the
+owned-runtime source boundary, bundle execution, ambient
 state isolation, real-token redaction, `/mcp` 404, programmatic shutdown and
 partial-start rollback, receipt semantics, REST/WebPush, SSE backpressure and
 reconnect, paging, focused-client contracts and the exact-dialog read gate.

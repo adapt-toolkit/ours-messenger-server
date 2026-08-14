@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import type { OursClient } from '@ours.network/sdk';
 import { configureOwnedRuntime, releaseOwnedRuntimeLock } from './boot-env.js';
 import type { MessengerConfig } from './config.js';
+import type { BuildInfo } from './build-info.js';
 
 interface SdkDaemonHandle {
   readonly port: number;
@@ -27,7 +28,7 @@ function hasCode(error: unknown, code: string): boolean {
 
 export async function startRuntime(
   cfg: MessengerConfig,
-  buildInfo: { readonly name: string; readonly version: string },
+  buildInfo: BuildInfo,
 ): Promise<Runtime> {
   const env = configureOwnedRuntime(cfg);
 
