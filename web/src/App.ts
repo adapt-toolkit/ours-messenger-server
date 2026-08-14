@@ -30,6 +30,7 @@ export class MessengerApp {
   readonly #reads = new ReadCoordinator();
   readonly #desktop = matchMedia('(min-width: 860px)');
   readonly #convergence = new Map<string, number>();
+  #selectionGeneration = 0;
   #disconnectEvents: (() => void) | null = null;
 
   constructor(readonly root: HTMLElement) {}
@@ -65,8 +66,9 @@ export class MessengerApp {
     };
   }
 
-  async refreshSnapshot(): Promise<boolean> {
+  async refreshSnapshot(): Promise<string | null> {
     const selected = this.selectedContactCid;
+    const selectionGeneration = this.#selectionGeneration;
     try {
       const [identity, contacts, page] = await Promise.all([
         api.identity(),
@@ -81,10 +83,16 @@ export class MessengerApp {
       // non-consuming pages. This never calls markRead.
       await Promise.all(this.contacts.map((contact) => this.refreshPage(contact.container_id, false)));
       this.render();
-      return true;
+      // Only the selection whose authoritative page began this snapshot may be
+      // marked read; switching away (even back to the same CID) invalidates it.
+      return selected
+        && this.selectedContactCid === selected
+        && this.#selectionGeneration === selectionGeneration
+        ? selected
+        : null;
     } catch (error) {
       this.showError(error);
-      return false;
+      return null;
     }
   }
 
@@ -101,6 +109,7 @@ export class MessengerApp {
   }
 
   async selectContact(cid: string): Promise<void> {
+    this.#selectionGeneration++;
     this.selectedContactCid = cid;
     this.mobileDetailOpen = true;
     this.cancelOtherConvergence(cid);
@@ -129,8 +138,7 @@ export class MessengerApp {
 
   async onServerEvent(event: ServerEvent): Promise<void> {
     if (event.type === 'sync_required') {
-      if (!await this.refreshSnapshot()) return;
-      const cid = this.selectedContactCid;
+      const cid = await this.refreshSnapshot();
       if (cid && canMarkRead(cid, this.gateState())) await this.markVisibleRead(cid);
       return;
     }

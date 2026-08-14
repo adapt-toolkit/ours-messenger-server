@@ -95,4 +95,40 @@ app.selectedContactCid = 'B';
 await app.onServerEvent({ v: 1, type: 'sync_required', reason: 'connected' });
 assert.deepEqual(readPosts, ['B'], 'sync snapshot marks only the currently selected exact CID');
 
+readPosts.length = 0;
+const fetches: string[] = [];
+let releaseSelectedA!: () => void;
+const selectedAStarted = new Promise<void>((resolve) => {
+  api.conversation = async (cid: string) => {
+    fetches.push(cid);
+    if (cid === 'A' && fetches.length === 1) {
+      resolve();
+      await new Promise<void>((release) => { releaseSelectedA = release; });
+    }
+    if (cid === 'B') throw new Error('selected B snapshot failed');
+    return page(cid);
+  };
+});
+const racedApp = new MessengerApp({} as HTMLElement);
+racedApp.render = () => {};
+racedApp.selectedContactCid = 'A';
+const reconnect = racedApp.onServerEvent({ v: 1, type: 'sync_required', reason: 'daemon_reconnected' });
+await selectedAStarted;
+racedApp.selectedContactCid = 'B';
+releaseSelectedA();
+await reconnect;
+assert.deepEqual({
+  fetches,
+  selected: racedApp.selectedContactCid,
+  selectedPagePresent: racedApp.pages.has('B'),
+  readPosts,
+  surfacedError: racedApp.error,
+}, {
+  fetches: ['A', 'A', 'B'],
+  selected: 'B',
+  selectedPagePresent: false,
+  readPosts: [],
+  surfacedError: 'selected B snapshot failed',
+}, 'contact switch plus failed authoritative snapshot suppresses the read POST');
+
 console.log('read-gate OK — gate/coalescing matrix and sync snapshot exact-visible convergence');
