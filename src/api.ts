@@ -118,9 +118,9 @@ type Handler = (ctx: {
   req: IncomingMessage;
 }) => Promise<unknown>;
 
-function writeSse(res: ServerResponse, event: MessengerEvent, identity?: string): void {
+function writeSse(res: ServerResponse, event: MessengerEvent, identity?: string): boolean {
   const encoded = toSse(event, identity);
-  res.write(`event: ${encoded.event}\ndata: ${JSON.stringify(encoded.data)}\n\n`);
+  return res.write(`event: ${encoded.event}\ndata: ${JSON.stringify(encoded.data)}\n\n`);
 }
 
 async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiDeps): Promise<void> {
@@ -131,27 +131,58 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
     'x-accel-buffering': 'no',
   });
   res.flushHeaders?.();
-  writeSse(res, { type: 'sync_required', reason: 'connected' }, deps.identityCid);
 
   const subscription = deps.events.subscribe(deps.sseQueueLimit ?? 64);
   let closed = false;
+  let drainWait: Promise<void> | null = null;
+  let releaseDrain: (() => void) | null = null;
+  const onDrain = () => {
+    const release = releaseDrain;
+    releaseDrain = null;
+    drainWait = null;
+    release?.();
+  };
+  const waitForDrain = (): Promise<void> => {
+    if (drainWait) return drainWait;
+    drainWait = new Promise<void>((resolve) => { releaseDrain = resolve; });
+    res.once('drain', onDrain);
+    return drainWait;
+  };
   const close = () => {
     if (closed) return;
     closed = true;
     subscription.close();
+    res.removeListener('drain', onDrain);
+    const release = releaseDrain;
+    releaseDrain = null;
+    drainWait = null;
+    release?.();
   };
   req.once('close', close);
   res.once('close', close);
   const heartbeat = setInterval(() => {
-    if (!closed && !res.destroyed) res.write(': keepalive\n\n');
+    // A heartbeat is disposable while the previous write is backpressured. It
+    // must share the same drain barrier as event frames or it can become a
+    // second unbounded producer in ServerResponse's internal buffer.
+    if (!closed && !res.destroyed && !drainWait && !res.write(': keepalive\n\n')) {
+      void waitForDrain();
+    }
   }, deps.sseHeartbeatMs ?? 20_000);
   heartbeat.unref?.();
 
   try {
+    if (!writeSse(res, { type: 'sync_required', reason: 'connected' }, deps.identityCid)) {
+      await waitForDrain();
+    }
     while (!closed) {
       const event = await subscription.next();
       if (event === null || closed) break;
-      writeSse(res, event);
+      // Do not consume another bus item until Node confirms its HTTP buffer has
+      // drained. While blocked, the subscription's fixed-size queue collapses
+      // missed details to one overflow sync hint.
+      if (drainWait) await drainWait;
+      if (closed || res.destroyed) break;
+      if (!writeSse(res, event)) await waitForDrain();
     }
   } finally {
     clearInterval(heartbeat);

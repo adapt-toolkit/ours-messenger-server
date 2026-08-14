@@ -71,4 +71,46 @@ await serving;
 assert.equal(events.size, 0, 'socket close releases the SSE subscriber');
 assert.equal(res.writableEnded, true);
 events.close();
-console.log('sse-e2e OK — headers, connected snapshot, metadata-only events, reconnect invalidation, disconnect');
+
+class BackpressuredResponse extends FakeResponse {
+  blocked = true;
+  write(chunk) {
+    this.chunks.push(String(chunk));
+    return !this.blocked;
+  }
+  drain() {
+    this.blocked = false;
+    this.emit('drain');
+  }
+}
+
+const slowEvents = new MessengerEventBus();
+const slowReq = new FakeRequest();
+const slowRes = new BackpressuredResponse();
+const slowServing = serveApi(slowReq, slowRes, { ...deps, events: slowEvents, sseQueueLimit: 1 });
+await new Promise((resolve) => setImmediate(resolve));
+
+// Pace the publisher so an HTTP writer that ignores `write() === false` can
+// drain the process-local bus between events and reproduce unbounded buffering
+// in the real ServerResponse layer.
+for (let i = 0; i < 20; i++) {
+  slowEvents.publish({ type: 'message_received', contact_id: 'PEER', wire_id: `WIRE-${i}`, date: 'DATE' });
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+const beforeDrain = slowRes.chunks.join('');
+const detailedBeforeDrain = beforeDrain.split('\n\n').filter((frame) => frame.startsWith('event: message_received')).length;
+slowRes.drain();
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+const slowWire = slowRes.chunks.join('');
+const overflowFrames = slowWire.split('\n\n').filter((frame) => frame.includes('"reason":"overflow"')).length;
+slowReq.emit('close');
+await slowServing;
+slowEvents.close();
+
+assert.equal(detailedBeforeDrain, 0, 'a backpressured HTTP writer must stop consuming detailed frames');
+assert.equal(overflowFrames, 1, 'bounded overflow collapses missed details to one snapshot recovery signal');
+assert.equal(slowEvents.size, 0, 'backpressured socket close releases the SSE subscriber and drain wait');
+
+console.log('sse-e2e OK — headers, metadata privacy, backpressure overflow recovery, reconnect, disconnect');

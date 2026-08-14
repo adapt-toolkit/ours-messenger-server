@@ -65,7 +65,7 @@ export class MessengerApp {
     };
   }
 
-  async refreshSnapshot(): Promise<void> {
+  async refreshSnapshot(): Promise<boolean> {
     const selected = this.selectedContactCid;
     try {
       const [identity, contacts, page] = await Promise.all([
@@ -81,8 +81,10 @@ export class MessengerApp {
       // non-consuming pages. This never calls markRead.
       await Promise.all(this.contacts.map((contact) => this.refreshPage(contact.container_id, false)));
       this.render();
+      return true;
     } catch (error) {
       this.showError(error);
+      return false;
     }
   }
 
@@ -127,7 +129,9 @@ export class MessengerApp {
 
   async onServerEvent(event: ServerEvent): Promise<void> {
     if (event.type === 'sync_required') {
-      await this.refreshSnapshot();
+      if (!await this.refreshSnapshot()) return;
+      const cid = this.selectedContactCid;
+      if (cid && canMarkRead(cid, this.gateState())) await this.markVisibleRead(cid);
       return;
     }
 

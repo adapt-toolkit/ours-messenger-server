@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { canMarkRead, ReadCoordinator, type ReadGateState } from '../src/readGate.js';
+import { MessengerApp } from '../src/App.js';
+import { api } from '../src/api.js';
+import type { ConversationPage } from '../src/types.js';
 
 const base: ReadGateState = {
   visibility: 'visible', appRoute: 'chats', selectedContactCid: 'A', desktopLayout: true,
@@ -33,4 +36,63 @@ await Promise.all([
   coordinator.request('B', async () => { bCalls++; }),
 ]);
 assert.equal(bCalls, 1, 'different CIDs do not share a global debounce');
-console.log('read-gate OK — desktop/mobile/visibility/dialog matrix and per-CID coalescing');
+
+const media = {
+  matches: true,
+  addEventListener() {},
+};
+Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => media });
+const documentState = { visibilityState: 'visible' as DocumentVisibilityState };
+Object.defineProperty(globalThis, 'document', { configurable: true, value: documentState });
+
+const page = (cid: string): ConversationPage => ({
+  contact: cid,
+  messages: [{ dir: 'in', text: 'private', date: 'DATE', read: false, wire_id: `WIRE-${cid}`, receipt: null }],
+  total: 1,
+  unread: 1,
+  hasMore: false,
+  nextBefore: null,
+});
+api.identity = async () => ({ name: 'Me', cid: 'ME' });
+api.contacts = async () => ({
+  contacts: [
+    { name: 'Alice', container_id: 'A' },
+    { name: 'Bob', container_id: 'B' },
+  ],
+  pending: [],
+});
+api.conversation = async (cid: string) => page(cid);
+const readPosts: string[] = [];
+api.markRead = async (cid: string) => {
+  readPosts.push(cid);
+  return { contact: cid, marked: 1 };
+};
+
+const app = new MessengerApp({} as HTMLElement);
+app.render = () => {};
+app.selectedContactCid = 'A';
+await app.onServerEvent({ v: 1, type: 'sync_required', reason: 'overflow' });
+assert.deepEqual(readPosts, ['A'], 'sync snapshot marks the exact visible selected dialog after rendering');
+
+readPosts.length = 0;
+documentState.visibilityState = 'hidden';
+await app.onServerEvent({ v: 1, type: 'sync_required', reason: 'daemon_reconnected' });
+assert.deepEqual(readPosts, [], 'sync snapshot never marks a hidden selected dialog');
+
+documentState.visibilityState = 'visible';
+media.matches = false;
+app.mobileDetailOpen = false;
+await app.onServerEvent({ v: 1, type: 'sync_required', reason: 'connected' });
+assert.deepEqual(readPosts, [], 'sync snapshot never marks a mobile list-only selection');
+
+media.matches = true;
+app.coveringDialog = 'contact';
+await app.onServerEvent({ v: 1, type: 'sync_required', reason: 'connected' });
+assert.deepEqual(readPosts, [], 'sync snapshot never marks through a covering dialog');
+
+app.coveringDialog = null;
+app.selectedContactCid = 'B';
+await app.onServerEvent({ v: 1, type: 'sync_required', reason: 'connected' });
+assert.deepEqual(readPosts, ['B'], 'sync snapshot marks only the currently selected exact CID');
+
+console.log('read-gate OK — gate/coalescing matrix and sync snapshot exact-visible convergence');
