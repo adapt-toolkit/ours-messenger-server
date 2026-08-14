@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { loadConfig, resolveOwnStateDir } from './config.js';
 import { BUILD_INFO } from './build-info.js';
-import { operatorError, reportFailure } from './security.js';
+import { ConfigurationError, operatorError, reportFailure } from './security.js';
 import { initializeMessengerState, migrateMessengerState } from './lifecycle.js';
 
 const USAGE = `ours-messenger-server <command>
@@ -68,14 +68,14 @@ function parseOptions(args: readonly string[], valueFlags: readonly string[]): P
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--yes') {
-      if (yes) throw new Error('--yes may be specified only once');
+      if (yes) throw new ConfigurationError('--yes may be specified only once');
       yes = true;
       continue;
     }
-    if (!allowed.has(arg)) throw new Error(`unknown option ${JSON.stringify(arg)}`);
+    if (!allowed.has(arg)) throw new ConfigurationError('unknown command-line option');
     const value = args[++i];
-    if (value === undefined || value.startsWith('--')) throw new Error(`${arg} requires a value`);
-    if (values.has(arg)) throw new Error(`${arg} may be specified only once`);
+    if (value === undefined || value.startsWith('--')) throw new ConfigurationError(`${arg} requires a value`);
+    if (values.has(arg)) throw new ConfigurationError(`${arg} may be specified only once`);
     values.set(arg, value);
   }
   return { values, yes };
@@ -83,7 +83,7 @@ function parseOptions(args: readonly string[], valueFlags: readonly string[]): P
 
 function requiredOption(options: ParsedOptions, name: string): string {
   const value = options.values.get(name);
-  if (value === undefined || value.trim() === '') throw new Error(`${name} requires a non-empty value`);
+  if (value === undefined || value.trim() === '') throw new ConfigurationError(`${name} requires a non-empty value`);
   return value;
 }
 
@@ -91,7 +91,7 @@ async function confirmed(summary: string, yes: boolean): Promise<boolean> {
   await new Promise<void>((resolveWrite) => stdout.write(`${summary}\n`, () => resolveWrite()));
   if (yes) return true;
   if (!stdin.isTTY || !stdout.isTTY) {
-    throw new Error('confirmation requires an interactive terminal; review the paths and re-run with --yes');
+    throw new ConfigurationError('confirmation requires an interactive terminal; review the paths and re-run with --yes');
   }
   const rl = createInterface({ input: stdin, output: stdout });
   try {
@@ -120,7 +120,7 @@ async function main(): Promise<void> {
       `Offline Human/root initialization\n  state: ${stateDir}\n  name:  ${name}\n  bio:   ${bio}`,
       options.yes,
     );
-    if (!approved) throw new Error('initialization cancelled; no state was changed');
+    if (!approved) throw new ConfigurationError('initialization cancelled; no state was changed');
     const cfg = loadConfig({ ...process.env, OURS_MESSENGER_IDENTITY: name });
     const { startRuntime } = await import('./daemon.js');
     const receipt = await initializeMessengerState(
@@ -145,7 +145,7 @@ async function main(): Promise<void> {
       `Offline state migration (source must already be quiesced)\n  source:      ${source}\n  destination: ${destinationStateDir}\n  backup:      ${backupDir}`,
       options.yes,
     );
-    if (!approved) throw new Error('migration cancelled; no state was changed');
+    if (!approved) throw new ConfigurationError('migration cancelled; no state was changed');
     const receipt = migrateMessengerState({ source, destinationStateDir, backupDir, confirmed: true });
     await new Promise<void>((resolveWrite) => stdout.write(
       `Migrated ${receipt.sourceManifest.files} files (${receipt.sourceManifest.bytes} bytes); ` +
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (process.argv.length !== 3) throw new Error('serve does not accept command-line options');
+  if (process.argv.length !== 3) throw new ConfigurationError('serve does not accept command-line options');
 
   const cfg = loadConfig();
   // Keep the SDK-bearing server graph out of `--help`; start() configures the

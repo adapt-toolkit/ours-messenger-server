@@ -20,7 +20,15 @@ export function operatorError(
     write(error.message);
     return;
   }
+  if (hasErrorCode(error, 'INITIALIZATION_REQUIRED')) {
+    write('INITIALIZATION_REQUIRED: messenger state is not initialized; run the offline init command before serve');
+    return;
+  }
   reportFailure(write, context, error);
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && (error as Error & { code?: unknown }).code === code;
 }
 
 /**

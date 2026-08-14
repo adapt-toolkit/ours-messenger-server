@@ -2,7 +2,7 @@
 
 Status: implemented messenger architecture with explicit SDK release blockers
 Scope: messenger-owned runtime plus receipt/SSE/read-gate design
-Messenger baseline: `0a962e9`; development SDK: `dd0fa11307f3576256135aba3820e94d48cf05b2`
+Messenger baseline: `0a962e9`; development SDK: `d357bb7de76eeefc7178175bb5801cc521002bc4`
 
 The runtime decision below supersedes older shared-daemon assumptions in the
 original receipt design: messenger embeds `startDaemon()` from
@@ -419,8 +419,9 @@ identity, contacts, and the selected conversation in parallel.
   must be advertised after deployment.
 - Pin the messenger server to the first published SDK/actor release that provides
   the event contract in section 5. The checked-in manifest/lock remain at
-  `@ours.network/sdk@1.0.1`; local SDK head `dd0fa113…` is development evidence,
-  not a release pin. Receipt PR #16 is merged, but no containing release exists.
+  `@ours.network/sdk@1.0.1`; local SDK head `d357bb7…` is development evidence,
+  not a release pin. Receipt PR #16 is merged and signal-ownership PR #17 is
+  awaiting CI/release, but no published release contains both contracts.
 - SDK daemon embedding needs `DaemonOptions.handleSignals?: boolean` (default
   true, messenger passes false). The current SDK unconditionally registers
   SIGINT/SIGTERM handlers whose shutdown calls `process.exit(0)`, preventing the
@@ -606,7 +607,7 @@ leave no listening server handles or held advisory lock. Signal-listener ownersh
 covered by the separate SDK blocker.
 
 The remaining signal-order acceptance is
-`tests/sdk-signal-ownership.blocker.test.mjs`. It skips deterministically while
-the SDK declaration lacks `handleSignals?: boolean`; once present it requires
+`tests/sdk-signal-ownership.blocker.test.mjs`. It fails deterministically while
+the pinned SDK declaration lacks `handleSignals?: boolean`; once present it requires
 messenger to pass `handleSignals: false`. Messenger must not remove SDK listeners
 as a workaround.

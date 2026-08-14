@@ -53,13 +53,13 @@ contract required by this branch. Development and tests currently require the
 locally linked SDK at exactly:
 
 ```text
-dd0fa11307f3576256135aba3820e94d48cf05b2
+d357bb7de76eeefc7178175bb5801cc521002bc4
 ```
 
-SDK receipt PR #16 is merged with green CI, but no containing SDK release exists.
-The local link is not a release claim. Do not publish the messenger until a
-released SDK contains the required API and the dependency/lockfile can be pinned
-to that published version.
+SDK receipt PR #16 is merged, and SDK signal-ownership PR #17 is awaiting CI and
+release. No published SDK release contains both contracts. The local link is not
+a release claim. Do not publish the messenger until a released SDK contains the
+required APIs and the dependency/lockfile can be pinned to that published version.
 
 ```bash
 npm install
@@ -185,6 +185,8 @@ Legacy browser naming maps as follows:
 ```bash
 npm run typecheck
 npm run build
+npm run test:offline
+npm run test:loopback
 npm test
 ```
 

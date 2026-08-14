@@ -95,6 +95,7 @@ rmSync(emptyServeState, { recursive: true, force: true });
 const emptyServe = await run(['serve'], {
   OURS_MESSENGER_STATE_DIR: emptyServeState,
   OURS_MESSENGER_IDENTITY: 'Human',
+  OURS_MESSENGER_PUBLIC_ORIGIN: 'http://127.0.0.1:8420',
 });
 t.eq(emptyServe.code, 1, '`serve` rejects a genuinely empty isolated state');
 t.ok(emptyServe.err.includes('INITIALIZATION_REQUIRED'), 'with the stable typed lifecycle code');
