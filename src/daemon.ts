@@ -39,7 +39,10 @@ export async function startRuntime(
 
   let daemon: SdkDaemonHandle | undefined;
   try {
-    daemon = await startDaemon({ version: `${buildInfo.name}@${buildInfo.version}` });
+    daemon = await startDaemon({
+      version: `${buildInfo.name}@${buildInfo.version}`,
+      handleSignals: false,
+    });
     const apiToken = (await readFile(env.tokenPath, 'utf8')).trim();
     if (!apiToken) throw new Error('owned SDK runtime created an empty API token');
 

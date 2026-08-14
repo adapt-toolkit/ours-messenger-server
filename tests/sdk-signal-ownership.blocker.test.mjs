@@ -1,7 +1,5 @@
-// DETERMINISTIC RELEASE-BLOCKER GATE for the locally linked SDK head dd0fa113.
-//
-// The default suite reports a named skip until the SDK exposes the minimal
-// embedding contract. It then becomes the acceptance test for the blocker:
+// SDK embedding-contract gate. The linked SDK must expose the option, and the
+// messenger must opt out of SDK-owned process lifecycle behavior:
 // startDaemon({ handleSignals: false }) must install no process signal handlers
 // and must never call process.exit; the host then owns ordered shutdown through
 // DaemonHandle.close(). Default true preserves current CLI/MCP behavior.
@@ -16,16 +14,14 @@ const daemonEntry = fileURLToPath(import.meta.resolve('@ours.network/sdk/daemon'
 const daemonTypes = readFileSync(join(dirname(daemonEntry), 'http/server.d.ts'), 'utf8');
 const messengerRuntime = readFileSync(join(root, 'src/daemon.ts'), 'utf8');
 
-if (!/handleSignals\??:\s*boolean/.test(daemonTypes)) {
-  console.log(
-    'sdk-signal-ownership SKIP — release blocker: SDK DaemonOptions is missing ' +
-    'handleSignals?: boolean (default true; embedded host must pass false)',
-  );
-  process.exit(0);
-}
+assert.match(
+  daemonTypes,
+  /handleSignals\??:\s*boolean/,
+  'SDK DaemonOptions must expose handleSignals?: boolean',
+);
 assert.match(
   messengerRuntime,
-  /startDaemon\(\{[^}]*handleSignals:\s*false/s,
+  /startDaemon\(\{.*?handleSignals:\s*false.*?\}\);/s,
   'messenger must disable SDK-owned process signal handling once the option is released',
 );
 
