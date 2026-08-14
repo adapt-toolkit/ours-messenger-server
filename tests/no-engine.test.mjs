@@ -84,10 +84,19 @@ t.ok(/\bresolveDaemonConfig\b/.test(anySource), 'and so is resolveDaemonConfig �
 // The bundler is where an import sneaks back in: a transitive re-export can put
 // `startDaemon` in dist/cli.js while src/ stays clean, and only this half would
 // see it.
-const BUNDLE = resolve(SRC, '..', 'dist', 'cli.js');
+const DIST = resolve(SRC, '..', 'dist');
 let bundle;
 try {
-  bundle = readFileSync(BUNDLE, 'utf8');
+  const jsFiles = [];
+  const walkJs = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walkJs(path);
+      else if (entry.name.endsWith('.js')) jsFiles.push(path);
+    }
+  };
+  walkJs(DIST);
+  bundle = jsFiles.map((file) => readFileSync(file, 'utf8')).join('\n');
 } catch {
   assert.fail(`dist/cli.js is missing — run \`npm run build\` before this test. Skipping it silently would make this suite green on a bundle nobody built.`);
 }
@@ -100,7 +109,7 @@ for (const sym of ['startDaemon', 'bootWrapper']) {
   const hits = bundle.split(sym).length - 1;
   assert.equal(hits, 0, `dist/cli.js contains ${hits} occurrence(s) of ${sym} — the bundle can start a daemon`);
 }
-t.ok(true, 'dist/cli.js contains no startDaemon and no bootWrapper — the shipped artefact cannot start a daemon');
+t.ok(true, 'dist JavaScript contains no startDaemon and no bootWrapper — the shipped artefact cannot start a daemon');
 
 // And the same must-have-something-to-read check: a bundle that failed to build,
 // or one truncated to nothing, would satisfy every assertion above.

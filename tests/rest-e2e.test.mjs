@@ -119,6 +119,19 @@ const api = async (method, path, body) => {
   return { status: res.status, json: text ? JSON.parse(text) : null };
 };
 
+// ---- the focused same-origin client ----------------------------------------
+const shellResponse = await fetch(base + '/');
+const shellHtml = await shellResponse.text();
+t.eq(shellResponse.status, 200, 'GET / serves the focused messenger client');
+t.ok(shellHtml.includes('id="app"') && shellHtml.includes('/app.js'), 'and its same-origin application entry');
+const appResponse = await fetch(base + '/app.js');
+t.eq(appResponse.status, 200, 'GET /app.js serves the built client bundle');
+t.ok((await appResponse.text()).includes('/api/events'), 'whose live path is the same-origin SSE endpoint');
+const clientRoute = await fetch(base + '/chats/peer');
+t.ok((await clientRoute.text()).includes('id="app"'), 'non-API client routes fall back to the app shell');
+const unknownApi = await api('GET', '/api/not-a-route');
+t.eq(unknownApi.status, 404, 'unknown /api routes remain JSON 404s and never fall through to HTML');
+
 // ---- identity, state, build info --------------------------------------------
 const who = await api('GET', '/api/identity');
 t.eq(who.status, 200, 'GET /api/identity responds 200');

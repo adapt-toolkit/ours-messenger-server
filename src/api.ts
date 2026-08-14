@@ -26,6 +26,7 @@ import { ConversationPageError, DEFAULT_PAGE_LIMIT, projectPage } from './conver
 import type { PushStore } from './push.js';
 import type { Attachment } from './daemon.js';
 import type { MessengerConfig } from './config.js';
+import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
 
 export const API_PREFIX = '/api/';
 
@@ -35,6 +36,11 @@ export interface ApiDeps {
   readonly config: MessengerConfig;
   readonly buildInfo: { readonly name: string; readonly version: string };
   readonly watcherStats: () => Record<string, number>;
+  readonly events: MessengerEventBus;
+  readonly identityCid: string;
+  /** Test seams; production uses the contract defaults. */
+  readonly sseHeartbeatMs?: number;
+  readonly sseQueueLimit?: number;
 }
 
 class HttpError extends Error {
@@ -109,10 +115,61 @@ type Handler = (ctx: {
   params: Record<string, string>;
   query: URLSearchParams;
   res: ServerResponse;
+  req: IncomingMessage;
 }) => Promise<unknown>;
+
+function writeSse(res: ServerResponse, event: MessengerEvent, identity?: string): void {
+  const encoded = toSse(event, identity);
+  res.write(`event: ${encoded.event}\ndata: ${JSON.stringify(encoded.data)}\n\n`);
+}
+
+async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiDeps): Promise<void> {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.flushHeaders?.();
+  writeSse(res, { type: 'sync_required', reason: 'connected' }, deps.identityCid);
+
+  const subscription = deps.events.subscribe(deps.sseQueueLimit ?? 64);
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    subscription.close();
+  };
+  req.once('close', close);
+  res.once('close', close);
+  const heartbeat = setInterval(() => {
+    if (!closed && !res.destroyed) res.write(': keepalive\n\n');
+  }, deps.sseHeartbeatMs ?? 20_000);
+  heartbeat.unref?.();
+
+  try {
+    while (!closed) {
+      const event = await subscription.next();
+      if (event === null || closed) break;
+      writeSse(res, event);
+    }
+  } finally {
+    clearInterval(heartbeat);
+    close();
+    req.removeListener('close', close);
+    res.removeListener('close', close);
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
+}
 
 /** `undefined` from a handler means "already responded" (used by the raw-bytes route). */
 const ROUTES: Record<string, Handler> = {
+  // ---- live metadata invalidations (canonical state remains REST/MUFL) ------
+  'GET /api/events': async ({ req, res, deps }) => {
+    await serveEvents(req, res, deps);
+    return undefined;
+  },
+
   // ---- messaging -----------------------------------------------------------
   'POST /api/messages/send': async ({ client, body }) =>
     client.sendMessage({
@@ -358,6 +415,7 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       params: hit.params,
       query: url.searchParams,
       res,
+      req,
     });
     if (out === undefined) return; // handler already wrote the response
     sendJson(res, 200, out);

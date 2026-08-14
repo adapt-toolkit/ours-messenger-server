@@ -1,8 +1,8 @@
 # @ours.network/messenger-server
 
-A self-hosted messenger **backend** for ours.network. It attaches to a running
-ours daemon, exposes a REST API for a frontend, and sends WebPush from this host
-the moment a message lands in the packet.
+A self-hosted, focused web messenger for ours.network. It attaches to a running
+ours daemon, serves a same-origin REST/SSE API and responsive client, and keeps
+MUFL conversation history as the only durable message/receipt state.
 
 It exists to split the current `ours-control-plane` so that **the node stops being
 a browser tab**. The packet keeps the full state, as before — now on a server. The
@@ -12,7 +12,7 @@ daemon is shared, and so is the main actor.
 
 ## Read this before the green checks
 
-Three things about this build are **not proven**, and they are here rather than at
+Four things about this build are **not proven**, and they are here rather than at
 the bottom because a reader who stops halfway should still have met them.
 
 ### 1. The daemon is NOT proven to be shared. Status: UNKNOWN.
@@ -59,7 +59,17 @@ rows.find(r => r.name === MY_IDENTITY).session === 'other-live'   // <- the proo
 
 Not one line of `src/` changes when that lands. `OursClient` is the only seam.
 
-### 2. The production path attaches; only the TEST HARNESS hosts a daemon.
+### 2. Live receipt invalidations require a newer SDK/actor event contract.
+
+The published `@ours.network/sdk@1.0.1` actor emits `receipt_received` with only
+contact/kind and its host adapter drops that event entirely. Its
+`message_received` log record also omits authenticated sender CID and `wire_id`.
+This server maps incomplete old records to `sync_required` and never guesses a
+CID from a display name, so snapshots and explicit user actions remain correct,
+but message/receipt-specific live hints require the upstream additive contract
+documented in `ARCHITECTURE.md` section 5.
+
+### 3. The production path attaches; only the TEST HARNESS hosts a daemon.
 
 `src/` contains no `startDaemon` and no `@ours.network/sdk/daemon` import, and
 `tests/no-engine.test.mjs` asserts that against **both** `src/` and the built
@@ -68,7 +78,7 @@ directory — the same thing ours-mcp's and ours-tg-connector's own suites do �
 the suite never touches an operator's `~/.ours`. That is a test fixture, not the
 architecture.
 
-### 3. Not covered
+### 4. Not covered
 
 Named, rather than left to be inferred from absence:
 
@@ -81,25 +91,31 @@ Named, rather than left to be inferred from absence:
 - **Multi-device push.** One subscription is exercised. Fan-out to several devices,
   and partial failure across them, are not.
 - **`sendFile` / the file routes.** Wired and typechecked, not exercised end to end.
-- **Reconnection.** The watcher's backoff-and-resume loop is not tested against a
-  daemon that goes away mid-stream.
+- **Real browser engine matrix.** The pure desktop/mobile/visibility/covering-
+  dialog read gate and built-client contract are executable, but Playwright is
+  not a dependency in this checkout.
 - **Load.** No concurrency or throughput testing of any kind.
 
 ---
 
 ## What IS proven
 
-`npm test` — 93 checks. Every counterfactual below was **actually run**: the guard
+`npm test` runs the original 93 checks plus event normalization/fan-out,
+SSE framing/reconnect/disconnect, focused-client, and exact-dialog read-gate
+contracts. Every original counterfactual below was **actually run**: the guard
 was broken, watched to fail, and restored.
 
 | suite | checks | what it reads |
 | --- | ---: | --- |
 | `receipts` | 18 | the read-receipt design, plus the hazard demonstrated live |
-| `rest-e2e` | 38 | the REST surface and a real signed push, on the wire |
+| `rest-e2e` | 44 | static client + REST surface and a real signed push, on the wire |
 | `conversation-page` | 18 | paging, cursors, monotonic receipt merge |
 | `bundle-smoke` | 7 | **runs** the shipped artefact |
 | `no-engine` | 7 | no `startDaemon` in `src/` or the bundle |
 | `state-dir-isolation` | 5 | we never write into the daemon's state dir |
+| `events` | contract | metadata redaction, bounded fan-out, overflow and watcher reconnect |
+| `sse-e2e` | contract | SSE headers/framing, connected sync, reconnect and disconnect |
+| `web-contract` / `read-gate` | contract | focused UI, accessibility and exact-dialog matrix |
 
 ### The read-receipt design
 
@@ -183,6 +199,11 @@ OURS_MESSENGER_DAEMON_STATE_DIR=~/.ours \
   node dist/cli.js serve
 ```
 
+Open `http://127.0.0.1:8420/`. The built client uses REST for every snapshot and
+mutation and `/api/events` only as a metadata invalidation stream. It does not
+persist messages in browser storage and exposes no push, monitoring, cluster,
+backup, or service-management UI.
+
 `node dist/cli.js --help` lists every variable. The daemon-selection inputs are
 handed **verbatim** to the SDK's `resolveDaemonConfig`, whose precedence mirrors the
 daemon's own resolver, so a shell cannot select one daemon for `ours` and another
@@ -210,8 +231,9 @@ mitigation until it lands.
 
 ## Surface
 
-~32 routes, all under `/api/`. The messaging half of what the browser calls today,
-plus the push-subscription endpoint. Full list: `src/api.ts`.
+The routes are all under `/api/`: the messaging REST surface, the compatibility
+push routes, and `GET /api/events` for same-origin SSE invalidations. Full list:
+`src/api.ts`.
 
 The fleet/control-plane methods (`sendControl`, `manageRoot`, `listManagedRoots`,
 `disableMonitoring`) are the surface being **dismantled** and are not ported.
@@ -228,7 +250,7 @@ naming mismatches, not gaps:
 | `getProfileName` | `GET /api/identity` → `currentIdentity()` |
 | `introduce` | **responder side only.** `respondToIntroduction` exists; there is no initiator-side `introduce` anywhere in the SDK or the daemon. Noted, not built. |
 
-### Two real SDK gaps
+### Three real SDK gaps
 
 Neither is worked around here; both are solved at the SDK level, per standing rule.
 
@@ -240,6 +262,10 @@ Neither is worked around here; both are solved at the SDK level, per standing ru
    that never runs it.
 2. **`setMyName`.** No operation writes the bound identity's own display name.
    `renameContact` renames a *contact*; `setBio`/`setPersona` do not touch the name.
+3. **Receipt notification metadata.** The actor/host adapter must retain
+   authenticated sender CID, wire IDs, receipt kind and timestamp for the live
+   SSE contract. Until a fixed SDK is published, incomplete events degrade to a
+   generic snapshot sync rather than fabricated per-contact state.
 
 ---
 

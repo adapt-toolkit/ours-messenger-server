@@ -1,6 +1,8 @@
 // Bundles the messenger server into self-contained ESM so it runs straight from a clone.
 // Outputs:
-//   dist/cli.js  ← the entrypoint (bin: ours-messenger-server)
+//   dist/cli.js       ← the entrypoint (bin: ours-messenger-server)
+//   dist/chunks/*     ← lazily loaded server/SDK graph (`--help` stays light)
+//   dist/web/*        ← the focused same-origin messenger client
 //
 // Run via `npm run build`.
 //
@@ -27,7 +29,7 @@
 // actually bites: the module-load state-directory writes.
 
 import { build } from 'esbuild';
-import { mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -42,6 +44,7 @@ await build({
   platform: 'node',
   target: 'node20',
   format: 'esm',
+  splitting: true,
   // THE ALIAS IS NOT COSMETIC. A banner is raw text injected AFTER bundling, so
   // esbuild's renamer never sees its identifiers and cannot avoid colliding with
   // them. @ours.network/sdk's chunk-UM73BGFH.js imports `createRequire`
@@ -53,9 +56,30 @@ await build({
   // RUNS the bundle, because a build that only checks for a written file cannot
   // tell those two apart.
   banner: {
-    js: "import { createRequire as __messengerCreateRequire } from 'node:module'; const require = __messengerCreateRequire(import.meta.url);",
+    // esbuild may flatten SDK module initializers ahead of boot-env.ts. Establish
+    // the messenger-owned directory in the raw prelude so a bare-environment
+    // `--help` invocation cannot touch ~/.ours or exit during SDK startup.
+    js: "import { createRequire as __messengerCreateRequire } from 'node:module'; const require = __messengerCreateRequire(import.meta.url); const { mkdirSync: __messengerMkdirSync } = require('node:fs'); const { homedir: __messengerHomedir } = require('node:os'); const { resolve: __messengerResolve } = require('node:path'); const __messengerStateDir = process.env.OURS_MESSENGER_STATE_DIR || __messengerResolve(__messengerHomedir(), '.ours-messenger'); __messengerMkdirSync(__messengerStateDir, { recursive: true, mode: 0o700 }); process.env.OURS_STATE_DIR = __messengerStateDir;",
   },
-  entryPoints: [resolve(root, 'src/cli.ts')],
-  outfile: resolve(dist, 'cli.js'),
+  entryPoints: { cli: resolve(root, 'src/cli.ts') },
+  outdir: dist,
+  chunkNames: 'chunks/[name]-[hash]',
   logLevel: 'info',
 });
+
+const webDist = resolve(dist, 'web');
+await mkdir(webDist, { recursive: true });
+await Promise.all([
+  copyFile(resolve(root, 'web/index.html'), resolve(webDist, 'index.html')),
+  copyFile(resolve(root, 'web/src/styles.css'), resolve(webDist, 'styles.css')),
+  build({
+    bundle: true,
+    platform: 'browser',
+    target: ['es2022'],
+    format: 'esm',
+    entryPoints: [resolve(root, 'web/src/main.ts')],
+    outfile: resolve(webDist, 'app.js'),
+    sourcemap: true,
+    logLevel: 'info',
+  }),
+]);

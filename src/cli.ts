@@ -12,7 +12,6 @@
 // tests/state-dir-isolation.test.mjs is the guard, and it fails if these swap.
 import './boot-env.js';
 import { loadConfig } from './config.js';
-import { start } from './server.js';
 
 const BUILD = { name: '@ours.network/messenger-server', version: '0.1.0' };
 
@@ -51,11 +50,18 @@ Other:
 async function main(): Promise<void> {
   const cmd = process.argv[2];
   if (cmd !== 'serve') {
-    process.stdout.write(USAGE);
-    process.exit(cmd === undefined || cmd === '--help' || cmd === '-h' ? 0 : 2);
+    // A forced exit can truncate stdout when it is a pipe (the smoke test and
+    // ordinary shell redirection). Wait for the write before letting Node exit.
+    await new Promise<void>((resolve) => process.stdout.write(USAGE, () => resolve()));
+    process.exitCode = cmd === undefined || cmd === '--help' || cmd === '-h' ? 0 : 2;
+    return;
   }
 
   const cfg = loadConfig();
+  // Keep the SDK-bearing server graph out of `--help`. Besides making help
+  // instant, this guarantees a bare first-run can read configuration guidance
+  // even if the native SDK cannot initialise on that host yet.
+  const { start } = await import('./server.js');
   const handle = await start(cfg, BUILD);
 
   let closing = false;
@@ -80,6 +86,5 @@ main().catch((e: Error) => {
   // state dir that does not match, an identity held elsewhere — arrive here. Print
   // the message alone: the stack is noise for all three, and OursError.message is
   // already the engine's own words.
-  console.error(`[messenger] ${e.message}`);
-  process.exit(1);
+  process.stderr.write(`[messenger] ${e.message}\n`, () => process.exit(1));
 });

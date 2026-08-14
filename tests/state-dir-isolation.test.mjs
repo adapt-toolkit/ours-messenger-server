@@ -13,7 +13,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +33,9 @@ const before = Object.fromEntries(
 );
 
 const ourStateDir = mkdtempSync(join(tmpdir(), 'messenger-own-'));
+const captureDir = mkdtempSync(join(tmpdir(), 'messenger-state-capture-'));
+const capturePath = join(captureDir, 'combined');
+const captureFd = openSync(capturePath, 'w');
 
 // Run the real CLI. It will fail to attach — there is no daemon at this port, and
 // that is fine: the state-directory writes we are hunting happen at MODULE LOAD,
@@ -40,7 +43,7 @@ const ourStateDir = mkdtempSync(join(tmpdir(), 'messenger-own-'));
 // check an import-time side effect would be testing the wrong moment.
 const child = spawn(
   process.execPath,
-  [join(ROOT, 'node_modules/.bin/tsx'), join(ROOT, 'src/cli.ts'), 'serve'],
+  ['--import', 'tsx', join(ROOT, 'src/cli.ts'), 'serve'],
   {
     env: {
       ...process.env,
@@ -50,14 +53,12 @@ const child = spawn(
       OURS_MESSENGER_DAEMON_URL: 'http://127.0.0.1:1', // nothing listens on port 1
       OURS_MESSENGER_DAEMON_STATE_DIR: decoyDaemonDir,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', captureFd, captureFd],
   },
 );
-
-let out = '';
-child.stdout.on('data', (d) => (out += d));
-child.stderr.on('data', (d) => (out += d));
+closeSync(captureFd);
 const code = await new Promise((r) => child.on('exit', r));
+const out = readFileSync(capturePath, 'utf8');
 
 t.ok(code !== 0, `the CLI exited non-zero with no daemon to attach to (exit ${code})`);
 t.ok(/ECONNREFUSED|fetch failed|connect/i.test(out), 'and it failed at the ATTACH step, i.e. it got past module load');
@@ -87,5 +88,6 @@ t.ok(
 
 rmSync(decoyDaemonDir, { recursive: true, force: true });
 rmSync(ourStateDir, { recursive: true, force: true });
+rmSync(captureDir, { recursive: true, force: true });
 console.log(`\nstate-dir-isolation OK (${t.count} checks)`);
 process.exit(0);

@@ -19,7 +19,8 @@
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { statSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { counter } from './harness.mjs';
 
 const t = counter();
@@ -30,19 +31,30 @@ statSync(BUNDLE); // throws with a clear ENOENT if nobody built — better than 
 
 function run(args, env = {}) {
   return new Promise((res) => {
+    // Some managed sandboxes allow the child to run but discard its piped
+    // stdout/stderr. File-backed capture still exercises the exact shipped
+    // process and makes truncation/empty-output failures observable.
+    const captureDir = mkdtempSync(join(tmpdir(), 'messenger-cli-capture-'));
+    const outPath = join(captureDir, 'stdout');
+    const errPath = join(captureDir, 'stderr');
+    const outFd = openSync(outPath, 'w');
+    const errFd = openSync(errPath, 'w');
     const c = spawn(process.execPath, [BUNDLE, ...args], {
       // A DELIBERATELY BARE ENVIRONMENT. `--help` must work on a box where none of
       // the OURS_MESSENGER_* variables are set — that is the state of the user who
       // is running --help to find out what to set. Inheriting this shell's env
       // would hide exactly that failure.
       env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', outFd, errFd],
     });
-    let out = '';
-    let err = '';
-    c.stdout.on('data', (d) => (out += d));
-    c.stderr.on('data', (d) => (err += d));
-    c.on('exit', (code) => res({ code, out, err }));
+    closeSync(outFd);
+    closeSync(errFd);
+    c.on('exit', (code) => {
+      const out = readFileSync(outPath, 'utf8');
+      const err = readFileSync(errPath, 'utf8');
+      rmSync(captureDir, { recursive: true, force: true });
+      res({ code, out, err });
+    });
   });
 }
 

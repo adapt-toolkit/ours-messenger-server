@@ -81,8 +81,8 @@ export async function attach(cfg: MessengerConfig): Promise<Attachment> {
 export async function bindIdentity(
   a: Attachment,
   cfg: MessengerConfig,
-): Promise<{ readonly name: string; readonly keepHistory: boolean; readonly readvertised: unknown }> {
-  await a.client.chooseIdentity({ name: cfg.identity, force: cfg.force });
+): Promise<{ readonly name: string; readonly cid: string; readonly keepHistory: boolean; readonly readvertised: unknown }> {
+  const binding = await a.client.chooseIdentity({ name: cfg.identity, force: cfg.force });
 
   const policy = await a.client.setConversationPolicy({ keep_history: cfg.keepHistory });
 
@@ -92,5 +92,5 @@ export async function bindIdentity(
   // discarded, which is what they would have been anyway.
   const readvertised = cfg.keepHistory ? await a.client.readvertiseOnUpgrade() : null;
 
-  return { name: cfg.identity, keepHistory: policy.keepHistory, readvertised };
+  return { name: cfg.identity, cid: binding.cid, keepHistory: policy.keepHistory, readvertised };
 }
