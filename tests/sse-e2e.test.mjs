@@ -24,7 +24,7 @@ class FakeResponse extends EventEmitter {
 
 const events = new MessengerEventBus();
 const deps = {
-  attachment: { client: {}, described: {} },
+  runtime: { client: {}, described: {} },
   push: {},
   config: {},
   buildInfo: { name: 'test', version: 'test' },

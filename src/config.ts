@@ -1,18 +1,8 @@
 // Configuration for the messenger server.
 //
-// TWO SEPARATE SELECTIONS LIVE HERE AND THEY MUST NOT BE CONFLATED:
-//
-//   1. WHICH DAEMON WE ATTACH TO. Not ours to invent — it is handed verbatim to
-//      the SDK's `resolveDaemonConfig`, whose precedence rules mirror the daemon's
-//      own resolver so a shell cannot select one daemon for `ours` and a different
-//      one for us. We add no defaults of our own on top of it; every field below is
-//      `undefined` unless the operator set it, because a default we invent here is
-//      exactly how a token gets sent to the wrong endpoint.
-//
-//   2. WHERE OUR OWN STATE LIVES (push subscriptions, VAPID keys). This is the
-//      SERVER's directory, NOT the daemon's state dir. Writing our files into
-//      `~/.ours` would make an operator's daemon state dir contain something the
-//      daemon does not own.
+// Messenger owns both its public HTTP server and one embedded SDK runtime. The
+// runtime state is always a child of OURS_MESSENGER_STATE_DIR; no global ours
+// config or ~/.ours state is consulted.
 
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -32,7 +22,7 @@ export interface MessengerConfig {
    */
   readonly force: boolean;
 
-  /** Our own state directory. Never the daemon's. */
+  /** Our state root. Push state and the owned runtime use separate children. */
   readonly stateDir: string;
 
   /**
@@ -46,17 +36,30 @@ export interface MessengerConfig {
    */
   readonly keepHistory: boolean;
 
-  /** Verbatim daemon-selection inputs for the SDK's resolver. */
-  readonly daemon: {
-    readonly endpoint?: string;
-    readonly port?: number;
-    readonly stateDir?: string;
-    readonly token?: string;
-    readonly configPath?: string;
+  /** Configuration for the runtime this messenger process owns. */
+  readonly runtime: {
+    readonly brokerUrl: string;
   };
 }
 
 export const DEFAULT_HTTP_PORT = 8420;
+export const DEFAULT_BROKER_URL = 'wss://broker1.ours.network';
+
+export function validateBrokerUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`OURS_MESSENGER_BROKER_URL must be a valid ws/wss URL, got ${JSON.stringify(raw)}`);
+  }
+  if ((url.protocol !== 'ws:' && url.protocol !== 'wss:') || url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      'OURS_MESSENGER_BROKER_URL must be a ws/wss URL without credentials, query, or fragment; ' +
+      'the SDK logs its broker endpoint at startup.',
+    );
+  }
+  return url.toString();
+}
 
 function intOrUndefined(raw: string | undefined, name: string): number | undefined {
   if (raw === undefined || raw === '') return undefined;
@@ -107,12 +110,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfi
     force: boolOrUndefined(env.OURS_MESSENGER_FORCE, 'OURS_MESSENGER_FORCE') ?? false,
     stateDir: resolveOwnStateDir(env),
     keepHistory: boolOrUndefined(env.OURS_MESSENGER_KEEP_HISTORY, 'OURS_MESSENGER_KEEP_HISTORY') ?? true,
-    daemon: {
-      endpoint: env.OURS_MESSENGER_DAEMON_URL || undefined,
-      port: intOrUndefined(env.OURS_MESSENGER_DAEMON_PORT, 'OURS_MESSENGER_DAEMON_PORT'),
-      stateDir: env.OURS_MESSENGER_DAEMON_STATE_DIR || undefined,
-      token: env.OURS_MESSENGER_DAEMON_TOKEN || undefined,
-      configPath: env.OURS_MESSENGER_DAEMON_CONFIG || undefined,
+    runtime: {
+      brokerUrl: validateBrokerUrl(env.OURS_MESSENGER_BROKER_URL || DEFAULT_BROKER_URL),
     },
   };
 }

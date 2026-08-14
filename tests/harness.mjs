@@ -1,11 +1,6 @@
-// THE TEST HARNESS, AND THE ONE PLACE THIS REPO IS ALLOWED TO START A DAEMON.
-//
-// THE PRODUCTION PATH ATTACHES. src/ contains no `startDaemon` and must never
-// contain one — tests/no-engine.test.mjs is the guard. This file hosts a
-// short-lived daemon on an ISOLATED TEMP STATE DIR so the suite never touches an
-// operator's `~/.ours`, exactly as ours-mcp's and ours-tg-connector's own suites
-// already do. When ours-mcp PR #50 merges and the shared daemon serves /api/v1,
-// not one line of src/ changes: OursClient is the only seam.
+// Standalone SDK harness for actor/receipt tests that do not boot the full
+// messenger server. Production uses the same startDaemon API through
+// src/daemon.ts and adds messenger-owned lifecycle around it.
 //
 // EVERY ENV VAR IS SET BEFORE THE FIRST SDK IMPORT, and the ordering is
 // load-bearing rather than stylistic: the SDK reads its config at MODULE LOAD, so

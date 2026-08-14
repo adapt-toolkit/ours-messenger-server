@@ -9,8 +9,8 @@
 //     silently tell every peer that a human had read messages nobody had looked at.
 //     The frontend's read path is `GET /api/conversations/:contact` (non-consuming)
 //     and `POST /api/conversations/:contact/read` when a person actually sees them.
-//     The agent path — getMessages, consuming, receipt-on-pull — is UNCHANGED and
-//     still reached through ours-mcp by agents. It is simply not this server's.
+//     The consuming agent path remains an SDK-host concern outside this server;
+//     messenger neither exposes it nor includes an MCP transport.
 //
 //   * THE CONTROL-PLANE METHODS ARE NOT PORTED. sendControl, manageRoot,
 //     listManagedRoots, disableMonitoring belong to the browser-node surface being
@@ -21,17 +21,17 @@
 //     third-party notifier. This server IS the notifier.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { OursError, type OursClient } from '@ours.network/sdk';
+import type { OursClient, OursError } from '@ours.network/sdk';
 import { ConversationPageError, DEFAULT_PAGE_LIMIT, projectPage } from './conversation.js';
 import type { PushStore } from './push.js';
-import type { Attachment } from './daemon.js';
+import type { Runtime } from './daemon.js';
 import type { MessengerConfig } from './config.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
 
 export const API_PREFIX = '/api/';
 
 export interface ApiDeps {
-  readonly attachment: Attachment;
+  readonly runtime: Runtime;
   readonly push: PushStore;
   readonly config: MessengerConfig;
   readonly buildInfo: { readonly name: string; readonly version: string };
@@ -391,9 +391,11 @@ const ROUTES: Record<string, Handler> = {
       identity,
       keepHistory: deps.config.keepHistory,
       daemon,
-      // The REDACTED selection. `describeDaemonConfig` reports token PROVENANCE,
-      // never the token — this route is unauthenticated like every other.
-      selection: deps.attachment.described,
+      // Runtime ownership and token provenance, never token material. This
+      // route is unauthenticated like the rest of the public messenger API.
+      runtime: deps.runtime.described,
+      // Compatibility alias for clients written against the former state shape.
+      selection: deps.runtime.described,
       watcher: deps.watcherStats(),
       pushSubscriptions: deps.push.list().length,
     };
@@ -441,7 +443,7 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
     const body = req.method === 'GET' ? {} : await readJsonBody(req);
     const out = await ROUTES[hit.key]({
       deps,
-      client: deps.attachment.client,
+      client: deps.runtime.client,
       body,
       params: hit.params,
       query: url.searchParams,
@@ -455,7 +457,7 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
     // byte-identical to what the operation raised, and a frontend showing a user
     // "the identity is bound elsewhere" is showing them the truth. Flattening
     // everything to 500 would throw that away.
-    if (e instanceof OursError) {
+    if (isOursError(e)) {
       sendJson(res, 400, { error: { code: e.code, message: e.message } });
     } else if (e instanceof HttpError) {
       sendJson(res, e.status, { error: { code: 'BAD_REQUEST', message: e.message } });
@@ -465,4 +467,9 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       sendJson(res, 500, { error: { code: 'INTERNAL', message: (e as Error).message } });
     }
   }
+}
+
+function isOursError(error: unknown): error is OursError {
+  return error instanceof Error && error.name === 'OursError' &&
+    'code' in error && typeof (error as Error & { code?: unknown }).code === 'string';
 }

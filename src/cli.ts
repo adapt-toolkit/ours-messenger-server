@@ -4,21 +4,14 @@
 // One command, `serve`. Everything else is environment, because this is a thing an
 // operator puts in a unit file and forgets, not a thing they drive interactively.
 
-// THESE TWO IMPORTS ARE ORDERED, NOT ALPHABETISED. `./boot-env.js` redirects the
-// SDK's module-load state-directory side effects away from the operator's live
-// `~/.ours`, and it only works if it is evaluated BEFORE the first module that
-// imports @ours.network/sdk — which `./server.js` does. ES module evaluation is
-// depth-first in import order, so this ordering is a guarantee rather than a hope.
-// tests/state-dir-isolation.test.mjs is the guard, and it fails if these swap.
-import './boot-env.js';
 import { loadConfig } from './config.js';
 
 const BUILD = { name: '@ours.network/messenger-server', version: '0.1.0' };
 
 const USAGE = `ours-messenger-server serve
 
-Attaches to a RUNNING ours daemon (it never starts one), binds one identity, serves
-the messenger REST API, and sends WebPush from this host when a message lands.
+Starts one isolated SDK runtime owned by this process, binds one identity, serves
+the messenger REST/SSE API, and sends WebPush when a message lands. MCP is absent.
 
 Required:
   OURS_MESSENGER_IDENTITY          the ours identity this server acts as
@@ -26,17 +19,15 @@ Required:
 HTTP:
   OURS_MESSENGER_HOST              default 127.0.0.1  (see README: there is no auth)
   OURS_MESSENGER_PORT              default 8420
-  OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger  (OUR state, not the daemon's)
+  OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger
+                                   runtime state lives under <state>/runtime
 
 Retention:
   OURS_MESSENGER_KEEP_HISTORY      default true  (a messenger conversation is permanent)
 
-Which daemon to attach to (all optional; handed verbatim to the SDK's resolver):
-  OURS_MESSENGER_DAEMON_URL        e.g. http://127.0.0.1:3050
-  OURS_MESSENGER_DAEMON_PORT
-  OURS_MESSENGER_DAEMON_STATE_DIR  e.g. ~/.ours
-  OURS_MESSENGER_DAEMON_TOKEN
-  OURS_MESSENGER_DAEMON_CONFIG
+Owned SDK runtime:
+  OURS_MESSENGER_BROKER_URL        default wss://broker1.ours.network
+                                   runtime HTTP uses loopback port 0 + owner token
 
 WebPush (optional; a key pair is generated and persisted on first run):
   OURS_MESSENGER_VAPID_PUBLIC_KEY  } must be set together
@@ -58,9 +49,8 @@ async function main(): Promise<void> {
   }
 
   const cfg = loadConfig();
-  // Keep the SDK-bearing server graph out of `--help`. Besides making help
-  // instant, this guarantees a bare first-run can read configuration guidance
-  // even if the native SDK cannot initialise on that host yet.
+  // Keep the SDK-bearing server graph out of `--help`; start() configures the
+  // owned runtime environment before dynamically importing the SDK.
   const { start } = await import('./server.js');
   const handle = await start(cfg, BUILD);
 

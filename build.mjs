@@ -10,23 +10,8 @@
 // asserted. An earlier version of this comment claimed "no WASM blob, no ADAPT
 // SDK"; that was wrong, and the correction is the point of writing it down.
 //
-// NOT PRESENT (0 hits each): `startDaemon`, `bootWrapper`. This server never
-// starts a daemon — it is an HTTP client of one it did not start, which is the
-// whole reason the repo exists. tests/no-engine.test.mjs guards both src/ AND
-// this bundle, because the bundler is where an import sneaks back in.
-//
-// PRESENT, and unavoidable today: `@adapt-toolkit` (70), `AdaptPacket` (235),
-// `wasm` (118), `protocol_container` (13). @ours.network/sdk's root barrel
-// re-exports the DAEMON-SIDE operation implementations next to the client, and
-// the package exports no client-only subpath (`.`, `./daemon`, `./connector` are
-// all of them), so importing `OursClient` drags that code in. It is not
-// initialised at runtime — no native addon loads; `process.report`'s
-// sharedObjects list has no adapt/ours entry — but it is in the file, and the
-// bundle is 2.3 MB rather than the ~200 KB this server's own code justifies.
-//
-// The fix is an SDK one (an engine-free client entrypoint), raised with the
-// coordinator. src/boot-env.ts is the consumer-side mitigation for the part that
-// actually bites: the module-load state-directory writes.
+// The SDK engine is intentionally present: messenger owns it. The server graph
+// stays lazy so `--help` does not initialise native/runtime state.
 
 import { build } from 'esbuild';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
@@ -56,10 +41,10 @@ await build({
   // RUNS the bundle, because a build that only checks for a written file cannot
   // tell those two apart.
   banner: {
-    // esbuild may flatten SDK module initializers ahead of boot-env.ts. Establish
-    // the messenger-owned directory in the raw prelude so a bare-environment
-    // `--help` invocation cannot touch ~/.ours or exit during SDK startup.
-    js: "import { createRequire as __messengerCreateRequire } from 'node:module'; const require = __messengerCreateRequire(import.meta.url); const { mkdirSync: __messengerMkdirSync } = require('node:fs'); const { homedir: __messengerHomedir } = require('node:os'); const { resolve: __messengerResolve } = require('node:path'); const __messengerStateDir = process.env.OURS_MESSENGER_STATE_DIR || __messengerResolve(__messengerHomedir(), '.ours-messenger'); __messengerMkdirSync(__messengerStateDir, { recursive: true, mode: 0o700 }); process.env.OURS_STATE_DIR = __messengerStateDir;",
+    // The require binding is needed by bundled SDK/native loading. Runtime env
+    // isolation itself lives in configureOwnedRuntime and happens before the
+    // dynamic SDK chunk is imported.
+    js: "import { createRequire as __messengerCreateRequire } from 'node:module'; const require = __messengerCreateRequire(import.meta.url);",
   },
   entryPoints: { cli: resolve(root, 'src/cli.ts') },
   outdir: dist,
