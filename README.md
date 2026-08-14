@@ -27,20 +27,22 @@ token are overwritten before SDK evaluation. The messenger never reads or writes
 `~/.ours` implicitly. The only runtime selection exposed by messenger is
 `OURS_MESSENGER_BROKER_URL`.
 
-An atomic `.messenger-runtime.lock` refuses concurrent use of the same state
-directory before SDK import. Programmatic close and rollback remove the matching
-lock. After a crash, verify the recorded PID is dead before removing a stale lock;
-the messenger never guesses and deletes another process's ownership record.
+An OS-held advisory `flock` on `.messenger-runtime.lock` refuses concurrent use
+of the same state directory before SDK import. The file contains diagnostic JSON
+but its existence and PID text are never ownership evidence. Closing the held
+descriptor, `SIGKILL`, process loss, and reboot release ownership in the kernel;
+PID reuse cannot steal a live descriptor lock and no stale file is removed.
 
-On a genuinely empty owned store, the configured messenger identity is created
-on first start. Once any identities exist, a misspelled configured name fails
-instead of silently creating a second identity.
+`serve` never creates an identity. A read-only preflight on an empty owned store
+throws the typed `INITIALIZATION_REQUIRED` error before creating a directory,
+lock, token, registrar, or listener. Once identities exist, a misspelled
+configured name remains a hard non-mutating SDK error.
 
 Startup is transactional after `startDaemon()` returns: binding, push-store,
 watcher or public-listen failure closes the public server if present, stops the
 watcher, releases the lease, and closes the runtime. Normal `close()` is
 idempotent and uses the same ordered path. Tests require both loopback ports,
-listening server handles, and the ownership lock to be gone afterward; OS signal
+listening server handles, and advisory ownership to be released afterward; OS signal
 listener ownership is the separate SDK blocker below.
 
 ## Running
@@ -63,10 +65,47 @@ to that published version.
 npm install
 npm run build
 
-OURS_MESSENGER_IDENTITY=Me \
-OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
+# First run: creates exactly one Human/root identity offline. Omit --yes to
+# review the exact state/name/bio and confirm interactively.
+OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
+  node dist/cli.js init --name 'Ada@server' --bio 'Ada on the messenger host' --yes
+
+OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
+  OURS_MESSENGER_IDENTITY='Ada@server' \
+  OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
   node dist/cli.js serve
 ```
+
+`init` requires non-empty `--name` and `--bio`, calls the SDK Human/root API
+(never the flat identity API), verifies exactly one matching root, and writes an
+owner-only `initialization.json` receipt containing its stable CID. Every later
+`serve` verifies a matching name/CID when that receipt is present. A second init
+refuses before starting or mutating the runtime.
+
+To import an existing **stopped SDK state directory** (or a stopped messenger
+state root containing `runtime/`) into an empty destination, stop every source
+writer first and use an explicit new backup path:
+
+```bash
+OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
+  node dist/cli.js migrate \
+    --source /srv/old-ours-state \
+    --backup /srv/backups/ours-messenger-20260814 \
+    --yes
+```
+
+The command rejects identical/nested paths, symlinks, a live messenger advisory
+lock, a corroborated live CLI-managed daemon, an empty/incomplete source, an
+existing backup, or any non-empty destination before mutation. It first copies
+source and empty-destination backups, then copies the complete runtime through a
+private sibling staging root, verifies a deterministic path/size/SHA-256
+manifest, and atomically installs the destination. For a messenger-root source,
+outer `push.json` is included as well. `migration.json` records source, backup,
+identities, file/byte totals, and matching source/destination manifests. Because
+identity keys and the complete actor state blob are copied byte-for-byte, CID,
+conversation history, receipts, `keep_history`, and push state are preserved
+across the clean destination restart. Never point messenger at a concurrently
+used `~/.ours` directory.
 
 Open `http://127.0.0.1:8420/`. Useful configuration:
 
@@ -151,10 +190,13 @@ npm test
 
 The suite covers mutation intent gates, safe inline-file bounds, health identity
 and timeout behavior, response/log redaction, immutable build identity, the
-owned-runtime source boundary, bundle execution, ambient
-state isolation, real-token redaction, `/mcp` 404, programmatic shutdown and
-partial-start rollback, receipt semantics, REST/WebPush, SSE backpressure and
-reconnect, paging, focused-client contracts and the exact-dialog read gate.
+owned-runtime source boundary, explicit root initialization,
+empty-serve non-mutation, stable CID provenance, byte-complete migration and
+invalid-input non-mutation, live lock collisions, graceful release, SIGKILL/PID
+reuse recovery, bundle execution, ambient state isolation, real-token redaction,
+`/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
+REST/WebPush, SSE backpressure and reconnect, paging, focused-client contracts
+and the exact-dialog read gate.
 
 ## Explicit SDK lifecycle blocker
 
@@ -167,7 +209,7 @@ process.on('SIGTERM', shutdown)
 ```
 
 That `shutdown` calls `process.exit(0)`. Programmatic close and messenger rollback
-do close their ports, handles, leases and state lock, but a real OS signal can run
+do close their ports, handles, leases and advisory ownership, but a real OS signal can run
 SDK teardown/exit before the messenger closes its public HTTP server and watcher
 in host-owned order. Signal-listener installation/removal therefore remains out
 of the default lifecycle assertions until the host can disable it entirely.
