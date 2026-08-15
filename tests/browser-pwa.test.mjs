@@ -118,12 +118,23 @@ try {
   const messages = Array.from({ length: 60 }, (_, index) => ({
     dir: index % 2 ? 'out' : 'in',
     text: `history message ${index + 1}`,
-    date: new Date(Date.UTC(2026, 7, 15, 0, index)).toISOString(),
+    date: `2026-08-15 00:${String(index).padStart(2, '0')}:30.123456789 (UTC)`,
     read: true,
-    wire_id: `W${index + 1}`,
+    wire_id: index === 58 ? 'B-NEW-IN' : index === 59 ? 'A-NEW-OUT' : `W${index + 1}`,
     receipt: index % 2 ? 'read' : null,
   }));
   const appContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 900 } });
+  await appContext.addInitScript(() => {
+    const NativeDate = Date;
+    globalThis.Date = new Proxy(NativeDate, {
+      construct(target, args) {
+        if (args.length === 1 && typeof args[0] === 'string' && args[0].endsWith('(UTC)')) {
+          return Reflect.construct(target, [Number.NaN]);
+        }
+        return Reflect.construct(target, args);
+      },
+    });
+  });
   await appContext.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -140,8 +151,8 @@ try {
     }
     if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
     if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [
-      { wire_id: 'VOICE-31', contact_id: 'PEER', dir: 'in', sender_id: 'PEER', sender_name: 'Peer', filename: 'voice-message-fixture.webm', logical_name: 'voice-message-fixture.webm', version: 1, mime: 'audio/webm;codecs=opus;x-ours-kind=voice-message', size: 14, sha256: 'a'.repeat(64), date: '2026-08-15T00:30:30.000Z', date_source: 'protocol', kind: 'voice_message', reply_to: { wire_id: 'W31' }, available: voiceAvailable, transcription: { status: 'complete', text: 'Voice fixture transcript' } },
-      { wire_id: 'PHOTO-46', contact_id: 'PEER', dir: 'out', sender_id: 'ME-CID', sender_name: 'Me', filename: 'photo.png', logical_name: 'photo.png', version: 1, mime: 'image/png', size: 68, sha256: 'b'.repeat(64), date: '2026-08-15T00:45:30.000Z', date_source: 'server_observed', kind: 'photo', reply_to: null, available: true },
+      { wire_id: 'VOICE-31', contact_id: 'PEER', dir: 'in', sender_id: 'PEER', sender_name: 'Peer', filename: 'voice-message-fixture.webm', logical_name: 'voice-message-fixture.webm', version: 1, mime: 'audio/webm;codecs=opus;x-ours-kind=voice-message', size: 14, sha256: 'a'.repeat(64), date: '2026-08-15T00:30:30.500Z', date_source: 'protocol', kind: 'voice_message', reply_to: { wire_id: 'W31' }, available: voiceAvailable, transcription: { status: 'complete', text: 'Voice fixture transcript' } },
+      { wire_id: 'PHOTO-46', contact_id: 'PEER', dir: 'out', sender_id: 'ME-CID', sender_name: 'Me', filename: 'photo.png', logical_name: 'photo.png', version: 1, mime: 'image/png', size: 68, sha256: 'b'.repeat(64), date: '2026-08-15T00:45:30.500Z', date_source: 'server_observed', kind: 'photo', reply_to: null, available: true },
     ] });
     if (url.pathname === '/api/files/fetch') { voiceAvailable = true; return json({ files: [] }); }
     if (url.pathname === '/api/media/VOICE-31') return route.fulfill({ status: 200, contentType: 'audio/webm', body: Buffer.from('voice-fixture') });
@@ -153,7 +164,16 @@ try {
   });
   const appPage = await appContext.newPage();
   await appPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
-  await appPage.locator('#chat-message-W60').waitFor();
+  await appPage.locator('#chat-message-A-NEW-OUT').waitFor();
+  assert.deepEqual(
+    await appPage.locator('.message-motion').evaluateAll((rows) => rows.slice(-2).map((row) => row.id)),
+    ['chat-message-B-NEW-IN', 'chat-message-A-NEW-OUT'],
+    'JSC-invalid MUFL dates keep the newest inbound and outbound rows at the timeline bottom',
+  );
+  await appPage.waitForFunction(() => {
+    const scroller = document.querySelector('.messages');
+    return scroller && Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) <= 2;
+  });
   assert.equal(await appPage.locator('.message-motion').count(), 52, 'the initial browser snapshot joins two media records into chronological history');
   assert.equal(await appPage.locator('#chat-message-VOICE-31').getByRole('button', { name: 'Fetch' }).count(), 1,
     'unavailable inbound voice requires an explicit fetch');
@@ -175,7 +195,7 @@ try {
   await appPage.waitForFunction(() => (document.querySelector('.messages')?.scrollTop ?? 0) > 0);
   const scrollAfter = await appPage.locator('.messages').evaluate((node) => ({ height: node.scrollHeight, top: node.scrollTop }));
   assert.equal(await appPage.locator('.message-motion').count(), 62, 'cursor loading renders history beyond 50 messages while retaining media');
-  assert.deepEqual(await appPage.locator('.message-motion').evaluateAll((rows) => [rows[0].id, rows.at(-1)?.id]), ['chat-message-W1', 'chat-message-W60']);
+  assert.deepEqual(await appPage.locator('.message-motion').evaluateAll((rows) => [rows[0].id, rows.at(-1)?.id]), ['chat-message-W1', 'chat-message-A-NEW-OUT']);
   assert.ok(historyRequests.includes('W11'), 'the browser requests the server-provided exclusive cursor');
   assert.ok(Math.abs((scrollAfter.height - scrollAfter.top) - (scrollBefore.height - scrollBefore.top)) <= 2,
     `prepending preserves the visible scroll anchor (${JSON.stringify({ scrollBefore, scrollAfter })})`);
