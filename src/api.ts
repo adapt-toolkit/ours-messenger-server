@@ -24,6 +24,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { OursClient, OursError } from '@ours.network/sdk';
 import { ConversationPageError, DEFAULT_PAGE_LIMIT, projectPage } from './conversation.js';
 import type { PushStore } from './push.js';
+import { mediaResponsePolicy } from './media-response.js';
 import type { Runtime } from './daemon.js';
 import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
@@ -537,12 +538,16 @@ const ROUTES: Record<string, Handler> = {
     if (!deps.media) throw new Error('messenger media store is unavailable');
     const { record, bytes } = deps.media.read(params.wireId);
     const encodedName = encodeURIComponent(record.filename).replaceAll("'", '%27');
+    const policy = mediaResponsePolicy(record.mime);
     res.writeHead(200, {
-      'content-type': record.mime.split(';', 1)[0],
+      'content-type': policy.mime,
       'content-length': String(bytes.byteLength),
-      'content-disposition': `inline; filename*=UTF-8''${encodedName}`,
+      'content-disposition': `${policy.disposition}; filename*=UTF-8''${encodedName}`,
       'cache-control': 'private, no-store',
       'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; sandbox",
+      'cross-origin-resource-policy': 'same-origin',
+      'referrer-policy': 'no-referrer',
     });
     res.end(bytes);
     return undefined;

@@ -322,6 +322,25 @@ const storedVoice = (await api('GET', `/api/conversations/${encodeURIComponent(p
   .find((file) => file.wire_id === voiceSent.wireId);
 t.ok(storedVoice.available && storedVoice.sha256?.length === 64, 'fetched voice is retained privately with a verified digest');
 
+const hostileSvg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/pwned")</script></svg>');
+const hostileSent = await peer.sendFile({
+  contact: who.json.cid,
+  data_base64: hostileSvg.toString('base64'),
+  filename: 'hostile.svg',
+  mime: 'image/svg+xml',
+});
+await until('hostile media metadata to appear', async () => {
+  const view = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/files`);
+  return view.json.files.some((file) => file.wire_id === hostileSent.wireId) ? view : undefined;
+});
+await api('POST', '/api/files/fetch', { wire_ids: [hostileSent.wireId] });
+const hostileResponse = await fetch(`${base}/api/media/${encodeURIComponent(hostileSent.wireId)}`);
+t.eq(Buffer.from(await hostileResponse.arrayBuffer()), hostileSvg, 'hostile media bytes remain available for explicit download');
+t.eq(hostileResponse.headers.get('content-type'), 'application/octet-stream', 'active media is never served as an executable same-origin MIME');
+t.ok(hostileResponse.headers.get('content-disposition')?.startsWith('attachment;'), 'active media forces download even on top-level navigation');
+t.eq(hostileResponse.headers.get('content-security-policy'), "default-src 'none'; sandbox", 'media responses deny scripts and same-origin capability in depth');
+t.eq(hostileResponse.headers.get('x-content-type-options'), 'nosniff', 'browser MIME sniffing is disabled');
+
 const bad = await api('POST', '/api/messages/send', { contact: 'Peer' });
 t.eq(bad.status, 400, 'a missing field is a 400');
 t.ok(bad.json.error.message.includes('text'), 'naming the field that was missing');

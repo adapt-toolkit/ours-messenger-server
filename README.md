@@ -156,9 +156,13 @@ The web UI includes identity hierarchy and active-binding status; contact add,
 approval, rename and removal; one-time/public invite creation and revocation;
 message replies; drag/drop/paste and picker uploads with bounded progress/error
 states; per-dialog file and version history; photo/audio/Markdown previews; and
-voice recording. Incoming files are fetched only after an explicit user action.
-HTML previews run in a sandboxed frame with a deny-by-default CSP, and Markdown
-is rendered to React nodes without raw HTML execution.
+voice recording. Conversations open on the newest 50 messages and load older
+history with an exclusive cursor while preserving the visible scroll position.
+Incoming files are fetched only after an explicit user action. HTML previews run
+in a sandboxed frame with a deny-by-default CSP, and Markdown is rendered to
+React nodes without raw HTML execution. Direct media responses allowlist only
+raster image/audio/video MIME types for inline use; HTML, SVG, XML, PDF, scripts,
+and unknown formats are opaque attachments with `nosniff` and a sandboxing CSP.
 
 ## WebPush
 
@@ -170,6 +174,11 @@ delivery cannot mark a message read. Web Push is separate from the ours
 end-to-end channel: the push provider observes delivery metadata, and the device
 may display decrypted notification text on its lock screen. The UI states this
 before subscription.
+
+An absent `push.json` is initialized on first run. An existing file that is
+unreadable, malformed, or schema-invalid aborts startup without rewriting keys
+or subscriptions; the error identifies the preserved path and requires the
+operator to restore it or explicitly move it aside before a new state is made.
 
 ## REST surface
 
@@ -214,9 +223,11 @@ invalid-input non-mutation, live lock collisions, graceful release, SIGKILL/PID
 reuse recovery, bundle execution, ambient state isolation, real-token redaction,
 `/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
 REST/WebPush encryption and full payloads, reply correlation, immutable media and
-version round-trips, exact voice MIME/bytes, sandboxed previews, PWA cache
+version round-trips, hostile top-level media navigation, exact voice MIME/bytes,
+sandboxed previews, corrupt push-state preservation/recovery, PWA cache
 isolation/installability/offline launch in Chromium, SSE backpressure and
-reconnect, paging, focused-client contracts and the exact-dialog read gate.
+reconnect, cursor paging with stable scroll anchoring, invite-dialog reopen,
+focused-client contracts and the exact-dialog read gate.
 
 ## SDK lifecycle ownership
 

@@ -17,7 +17,7 @@
 // be written to the device lock screen. The UI and README state this boundary
 // before permission is requested; this is not advertised as ours E2E transport.
 
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import webpush from 'web-push';
 
@@ -38,6 +38,31 @@ interface VapidKeys {
 interface PushState {
   vapid: VapidKeys;
   subscriptions: PushSubscriptionRecord[];
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function validState(value: unknown): value is PushState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Partial<PushState>;
+  if (!state.vapid || typeof state.vapid !== 'object') return false;
+  if (!nonEmpty(state.vapid.publicKey) || !nonEmpty(state.vapid.privateKey) || !nonEmpty(state.vapid.subject)) return false;
+  return Array.isArray(state.subscriptions) && state.subscriptions.every((subscription) =>
+    !!subscription && typeof subscription === 'object'
+      && nonEmpty(subscription.endpoint)
+      && !!subscription.keys && typeof subscription.keys === 'object'
+      && nonEmpty(subscription.keys.p256dh) && nonEmpty(subscription.keys.auth)
+      && nonEmpty(subscription.createdAt)
+      && (subscription.label === undefined || typeof subscription.label === 'string'));
+}
+
+function preservedStateError(file: string, reason: string): Error {
+  return new Error(
+    `Existing push state ${file} is ${reason}; it was left unchanged. `
+      + 'Restore valid push.json contents, or move the file aside explicitly before restarting to initialize new VAPID keys.',
+  );
 }
 
 export interface PushEvent {
@@ -73,9 +98,18 @@ export class PushStore {
 
     let state: PushState | undefined;
     try {
-      state = JSON.parse(readFileSync(file, 'utf8')) as PushState;
-    } catch {
-      state = undefined;
+      const stat = lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw preservedStateError(file, 'not a safe regular file');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+      } catch (error) {
+        throw preservedStateError(file, `corrupt or unreadable (${error instanceof Error ? error.message : String(error)})`);
+      }
+      if (!validState(parsed)) throw preservedStateError(file, 'schema-invalid');
+      state = parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
     const subject = env.OURS_MESSENGER_VAPID_SUBJECT ?? 'mailto:admin@localhost';

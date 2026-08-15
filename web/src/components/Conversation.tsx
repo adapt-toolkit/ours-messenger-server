@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ContactView, ConversationPage, MediaRecord } from '../types.js';
 import { Composer } from './Composer.js';
 import { MessageReceipt } from './MessageReceipt.js';
@@ -9,6 +9,7 @@ const time = (date: string) => {
   const parsed = new Date(date);
   return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
+const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 export function Conversation(props: {
   contact: ContactView | null;
@@ -20,8 +21,10 @@ export function Conversation(props: {
   files: readonly MediaRecord[];
   busyWire: string | null;
   contactBusy: boolean;
+  loadingOlder: boolean;
   mobileOpen: boolean;
   onBack(): void;
+  onLoadOlder(): Promise<boolean>;
   onDraft(value: string): void;
   onReply(wireId: string): void;
   onCancelReply(): void;
@@ -34,6 +37,8 @@ export function Conversation(props: {
   onError(message: string): void;
 }) {
   const thread = useRef<HTMLDivElement>(null);
+  const scrollAnchor = useRef<{ height: number; top: number } | null>(null);
+  const priorThread = useRef({ contact: props.contact?.container_id, count: props.page?.messages.length ?? 0 });
   const [tab, setTab] = useState<'chat' | 'files'>('chat');
   const [managing, setManaging] = useState(false);
   const [contactName, setContactName] = useState(props.contact?.name ?? '');
@@ -44,9 +49,25 @@ export function Conversation(props: {
     setConfirmRemove(false);
     setContactName(props.contact?.name ?? '');
   }, [props.contact?.container_id, props.contact?.name]);
-  useEffect(() => {
-    if (thread.current) thread.current.scrollTop = thread.current.scrollHeight;
+  useBrowserLayoutEffect(() => {
+    const node = thread.current;
+    if (!node) return;
+    const current = { contact: props.contact?.container_id, count: props.page?.messages.length ?? 0 };
+    if (scrollAnchor.current) {
+      node.scrollTop = scrollAnchor.current.top + (node.scrollHeight - scrollAnchor.current.height);
+      scrollAnchor.current = null;
+    } else if (priorThread.current.contact !== current.contact || priorThread.current.count !== current.count) {
+      node.scrollTop = node.scrollHeight;
+    }
+    priorThread.current = current;
   }, [props.page?.messages.length, props.contact?.container_id]);
+
+  const loadOlder = async () => {
+    const node = thread.current;
+    if (!node || props.loadingOlder) return;
+    scrollAnchor.current = { height: node.scrollHeight, top: node.scrollTop };
+    if (!await props.onLoadOlder()) scrollAnchor.current = null;
+  };
 
   if (!props.contact) {
     return (
@@ -98,6 +119,14 @@ export function Conversation(props: {
       {tab === 'chat' ? (
         <>
           <div className="thread" ref={thread} aria-live="polite">
+            {props.page?.hasMore && props.page.nextBefore && (
+              <button type="button" className="secondary load-older" disabled={props.loadingOlder} onClick={() => void loadOlder()}>
+                {props.loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+              </button>
+            )}
+            {props.page?.hasMore && !props.page.nextBefore && (
+              <p className="muted history-unavailable">Older legacy history has no stable cursor.</p>
+            )}
             {props.page?.messages.map((message) => {
               const target = message.reply_to
                 ? props.page?.messages.find((candidate) => candidate.wire_id === message.reply_to?.wire_id)

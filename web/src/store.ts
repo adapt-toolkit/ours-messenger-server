@@ -28,6 +28,11 @@ export type AppAction =
   | { type: 'snapshot'; identity: IdentityView; contacts: ContactsResponse }
   | { type: 'contacts'; contacts: ContactsResponse }
   | { type: 'page'; contactCid: string; page: ConversationPage }
+  | {
+      type: 'older_page'; contactCid: string; page: ConversationPage;
+      /** Snapshot that followed this cursor when the request began; closes refresh races without gaps. */
+      newer: ConversationPage['messages'];
+    }
   | { type: 'route'; route: AppRoute; mobileDetailOpen?: boolean }
   | { type: 'connection'; connection: ConnectionState }
   | { type: 'search'; search: string }
@@ -78,6 +83,25 @@ export function pageFor(state: AppState, contactCid: string): ConversationPage |
   return state.identity ? state.pages[dialogKey(state.identity.cid, contactCid)] ?? null : null;
 }
 
+function mergeMessages(
+  first: ConversationPage['messages'],
+  second: ConversationPage['messages'],
+): ConversationPage['messages'] {
+  const merged = [...first];
+  const stable = new Map<string, number>();
+  merged.forEach((message, index) => { if (message.wire_id) stable.set(message.wire_id, index); });
+  for (const message of second) {
+    const existing = message.wire_id ? stable.get(message.wire_id) : undefined;
+    if (existing === undefined) {
+      if (message.wire_id) stable.set(message.wire_id, merged.length);
+      merged.push(message);
+    } else {
+      merged[existing] = message;
+    }
+  }
+  return merged;
+}
+
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'snapshot': {
@@ -97,7 +121,26 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'contacts': return { ...state, contacts: action.contacts };
     case 'page': {
       if (!state.identity) return state;
-      return { ...state, pages: { ...state.pages, [dialogKey(state.identity.cid, action.contactCid)]: action.page } };
+      const key = dialogKey(state.identity.cid, action.contactCid);
+      const current = state.pages[key];
+      const page = current && current.messages.length > 50
+        ? {
+            ...action.page,
+            messages: mergeMessages(current.messages, action.page.messages),
+            hasMore: current.hasMore,
+            nextBefore: current.nextBefore,
+          }
+        : action.page;
+      return { ...state, pages: { ...state.pages, [key]: page } };
+    }
+    case 'older_page': {
+      if (!state.identity) return state;
+      const key = dialogKey(state.identity.cid, action.contactCid);
+      const current = state.pages[key];
+      if (!current) return state;
+      const messages = mergeMessages(mergeMessages(action.page.messages, action.newer), current.messages);
+      const page = { ...action.page, total: Math.max(action.page.total, current.total, messages.length), messages };
+      return { ...state, pages: { ...state.pages, [key]: page } };
     }
     case 'route': return {
       ...state,

@@ -45,6 +45,13 @@ await client.removeContact('CONTACT/A');
 assert.equal(calls[6].input, '/api/contacts/remove');
 assert.deepEqual(JSON.parse(String(calls[6].init?.body)), { contact: 'CONTACT/A' });
 
+await client.conversation('CONTACT/A', 'WIRE/51');
+assert.equal(
+  calls[7].input,
+  '/api/conversations/CONTACT%2FA/page?limit=50&before=WIRE%2F51',
+  'older history uses the server cursor and encodes both identifiers',
+);
+
 const rejected = createApi(async () => new Response(
   JSON.stringify({ error: { code: 'BAD_REQUEST', message: 'text must be a non-empty string' } }),
   { status: 400 },

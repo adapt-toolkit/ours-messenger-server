@@ -51,6 +51,8 @@ export function AppShell() {
   const [fileBusy, setFileBusy] = useState<string | null>(null);
   const [transferLabel, setTransferLabel] = useState<string | null>(null);
   const [contactBusy, setContactBusy] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState<string | null>(null);
+  const historyLoads = useRef(new Set<string>());
   const [identities, setIdentities] = useState<readonly IdentityTreeRow[]>([]);
   const [invites, setInvites] = useState<readonly InviteView[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -274,6 +276,27 @@ export function AppShell() {
     if (page) await markVisibleRead(cid);
   };
 
+  const loadOlder = async (cid: string): Promise<boolean> => {
+    const current = pageFor(stateRef.current, cid);
+    const cursor = current?.nextBefore;
+    if (!cursor || historyLoads.current.has(cid)) return false;
+    const identityCid = stateRef.current.identity?.cid;
+    historyLoads.current.add(cid);
+    setHistoryBusy(cid);
+    try {
+      const page = await api.conversation(cid, cursor);
+      if (!identityCid || stateRef.current.identity?.cid !== identityCid) return false;
+      dispatch({ type: 'older_page', contactCid: cid, page, newer: current.messages });
+      return true;
+    } catch (error) {
+      showError(error);
+      return false;
+    } finally {
+      historyLoads.current.delete(cid);
+      setHistoryBusy((busy) => busy === cid ? null : busy);
+    }
+  };
+
   const send = async () => {
     const current = stateRef.current;
     const cid = selectedContactCid(current);
@@ -369,10 +392,12 @@ export function AppShell() {
     dispatch({ type: 'dialog_busy', busy: true });
     try {
       await api.addContact(invite, name || undefined);
+      dispatch({ type: 'dialog_busy', busy: false });
       dispatch({ type: 'dialog', open: false });
       await refreshSnapshot();
     } catch (error) {
       showError(error);
+    } finally {
       dispatch({ type: 'dialog_busy', busy: false });
     }
   };
@@ -501,11 +526,13 @@ export function AppShell() {
           files={selectedCid ? files[selectedCid] ?? [] : []}
           busyWire={fileBusy}
           contactBusy={contactBusy}
+          loadingOlder={historyBusy === selectedCid}
           mobileOpen={state.mobileDetailOpen}
           onBack={() => {
             goToRoute({ name: 'chats', contactCid: null }, chatPath(), false);
             queueMicrotask(() => document.querySelector<HTMLButtonElement>('.contact-row.selected')?.focus());
           }}
+          onLoadOlder={() => selectedCid ? loadOlder(selectedCid) : Promise.resolve(false)}
           onDraft={(value) => selectedCid && dispatch({ type: 'draft', contactCid: selectedCid, value })}
           onReply={(wireId) => selectedCid && dispatch({ type: 'reply', contactCid: selectedCid, wireId })}
           onCancelReply={() => selectedCid && dispatch({ type: 'reply', contactCid: selectedCid, wireId: null })}

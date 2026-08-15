@@ -56,8 +56,10 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
     identities: () => request<IdentityTreeRow[]>('/api/identities'),
     contacts: () => request<ContactsResponse>('/api/contacts'),
     invites: () => request<InviteView[]>('/api/invites'),
-    conversation: (cid: string) =>
-      request<ConversationPage>(`/api/conversations/${encodeURIComponent(cid)}/page?limit=50`),
+    conversation: (cid: string, before?: string) =>
+      request<ConversationPage>(
+        `/api/conversations/${encodeURIComponent(cid)}/page?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+      ),
     markRead: (cid: string) =>
       request<{ contact: string; marked: number }>(`/api/conversations/${encodeURIComponent(cid)}/read`, { method: 'POST' }),
     send: (contact: string, text: string, replyTo?: string) =>

@@ -20,7 +20,7 @@ const conversation = renderToStaticMarkup(
   <Conversation
     contact={{ name: 'Alice', container_id: 'ALICE-CID' }}
     page={{
-      contact: 'ALICE-CID', total: 1, unread: 0, hasMore: false, nextBefore: null,
+      contact: 'ALICE-CID', total: 2, unread: 0, hasMore: true, nextBefore: 'WIRE-0',
       messages: [
         {
           dir: 'in', text: 'original', date: '2026-08-15T00:00:00Z',
@@ -39,8 +39,10 @@ const conversation = renderToStaticMarkup(
     files={[]}
     busyWire={null}
     contactBusy={false}
+    loadingOlder={false}
     mobileOpen={false}
     onBack={() => {}}
+    onLoadOlder={async () => true}
     onDraft={() => {}}
     onReply={() => {}}
     onCancelReply={() => {}}
@@ -59,5 +61,6 @@ assert.match(conversation, /aria-label="Read"/, 'receipt state has an accessible
 assert.match(conversation, /aria-label="Conversation with Alice"/);
 assert.match(conversation, /<strong>original<\/strong>/, 'reply reference renders the quoted target');
 assert.match(conversation, /<strong>safe<\/strong>/, 'safe inline Markdown renders without raw HTML');
+assert.match(conversation, /Load older messages/, 'a cursor-bearing page exposes the history control');
 
 console.log('components OK — connection surface, escaped message text, and accessible receipt state');

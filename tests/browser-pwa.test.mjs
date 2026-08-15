@@ -16,8 +16,27 @@ const types = new Map([
   ['.webmanifest', 'application/manifest+json; charset=utf-8'],
 ]);
 
+let hostileExecutionRequests = 0;
+const hostileSvg = '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/pwned")</script></svg>';
+
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
+  if (url.pathname === '/api/pwned') {
+    hostileExecutionRequests++;
+    response.writeHead(204).end();
+    return;
+  }
+  if (url.pathname === '/api/media/hostile') {
+    response.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-disposition': "attachment; filename*=UTF-8''hostile.svg",
+      'content-security-policy': "default-src 'none'; sandbox",
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'private, no-store',
+    });
+    response.end(hostileSvg);
+    return;
+  }
   if (url.pathname.startsWith('/api/')) {
     response.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     response.end('{"error":"browser fixture has no runtime"}');
@@ -83,6 +102,73 @@ try {
   const installability = await cdp.send('Page.getInstallabilityErrors');
   assert.deepEqual(installability.installabilityErrors, [], 'Chromium accepts the app as installable');
 
+  const mediaContext = await browser.newContext({ acceptDownloads: true, serviceWorkers: 'block' });
+  const mediaPage = await mediaContext.newPage();
+  await mediaPage.goto(origin);
+  const downloadPromise = mediaPage.waitForEvent('download');
+  await mediaPage.goto(`${origin}/api/media/hostile`).catch(() => undefined);
+  const download = await downloadPromise;
+  assert.equal(download.suggestedFilename(), 'hostile.svg', 'top-level active media navigation becomes a download');
+  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  assert.equal(hostileExecutionRequests, 0, 'downloaded SVG never executes with the messenger origin');
+  await mediaContext.close();
+
+  const historyRequests = [];
+  const messages = Array.from({ length: 60 }, (_, index) => ({
+    dir: index % 2 ? 'out' : 'in',
+    text: `history message ${index + 1}`,
+    date: new Date(Date.UTC(2026, 7, 15, 0, index)).toISOString(),
+    read: true,
+    wire_id: `W${index + 1}`,
+    receipt: index % 2 ? 'read' : null,
+  }));
+  const appContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1200, height: 760 } });
+  await appContext.route('**/api/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const json = (body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
+    if (url.pathname === '/api/contacts') return json({ contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [] });
+    if (url.pathname === '/api/conversations/PEER/page') {
+      const before = url.searchParams.get('before');
+      historyRequests.push(before);
+      return before === 'W11'
+        ? json({ contact: 'PEER', messages: messages.slice(0, 10), total: 60, unread: 0, hasMore: false, nextBefore: null })
+        : json({ contact: 'PEER', messages: messages.slice(10), total: 60, unread: 0, hasMore: true, nextBefore: 'W11' });
+    }
+    if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
+    if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
+    if (url.pathname === '/api/invites') return json([]);
+    if (url.pathname === '/api/contacts/add') return json({ pending: true });
+    if (url.pathname === '/api/events') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+    return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+  });
+  const appPage = await appContext.newPage();
+  await appPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  await appPage.locator('.message-row').nth(49).waitFor();
+  assert.equal(await appPage.locator('.message-row').count(), 50, 'the initial browser snapshot is capped at 50 messages');
+  await appPage.locator('.load-older').scrollIntoViewIfNeeded();
+  const scrollBefore = await appPage.locator('.thread').evaluate((node) => ({ height: node.scrollHeight, top: node.scrollTop }));
+  await appPage.getByRole('button', { name: 'Load older messages' }).click();
+  await appPage.locator('.message-row').nth(59).waitFor();
+  const scrollAfter = await appPage.locator('.thread').evaluate((node) => ({ height: node.scrollHeight, top: node.scrollTop }));
+  assert.equal(await appPage.locator('.message-row').count(), 60, 'cursor loading renders history beyond 50 messages');
+  assert.deepEqual(await appPage.locator('.message-row').evaluateAll((rows) => [rows[0].id, rows.at(-1)?.id]), ['message-W1', 'message-W60']);
+  assert.ok(historyRequests.includes('W11'), 'the browser requests the server-provided exclusive cursor');
+  assert.ok(Math.abs((scrollAfter.height - scrollAfter.top) - (scrollBefore.height - scrollBefore.top)) <= 2,
+    `prepending preserves the visible scroll anchor (${JSON.stringify({ scrollBefore, scrollAfter })})`);
+
+  await appPage.locator('.identity-header').getByRole('button', { name: 'Add contact' }).click();
+  await appPage.getByRole('textbox', { name: 'Invite', exact: true }).fill('test-invite');
+  await appPage.getByRole('button', { name: 'Accept invite' }).click();
+  await appPage.getByRole('dialog').waitFor({ state: 'detached' });
+  await appPage.locator('.identity-header').getByRole('button', { name: 'Add contact' }).click();
+  assert.equal(await appPage.getByRole('button', { name: 'Accept invite' }).isEnabled(), true,
+    'successful acceptance clears busy state before the invite dialog is reopened');
+  assert.equal(await appPage.getByRole('button', { name: 'Create one-time invite' }).isEnabled(), true,
+    'all reopened invite controls are usable');
+  await appContext.close();
+
   await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
   await page.reload({ waitUntil: 'domcontentloaded' });
   const offlineFacts = {
@@ -95,7 +181,7 @@ try {
   assert.ok((await page.locator('body').innerText()).trim().length > 0, 'offline shell renders visible UI');
 
   await context.close();
-  console.log('browser-pwa OK — Chromium installability, active service worker, API cache isolation, and offline shell');
+  console.log('browser-pwa OK — installability/offline shell, hostile navigation download, cursor scrollback, and invite reopen');
 } finally {
   await browser.close();
   if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));
