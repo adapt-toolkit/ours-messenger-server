@@ -50,7 +50,7 @@ Owned SDK runtime:
 WebPush (optional; a key pair is generated and persisted on first run):
   OURS_MESSENGER_VAPID_PUBLIC_KEY  } must be set together
   OURS_MESSENGER_VAPID_PRIVATE_KEY }
-  OURS_MESSENGER_VAPID_SUBJECT     default mailto:admin@localhost
+  OURS_MESSENGER_VAPID_SUBJECT     default public origin (or https://ours.network)
 
 Other:
   OURS_MESSENGER_FORCE=true        take the identity even if another session holds it

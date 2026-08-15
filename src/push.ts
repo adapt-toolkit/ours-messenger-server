@@ -2,7 +2,7 @@
 // owner-only, and never exposed through REST: endpoints and subscription keys are
 // bearer capabilities even though Web Push encrypts each payload for the browser.
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import webpush from 'web-push';
@@ -228,6 +228,23 @@ function privateEvent(event: PushEvent): PushEvent {
   return { ...event, title: 'ours messenger', body };
 }
 
+const LEGACY_LOCAL_VAPID_SUBJECT = 'mailto:admin@localhost';
+const DEFAULT_VAPID_SUBJECT = 'https://ours.network';
+
+function defaultVapidSubject(env: NodeJS.ProcessEnv): string {
+  const configuredOrigin = env.OURS_MESSENGER_PUBLIC_ORIGIN;
+  if (configuredOrigin) {
+    try {
+      const origin = new URL(configuredOrigin);
+      if (origin.protocol === 'https:' && origin.hostname && origin.hostname !== 'localhost') return origin.origin;
+    } catch {
+      // Public-origin validation belongs to the server config. Push still needs
+      // a provider-compatible contact URI when the store is opened in isolation.
+    }
+  }
+  return DEFAULT_VAPID_SUBJECT;
+}
+
 export class PushStore {
   private readonly file: string;
   private readonly identityCid: string;
@@ -271,7 +288,10 @@ export class PushStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
-    const subject = env.OURS_MESSENGER_VAPID_SUBJECT ?? parsed?.vapid.subject ?? 'mailto:admin@localhost';
+    const storedSubject = parsed?.vapid.subject;
+    const subject = env.OURS_MESSENGER_VAPID_SUBJECT
+      ?? (storedSubject && storedSubject !== LEGACY_LOCAL_VAPID_SUBJECT
+        ? storedSubject : defaultVapidSubject(env));
     const envPublic = env.OURS_MESSENGER_VAPID_PUBLIC_KEY;
     const envPrivate = env.OURS_MESSENGER_VAPID_PRIVATE_KEY;
     if ((envPublic === undefined) !== (envPrivate === undefined)) {
@@ -343,6 +363,18 @@ export class PushStore {
   }
 
   hasBindings(): boolean { return this.bindingCount > 0; }
+
+  matchesCredential(endpoint: unknown, auth: unknown): boolean {
+    if (!nonEmpty(endpoint, MAX_ENDPOINT_LENGTH) || !nonEmpty(auth, 256)) return false;
+    let candidate: Buffer;
+    try { candidate = Buffer.from(auth, 'base64url'); } catch { return false; }
+    if (candidate.length !== 16 || candidate.toString('base64url') !== auth) return false;
+    return this.list().some((binding) => {
+      if (binding.endpoint !== endpoint) return false;
+      const expected = Buffer.from(binding.keys.auth, 'base64url');
+      return expected.length === candidate.length && timingSafeEqual(expected, candidate);
+    });
+  }
 
   ensure(input: {
     endpoint: string;
@@ -441,6 +473,16 @@ export class PushStore {
     const base = Math.min(60_000, 1_000 * (2 ** (attempts - 1)));
     const jitter = Math.floor(base * 0.25 * Math.max(0, Math.min(1, random())));
     Object.assign(job, { attempts, nextAttemptAt: Math.min(job.expiresAt, now + base + jitter) });
+    this.persist();
+    return true;
+  }
+
+  suppressJob(jobId: string, now = Date.now()): boolean {
+    const job = identityState(this.state, this.identityCid).jobs.find((row) => row.id === jobId);
+    if (!job || job.status !== 'pending') return false;
+    Object.assign(job, {
+      status: 'sent', completedAt: now, deliveredBindingIds: [...job.targetBindingIds], sentCount: 0,
+    });
     this.persist();
     return true;
   }

@@ -364,8 +364,10 @@ const ROUTES: Record<string, Handler> = {
       reply_to_wire_id: reply?.wire_id,
       reply_to_sentence: reply?.sentence,
     });
-    deps.media?.recordReply(outcomeWireId(result), reply);
-    return result;
+    const wireId = outcomeWireId(result);
+    if (!wireId) throw new Error('SDK sendMessage returned no wire id');
+    deps.media?.recordReply(wireId, reply);
+    return { wire_id: wireId };
   },
 
   'POST /api/messages/send-file': async ({ client, body, deps }) => {

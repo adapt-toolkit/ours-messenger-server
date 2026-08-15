@@ -145,7 +145,8 @@ self.addEventListener('push', (event) => {
       || await queryClientsVisible(clientList);
     if (suppress) {
       selectForegroundClient(clientList, self.location.origin)?.postMessage({
-        type: 'ours-push-foreground', contact_id: payload.contact_id, wire_id: payload.wire_id,
+        type: 'ours-push-foreground', kind: payload.kind,
+        contact_id: payload.contact_id, wire_id: payload.wire_id,
       });
       return;
     }

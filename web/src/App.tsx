@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { api } from './api.js';
-import { connectEvents } from './events.js';
+import { connectEvents, dispatchLiveEvent, listenLiveEvents } from './events.js';
+import { startPresence } from './presence.js';
 import { canMarkRead, ReadCoordinator } from './readGate.js';
 import { chatPath, parseRoute, type AppRoute } from './router.js';
 import { appReducer, initialState, pageFor, selectedContactCid, type AppAction, type AppState } from './store.js';
@@ -20,7 +21,7 @@ import MessageToasts, { useMessageToasts } from './ui/MessageToast.js';
 import { InviteModal, SettingsModal } from './ui/MessengerModals.js';
 import { forceRecover, startUpdateCheck } from './updateCheck.js';
 
-const convergenceDelays = [0, 100, 400, 1_000] as const;
+const convergenceDelays = [0, 100, 400, 1_000, 3_000, 6_000] as const;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const receiptRank = { delivered: 1, read: 2 } as const;
 const DARK_KEY = 'ours-dark-v3';
@@ -113,6 +114,7 @@ export function AppShell() {
   const reads = useRef(new ReadCoordinator());
   const desktop = useRef<MediaQueryList | null>(null);
   const convergence = useRef(new Map<string, number>());
+  const recentEvents = useRef(new Map<string, number>());
   const [files, setFiles] = useState<Record<string, readonly MediaRecord[]>>({});
   const filesRef = useRef(files);
   const [historyBusy, setHistoryBusy] = useState<string | null>(null);
@@ -265,6 +267,15 @@ export function AppShell() {
   useEffect(() => startForegroundHeartbeat(), []);
 
   useEffect(() => {
+    if (!worker.registration || push.status !== 'on') return;
+    return startPresence({
+      registration: worker.registration,
+      identity: api.identity,
+      onEvent: dispatchLiveEvent,
+    });
+  }, [push.status, push.bindingId, worker.registration]);
+
+  useEffect(() => {
     const repairRequired = () => setPush((current) => ({ ...current, status: 'error' }));
     window.addEventListener('ours-push-repair-required', repairRequired);
     return () => window.removeEventListener('ours-push-repair-required', repairRequired);
@@ -284,10 +295,20 @@ export function AppShell() {
     };
     window.addEventListener('popstate', onRoute);
     document.addEventListener('visibilitychange', onVisible);
-    const disconnect = connectEvents((event: ServerEvent) => {
+    const handleEvent = (event: ServerEvent) => {
+      const wireKey = event.type === 'sync_required'
+        ? `${event.type}:${event.reason}`
+        : event.type === 'receipt_received'
+          ? `${event.type}:${event.contact_id}:${event.kind}:${event.wire_ids.join(',')}`
+          : `${event.type}:${event.contact_id}:${event.wire_id}`;
+      const now = Date.now();
+      const previous = recentEvents.current.get(wireKey) ?? 0;
+      recentEvents.current.set(wireKey, now);
+      for (const [key, time] of recentEvents.current) if (now - time > 60_000) recentEvents.current.delete(key);
+      if (now - previous < 60_000) return;
       void (async () => {
         if (event.type === 'sync_required') { await refreshSnapshot(); return; }
-        await refreshContacts();
+        void refreshContacts().catch(showError);
         if (event.type === 'file_received') {
           await convergeFile(event.contact_id, event.wire_id);
           const contact = stateRef.current.contacts.contacts.find((item) => item.container_id === event.contact_id);
@@ -306,9 +327,11 @@ export function AppShell() {
           return !!row?.receipt && receiptRank[row.receipt] >= receiptRank[event.kind];
         }));
       })().catch(showError);
-    }, (connection) => dispatch({ type: 'connection', connection }));
+    };
+    const disconnectLive = listenLiveEvents(handleEvent);
+    const disconnect = connectEvents(handleEvent, (connection) => dispatch({ type: 'connection', connection }));
     void refreshSnapshot().then((cid) => { if (cid) void markVisibleRead(cid); });
-    return () => { disconnect(); window.removeEventListener('popstate', onRoute); document.removeEventListener('visibilitychange', onVisible); };
+    return () => { disconnect(); disconnectLive(); window.removeEventListener('popstate', onRoute); document.removeEventListener('visibilitychange', onVisible); };
   }, [converge, convergeFile, dispatch, markVisibleRead, pushToast, refreshContacts, refreshSnapshot, showError, worker.registration]);
 
   const go = (route: AppRoute, path: string, mobileDetailOpen?: boolean) => {
@@ -380,8 +403,9 @@ export function AppShell() {
           onDraftChange={noteDraftPresence}
           onSend={async (text, reply, signal) => {
             if (!selectedCid) return;
-            try { await api.send(selectedCid, text, reply, signal); }
-            finally { void refreshPage(selectedCid); }
+            const cid = selectedCid;
+            const sent = await api.send(cid, text, reply, signal);
+            void converge(cid, (page) => page.messages.some((message) => message.wire_id === sent.wire_id));
           }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
           onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}

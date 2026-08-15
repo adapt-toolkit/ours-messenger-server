@@ -17,6 +17,7 @@ import type { BuildInfo } from './build-info.js';
 import { publicInternalError, reportFailure } from './security.js';
 import { assertStateInitializedForServe } from './lifecycle.js';
 import { MediaStore } from './media.js';
+import { attachPresenceServer, PresenceRegistry } from './presence.js';
 
 export interface ServerHandle {
   readonly port: number;
@@ -345,6 +346,7 @@ export async function start(
   let events: MessengerEventBus | undefined;
   let http: Server | undefined;
   let startupProbe: StartupProbe | undefined;
+  let presenceServer: { close(): Promise<void> } | undefined;
   let closed = false;
 
   const cleanup = async (): Promise<void> => {
@@ -353,6 +355,8 @@ export async function start(
 
     // Stop accepting public work or startup probes first, while the runtime
     // still exists to finish any request already inside the full API handler.
+    await presenceServer?.close().catch((error) => reportFailure(log.warn, 'presence close', error));
+    presenceServer = undefined;
     await closeHttp(http).catch((error) => reportFailure(log.warn, 'HTTP close', error));
     await startupProbe?.close().catch((error) => reportFailure(log.warn, 'startup probe close', error));
     startupProbe = undefined;
@@ -402,7 +406,11 @@ export async function start(
     log.info(`media index ready (${media.list().length} file(s))`);
 
     events = new MessengerEventBus();
-    delivery = new PushDeliveryQueue({ store: push, client: runtime.client, identityCid: bound.cid, log });
+    const presence = new PresenceRegistry();
+    delivery = new PushDeliveryQueue({
+      store: push, client: runtime.client, identityCid: bound.cid, log,
+      isForeground: () => presence.isOnline(bound.cid),
+    });
     watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media, delivery });
 
     const readyDeps: ApiDeps = {
@@ -413,6 +421,8 @@ export async function start(
       watcherStats: () => ({
         ...(watcher?.stats ?? { pushes: 0, events: 0, reconnects: 0 }),
         ...(delivery?.stats ?? { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0 }),
+        presenceIdentities: presence.onlineCount,
+        presenceSockets: presence.socketCount,
       }),
       events,
       identityCid: bound.cid,
@@ -450,6 +460,13 @@ export async function start(
           res.end();
         }
       });
+    });
+    presenceServer = attachPresenceServer(http, presence, {
+      allowedOrigin: cfg.publicOrigin,
+      verify: (frame) => frame.identity === bound.cid && push.matchesCredential(frame.endpoint, frame.auth)
+        ? bound.cid : null,
+      subscribe: () => events!.subscribe(),
+      onChange: (cid, online) => log.info(`presence: cid=${cid} online=${online}`),
     });
 
     // The startup worker owns the port while main-thread packet restore is

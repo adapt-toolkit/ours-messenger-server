@@ -1,6 +1,6 @@
 import type {
   BuildInfoView, ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
-  PushPreviewMode,
+  PushPreviewMode, SendMessageResult,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -68,7 +68,7 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
     markRead: (cid: string) =>
       request<{ contact: string; marked: number }>(`/api/conversations/${encodeURIComponent(cid)}/read`, { method: 'POST' }),
     send: (contact: string, text: string, replyTo?: string, signal?: AbortSignal) =>
-      request<unknown>('/api/messages/send', {
+      request<SendMessageResult>('/api/messages/send', {
         method: 'POST',
         signal,
         body: JSON.stringify({ contact, text, ...(replyTo ? { reply_to_wire_id: replyTo } : {}) }),

@@ -102,7 +102,7 @@ assert.equal(loadConfig({
 
 // Every mutation is gated before body iteration and handler invocation.
 let sends = 0;
-const sendDeps = makeDeps({ sendMessage: async () => { sends++; return { sent: true }; } });
+const sendDeps = makeDeps({ sendMessage: async () => { sends++; return { sent: true, wireId: 'WIRE-SECURITY-1' }; } });
 const good = await call(sendDeps, {
   method: 'POST', url: '/api/messages/send', headers: mutationHeaders,
   body: JSON.stringify({ contact: 'Peer', text: 'hello' }),

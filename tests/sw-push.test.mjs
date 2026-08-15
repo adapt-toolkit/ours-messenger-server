@@ -30,6 +30,8 @@ assert.equal(await queryClientsVisible([client('visible', true)], 100), false, '
 assert.equal(await queryClientsVisible([{ postMessage() {} }], 20), false, 'uncertain/frozen page shows after a bounded query');
 
 assert.equal(safeNotificationUrl('/chats/CID?wire=1', 'https://messenger.example'), '/chats/CID?wire=1');
+assert.equal(safeNotificationUrl('/chats/CID#chat-message-WIRE-1', 'https://messenger.example'),
+  '/chats/CID#chat-message-WIRE-1', 'exact-message notification fragments are retained');
 for (const hostile of ['//evil.example/chats/CID', 'https://evil.example/chats/CID', 'javascript:alert(1)']) {
   assert.equal(safeNotificationUrl(hostile, 'https://messenger.example'), '/chats', `${hostile} fails closed`);
 }
