@@ -10,10 +10,9 @@
 // WHAT THE PUSH ASSERTION READS, since a captured request is easy to check
 // vacuously: not merely "a request arrived", but that it carries a VAPID
 // `Authorization: vapid t=…, k=…` header, that the body is ENCRYPTED (aes128gcm),
-// and — the one that matters for privacy — THAT THE MESSAGE TEXT IS NOWHERE IN
-// THE REQUEST. The push payload is sender-and-count by design; a regression that
-// started including message bodies would still produce a request and still have
-// valid headers.
+// and — the one that matters for the provider boundary — THAT THE PLAINTEXT IS
+// NOWHERE IN THE REQUEST. The encrypted payload intentionally contains the full
+// owner notification text; the push service sees ciphertext and delivery metadata.
 
 import { createServer } from 'node:https';
 import { execFileSync } from 'node:child_process';
@@ -113,7 +112,7 @@ const peer = new OursClient({
   leaseToken: 'peer-lease',
   apiToken: runtimeToken,
 });
-await peer.createIdentity({ name: 'Peer', bio: 'the other end', exposeLocal: false, localAutoAccept: true });
+const peerIdentity = await peer.createIdentity({ name: 'Peer', bio: 'the other end', exposeLocal: false, localAutoAccept: true });
 await peer.setConversationPolicy({ keep_history: true });
 await peer.readvertiseOnUpgrade();
 const invite = await server.runtime.client.generateInvite({});
@@ -222,9 +221,9 @@ t.ok(/\bk=[\w-]{20,}/.test(authz), 'and the application server public key in k='
 t.eq(req.headers['content-encoding'], 'aes128gcm', 'the payload is encrypted to the subscription');
 t.ok(req.body.length > 0, 'and the body is non-empty');
 
-// THE PRIVACY ASSERTION. Sender and count, never text.
+// THE PROVIDER PRIVACY ASSERTION. Full text exists only inside aes128gcm.
 const wire = Buffer.concat([Buffer.from(JSON.stringify(req.headers)), req.body]).toString('latin1');
-t.ok(!wire.includes(SECRET), 'AND THE MESSAGE TEXT APPEARS NOWHERE IN THE REQUEST — push carries sender and count, not content');
+t.ok(!wire.includes(SECRET), 'AND THE PLAINTEXT APPEARS NOWHERE IN THE REQUEST — the owner payload is encrypted to the browser');
 
 // ---- the read path, through the REST surface --------------------------------
 const page = await until('the message to appear in the conversation page', async () => {
@@ -254,13 +253,93 @@ for (const path of ['/api/messages', '/api/messages/get', '/api/getMessages', '/
 }
 
 // ---- sending, and error shape -----------------------------------------------
-const sent = await api('POST', '/api/messages/send', { contact: 'Peer', text: 'reply from the server' });
+const sent = await api('POST', '/api/messages/send', {
+  contact: peerIdentity.info.cid,
+  text: 'reply from the server',
+  reply_to_wire_id: sentId,
+});
 t.eq(sent.status, 200, 'POST /api/messages/send sends as the bound identity');
 await until('the reply to reach the peer', async () => {
   const v = await peer.getConversation({ contact: 'Me' });
   return v.messages.some((m) => m.dir === 'in' && m.text === 'reply from the server') ? v : undefined;
 });
 t.ok(true, 'and it arrives at the peer');
+const replyPage = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/page?limit=10`);
+const replyRow = replyPage.json.messages.find((message) => message.text === 'reply from the server');
+t.eq(replyRow.reply_to, { wire_id: sentId }, 'reply correlation survives the SDK history projection and renders from canonical wire ids');
+
+// ---- files/photos/voice and immutable per-dialog versions ------------------
+const photoV1 = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+const photoV2 = Buffer.from('89504e470d0a1a0a0000000d4948445201', 'hex');
+const sendPhoto = (bytes) => api('POST', '/api/messages/send-file', {
+  contact: peerIdentity.info.cid,
+  data_base64: bytes.toString('base64'),
+  filename: 'photo.png',
+  mime: 'image/png',
+  reply_to_wire_id: sentId,
+});
+const photo1 = await sendPhoto(photoV1);
+const photo2 = await sendPhoto(photoV2);
+t.eq(photo1.status, 200, 'browser photo upload sends through the real SDK file operation');
+t.eq(photo2.status, 200, 'a logical second version is sent without overwriting the first');
+const photoWire1 = photo1.json.wireId;
+const photoWire2 = photo2.json.wireId;
+await until('both photos to reach the isolated peer', async () => {
+  const rows = await peer.listIncomingFiles();
+  return rows.some((row) => row.wire_id === photoWire1) && rows.some((row) => row.wire_id === photoWire2) ? rows : undefined;
+});
+const peerPhotos = await peer.getFiles({ wire_ids: [photoWire1, photoWire2] });
+t.eq(readFileSync(peerPhotos.files.find((file) => file.wire_id === photoWire1).path), photoV1,
+  'photo v1 round-trips byte-for-byte to the isolated identity');
+t.eq(readFileSync(peerPhotos.files.find((file) => file.wire_id === photoWire2).path), photoV2,
+  'photo v2 round-trips independently without overwriting v1');
+const photoInventory = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/files`);
+const photoVersions = photoInventory.json.files.filter((file) => file.logical_name === 'photo.png');
+t.eq(photoVersions.map((file) => file.version), [1, 2], 'dialog inventory exposes an exact ordered version history');
+t.ok(photoVersions.every((file) => file.kind === 'photo' && file.sha256 && file.available),
+  'outgoing photo inventory carries immutable hashes, provenance, and available bytes');
+
+const voiceBytes = Buffer.from('OggS\u0000ours-voice-opus-fixture');
+const voiceSent = await peer.sendFile({
+  contact: who.json.cid,
+  data_base64: voiceBytes.toString('base64'),
+  filename: 'voice-message-2026-08-15T00-00-00.000Z.ogg',
+  mime: 'audio/ogg;codecs=opus;x-ours-kind=voice-message',
+});
+const voiceInventory = await until('voice metadata to appear in the dialog inventory', async () => {
+  const view = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/files`);
+  return view.json.files.some((file) => file.wire_id === voiceSent.wireId) ? view : undefined;
+});
+const voiceMeta = voiceInventory.json.files.find((file) => file.wire_id === voiceSent.wireId);
+t.eq(voiceMeta.kind, 'voice_message', 'exact MIME marker classifies the incoming OGG/Opus payload as voice');
+t.eq(voiceMeta.available, false, 'incoming bytes are not consumed until the browser explicitly fetches them');
+const fetchedVoice = await api('POST', '/api/files/fetch', { wire_ids: [voiceSent.wireId] });
+t.eq(fetchedVoice.status, 200, 'explicit browser fetch retrieves voice bytes and transcription metadata');
+const voiceResponse = await fetch(`${base}/api/media/${encodeURIComponent(voiceSent.wireId)}`);
+t.eq(Buffer.from(await voiceResponse.arrayBuffer()), voiceBytes, 'voice playback/download route returns the exact received bytes');
+t.eq(voiceResponse.headers.get('content-type'), 'audio/ogg', 'voice playback uses the real safe base MIME');
+const storedVoice = (await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/files`)).json.files
+  .find((file) => file.wire_id === voiceSent.wireId);
+t.ok(storedVoice.available && storedVoice.sha256?.length === 64, 'fetched voice is retained privately with a verified digest');
+
+const hostileSvg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/pwned")</script></svg>');
+const hostileSent = await peer.sendFile({
+  contact: who.json.cid,
+  data_base64: hostileSvg.toString('base64'),
+  filename: 'hostile.svg',
+  mime: 'image/svg+xml',
+});
+await until('hostile media metadata to appear', async () => {
+  const view = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/files`);
+  return view.json.files.some((file) => file.wire_id === hostileSent.wireId) ? view : undefined;
+});
+await api('POST', '/api/files/fetch', { wire_ids: [hostileSent.wireId] });
+const hostileResponse = await fetch(`${base}/api/media/${encodeURIComponent(hostileSent.wireId)}`);
+t.eq(Buffer.from(await hostileResponse.arrayBuffer()), hostileSvg, 'hostile media bytes remain available for explicit download');
+t.eq(hostileResponse.headers.get('content-type'), 'application/octet-stream', 'active media is never served as an executable same-origin MIME');
+t.ok(hostileResponse.headers.get('content-disposition')?.startsWith('attachment;'), 'active media forces download even on top-level navigation');
+t.eq(hostileResponse.headers.get('content-security-policy'), "default-src 'none'; sandbox", 'media responses deny scripts and same-origin capability in depth');
+t.eq(hostileResponse.headers.get('x-content-type-options'), 'nosniff', 'browser MIME sniffing is disabled');
 
 const bad = await api('POST', '/api/messages/send', { contact: 'Peer' });
 t.eq(bad.status, 400, 'a missing field is a 400');
@@ -279,5 +358,5 @@ await new Promise((r) => pushService.close(r));
 rmSync(ownStateDir, { recursive: true, force: true });
 rmSync(certDir, { recursive: true, force: true });
 memSample('after');
-console.log(`\nrest-e2e OK (${t.count} checks) — the REST surface, and a real signed push carrying no message text`);
+console.log(`\nrest-e2e OK (${t.count} checks) — REST/SSE, replies, media/version round-trips, and encrypted full-text Web Push`);
 process.exit(0);

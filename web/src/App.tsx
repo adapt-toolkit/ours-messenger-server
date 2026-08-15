@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api } from './api.js';
 import { connectEvents } from './events.js';
 import { canMarkRead, ReadCoordinator } from './readGate.js';
@@ -13,15 +13,23 @@ import {
   type AppAction,
   type AppState,
 } from './store.js';
-import type { PendingContactView, ServerEvent } from './types.js';
+import type { IdentityTreeRow, InviteView, MediaRecord, PendingContactView, PushState, ServerEvent } from './types.js';
 import { ContactList } from './components/ContactList.js';
 import { Conversation } from './components/Conversation.js';
 import { IdentityHeader } from './components/IdentityHeader.js';
 import { InviteDialog } from './components/InviteDialog.js';
+import { SettingsDialog } from './components/SettingsDialog.js';
+import { currentPushState, disablePush, enablePush, registerMessengerWorker, type WorkerState } from './pwa.js';
 
 const convergenceDelays = [0, 100, 400, 1_000] as const;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const receiptRank = { delivered: 1, read: 2 } as const;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+interface InstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
 
 function publicError(error: unknown): string {
   return error instanceof Error && error.message ? error.message : 'The request could not be completed.';
@@ -39,6 +47,19 @@ export function AppShell() {
   const desktop = useRef<MediaQueryList | null>(null);
   const routeGeneration = useRef(0);
   const convergence = useRef(new Map<string, number>());
+  const [files, setFiles] = useState<Record<string, readonly MediaRecord[]>>({});
+  const [fileBusy, setFileBusy] = useState<string | null>(null);
+  const [transferLabel, setTransferLabel] = useState<string | null>(null);
+  const [contactBusy, setContactBusy] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState<string | null>(null);
+  const historyLoads = useRef(new Set<string>());
+  const [identities, setIdentities] = useState<readonly IdentityTreeRow[]>([]);
+  const [invites, setInvites] = useState<readonly InviteView[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [worker, setWorker] = useState<WorkerState>({ supported: false, offline: !navigator.onLine, updateAvailable: false, registration: null });
+  const [push, setPush] = useState<PushState>('unsupported');
+  const [pushBusy, setPushBusy] = useState(false);
 
   const dispatch = useCallback((action: AppAction) => {
     stateRef.current = appReducer(stateRef.current, action);
@@ -81,6 +102,17 @@ export function AppShell() {
     return contacts;
   }, [dispatch]);
 
+  const refreshFiles = useCallback(async (cid: string, surfaceError = true) => {
+    try {
+      const result = await api.files(cid);
+      setFiles((current) => ({ ...current, [cid]: result.files }));
+      return result.files;
+    } catch (error) {
+      if (surfaceError) showError(error);
+      return null;
+    }
+  }, [showError]);
+
   const refreshSnapshot = useCallback(async (): Promise<string | null> => {
     const before = stateRef.current;
     const selected = selectedContactCid(before);
@@ -100,6 +132,7 @@ export function AppShell() {
         if (contact.container_id === selected && selectedPage) return;
         await refreshPage(contact.container_id, false);
       }));
+      if (selected) await refreshFiles(selected, false);
       const current = stateRef.current;
       return selected && selectedContactCid(current) === selected && routeGeneration.current === generation
         ? selected
@@ -108,7 +141,7 @@ export function AppShell() {
       showError(error);
       return null;
     }
-  }, [dispatch, refreshPage, showError]);
+  }, [dispatch, refreshFiles, refreshPage, showError]);
 
   const markVisibleRead = useCallback(async (cid: string) => {
     await reads.current.request(cid, async () => {
@@ -162,6 +195,11 @@ export function AppShell() {
       return;
     }
 
+    if (event.type === 'file_received') {
+      await Promise.all([contacts, refreshFiles(event.contact_id, false)]);
+      return;
+    }
+
     if (selectedContactCid(stateRef.current) === event.contact_id) {
       await Promise.all([
         contacts,
@@ -173,10 +211,27 @@ export function AppShell() {
     } else {
       await contacts;
     }
-  }, [converge, gateState, markVisibleRead, refreshContacts, refreshPage, refreshSnapshot, showError]);
+  }, [converge, gateState, markVisibleRead, refreshContacts, refreshFiles, refreshPage, refreshSnapshot, showError]);
 
   const handleEventRef = useRef(handleServerEvent);
   useEffect(() => { handleEventRef.current = handleServerEvent; }, [handleServerEvent]);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    void registerMessengerWorker((next) => {
+      setWorker(next);
+      void currentPushState(next.registration).then(setPush);
+    }).then((stop) => { cleanup = stop; }).catch(showError);
+    const onPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    return () => {
+      cleanup?.();
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+    };
+  }, [showError]);
 
   useEffect(() => {
     if (window.location.pathname === '/') window.history.replaceState(null, '', chatPath());
@@ -217,8 +272,29 @@ export function AppShell() {
       if (otherCid !== cid) convergence.current.set(otherCid, generation + 1);
     }
     goToRoute({ name: 'chats', contactCid: cid }, chatPath(cid), true);
-    const page = await refreshPage(cid);
+    const [page] = await Promise.all([refreshPage(cid), refreshFiles(cid, false)]);
     if (page) await markVisibleRead(cid);
+  };
+
+  const loadOlder = async (cid: string): Promise<boolean> => {
+    const current = pageFor(stateRef.current, cid);
+    const cursor = current?.nextBefore;
+    if (!cursor || historyLoads.current.has(cid)) return false;
+    const identityCid = stateRef.current.identity?.cid;
+    historyLoads.current.add(cid);
+    setHistoryBusy(cid);
+    try {
+      const page = await api.conversation(cid, cursor);
+      if (!identityCid || stateRef.current.identity?.cid !== identityCid) return false;
+      dispatch({ type: 'older_page', contactCid: cid, page, newer: current.messages });
+      return true;
+    } catch (error) {
+      showError(error);
+      return false;
+    } finally {
+      historyLoads.current.delete(cid);
+      setHistoryBusy((busy) => busy === cid ? null : busy);
+    }
   };
 
   const send = async () => {
@@ -229,6 +305,7 @@ export function AppShell() {
     const text = (current.drafts[key] ?? '').trim();
     if (!text) return;
     dispatch({ type: 'sending', dialog: key });
+    setTransferLabel('Sending message…');
     try {
       await api.send(cid, text, current.replies[key]);
       dispatch({ type: 'draft', contactCid: cid, value: '' });
@@ -238,15 +315,68 @@ export function AppShell() {
     } catch (error) {
       showError(error);
     } finally {
+      setTransferLabel(null);
       dispatch({ type: 'sending', dialog: null });
     }
   };
 
-  const createInvite = async () => {
+  const sendFiles = async (selected: Array<{ blob: Blob; filename: string; mime: string }>) => {
+    const current = stateRef.current;
+    const cid = selectedContactCid(current);
+    const key = selectedDialogKey(current);
+    if (!cid || !key || current.sendingDialog === key || selected.length === 0) return;
+    const oversized = selected.find((item) => item.blob.size > MAX_FILE_BYTES);
+    if (oversized) {
+      showError(`${oversized.filename} exceeds the 20 MiB messenger limit.`);
+      return;
+    }
+    dispatch({ type: 'sending', dialog: key });
+    try {
+      for (const [index, item] of selected.entries()) {
+        setTransferLabel(`Uploading ${index + 1} of ${selected.length} · ${item.filename}`);
+        await api.sendFile(cid, item.blob, item.filename, item.mime || 'application/octet-stream', current.replies[key]);
+      }
+      dispatch({ type: 'reply', contactCid: cid, wireId: null });
+      await refreshFiles(cid);
+    } catch (error) {
+      showError(error);
+    } finally {
+      setTransferLabel(null);
+      dispatch({ type: 'sending', dialog: null });
+    }
+  };
+
+  const fetchFile = async (file: MediaRecord) => {
+    setFileBusy(file.wire_id);
+    try {
+      await api.fetchFiles([file.wire_id]);
+      await refreshFiles(file.contact_id);
+    } catch (error) {
+      showError(error);
+    } finally {
+      setFileBusy(null);
+    }
+  };
+
+  const createInvite = async (mode: 'one_time' | 'public') => {
     dispatch({ type: 'dialog_busy', busy: true });
     try {
-      const invite = await api.createInvite('one_time');
+      const invite = await api.createInvite(mode);
       dispatch({ type: 'generated_invite', blob: invite.blob });
+      setInvites(await api.invites());
+    } catch (error) {
+      showError(error);
+    } finally {
+      dispatch({ type: 'dialog_busy', busy: false });
+    }
+  };
+
+  const revokeInvite = async (inviteId: string) => {
+    dispatch({ type: 'dialog_busy', busy: true });
+    try {
+      await api.revokeInvite(inviteId);
+      setInvites(await api.invites());
+      dispatch({ type: 'generated_invite', blob: null });
     } catch (error) {
       showError(error);
     } finally {
@@ -262,10 +392,12 @@ export function AppShell() {
     dispatch({ type: 'dialog_busy', busy: true });
     try {
       await api.addContact(invite, name || undefined);
+      dispatch({ type: 'dialog_busy', busy: false });
       dispatch({ type: 'dialog', open: false });
       await refreshSnapshot();
     } catch (error) {
       showError(error);
+    } finally {
       dispatch({ type: 'dialog_busy', busy: false });
     }
   };
@@ -277,6 +409,70 @@ export function AppShell() {
     } catch (error) {
       showError(error);
     }
+  };
+
+  const renameContact = async (cid: string, name: string) => {
+    setContactBusy(true);
+    try {
+      await api.renameContact(cid, name);
+      await refreshSnapshot();
+    } catch (error) {
+      showError(error);
+    } finally {
+      setContactBusy(false);
+    }
+  };
+
+  const removeContact = async (cid: string) => {
+    setContactBusy(true);
+    try {
+      await api.removeContact(cid);
+      goToRoute({ name: 'chats', contactCid: null }, chatPath(), false);
+      await refreshSnapshot();
+    } catch (error) {
+      showError(error);
+    } finally {
+      setContactBusy(false);
+    }
+  };
+
+  const openInvite = async () => {
+    setSettingsOpen(false);
+    dispatch({ type: 'dialog', open: true });
+    try { setInvites(await api.invites()); } catch (error) { showError(error); }
+  };
+
+  const openSettings = async () => {
+    setSettingsOpen(true);
+    dispatch({ type: 'dialog', open: true });
+    try { setIdentities(await api.identities()); } catch (error) { showError(error); }
+  };
+
+  const closeDialog = () => {
+    setSettingsOpen(false);
+    dispatch({ type: 'dialog', open: false });
+    void refreshVisibleAndRead();
+  };
+
+  const togglePush = async (enable: boolean) => {
+    if (!worker.registration) return;
+    setPushBusy(true);
+    setPush('busy');
+    try {
+      setPush(await (enable ? enablePush(worker.registration) : disablePush(worker.registration)));
+    } catch (error) {
+      setPush('error');
+      showError(error);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const install = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
   };
 
   const selectedCid = selectedContactCid(state);
@@ -300,8 +496,12 @@ export function AppShell() {
       <IdentityHeader
         identity={state.identity}
         connection={state.connection}
-        openInvite={() => dispatch({ type: 'dialog', open: true })}
+        openInvite={() => void openInvite()}
+        openSettings={() => void openSettings()}
+        installable={installPrompt !== null}
+        install={() => void install()}
       />
+      {worker.offline && <div className="offline-banner" role="status">Offline shell · message and identity data are not cached</div>}
       {state.connection !== 'live' && (
         <div className="connection-banner" role="status">
           {state.connection === 'retrying' ? 'Live updates interrupted. Reconnecting; REST remains authoritative.' : 'Connecting to live updates…'}
@@ -313,7 +513,7 @@ export function AppShell() {
           selected={selectedCid}
           onQuery={(search) => dispatch({ type: 'search', search })}
           onSelect={(cid) => void selectContact(cid)}
-          onAdd={() => dispatch({ type: 'dialog', open: true })}
+          onAdd={() => void openInvite()}
           onIntroduction={(pending, action) => void respondToIntroduction(pending, action)}
         />
         <Conversation
@@ -322,28 +522,56 @@ export function AppShell() {
           draft={key ? state.drafts[key] ?? '' : ''}
           replyWire={key ? state.replies[key] ?? null : null}
           sending={state.sendingDialog === key && key !== null}
+          sendingLabel={transferLabel}
+          files={selectedCid ? files[selectedCid] ?? [] : []}
+          busyWire={fileBusy}
+          contactBusy={contactBusy}
+          loadingOlder={historyBusy === selectedCid}
           mobileOpen={state.mobileDetailOpen}
           onBack={() => {
             goToRoute({ name: 'chats', contactCid: null }, chatPath(), false);
             queueMicrotask(() => document.querySelector<HTMLButtonElement>('.contact-row.selected')?.focus());
           }}
+          onLoadOlder={() => selectedCid ? loadOlder(selectedCid) : Promise.resolve(false)}
           onDraft={(value) => selectedCid && dispatch({ type: 'draft', contactCid: selectedCid, value })}
           onReply={(wireId) => selectedCid && dispatch({ type: 'reply', contactCid: selectedCid, wireId })}
           onCancelReply={() => selectedCid && dispatch({ type: 'reply', contactCid: selectedCid, wireId: null })}
           onSend={() => void send()}
+          onFiles={(selected) => void sendFiles(selected.map((file) => ({ blob: file, filename: file.name, mime: file.type })))}
+          onVoice={(blob, filename, mime) => void sendFiles([{ blob, filename, mime }])}
+          onFetch={(file) => void fetchFile(file)}
+          onRename={(name) => selectedCid && void renameContact(selectedCid, name)}
+          onRemove={() => selectedCid && void removeContact(selectedCid)}
+          onError={(message) => dispatch({ type: 'error', message })}
         />
       </main>
-      {state.coveringDialog && (
+      {state.coveringDialog && !settingsOpen && (
         <InviteDialog
           generated={state.generatedInvite}
+          invites={invites}
           busy={state.dialogBusy}
           error={state.error}
-          onClose={() => {
-            dispatch({ type: 'dialog', open: false });
-            void refreshVisibleAndRead();
-          }}
-          onCreate={() => void createInvite()}
+          onClose={closeDialog}
+          onCreate={(mode) => void createInvite(mode)}
+          onRevoke={(inviteId) => void revokeInvite(inviteId)}
           onAccept={(invite, name) => void acceptInvite(invite, name)}
+        />
+      )}
+      {state.coveringDialog && settingsOpen && (
+        <SettingsDialog
+          identity={state.identity}
+          identities={identities}
+          push={push}
+          workerSupported={worker.supported}
+          offline={worker.offline}
+          updateAvailable={worker.updateAvailable}
+          busy={pushBusy}
+          onTogglePush={(enable) => void togglePush(enable)}
+          onReloadUpdate={() => {
+            worker.registration?.waiting?.postMessage({ type: 'SKIP_WAITING' });
+            window.location.reload();
+          }}
+          onClose={closeDialog}
         />
       )}
       {state.error && !state.coveringDialog && (

@@ -10,13 +10,14 @@
 // five hooks — is deliberately absent. It existed because a browser node had to
 // hand tokens to a third party. A server does not.
 //
-// WHAT GOES IN A PUSH PAYLOAD: the sender and a count, never message text. The
-// payload is encrypted to the subscription, but it still passes through a push
-// service we do not run, and it is written to a device's notification store. The
-// daemon's own notification stream is content-free for the same reason, and there
-// is no reason for us to be less careful than the thing we are relaying.
+// WHAT GOES IN A PUSH PAYLOAD: the explicitly opted-in owner's full notification
+// text plus the stable dialog/wire identifiers used for click-through. RFC 8291
+// encrypts the payload to the browser subscription, but endpoint/timing/size
+// metadata remains visible to the push service and the decrypted notification can
+// be written to the device lock screen. The UI and README state this boundary
+// before permission is requested; this is not advertised as ours E2E transport.
 
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import webpush from 'web-push';
 
@@ -39,11 +40,39 @@ interface PushState {
   subscriptions: PushSubscriptionRecord[];
 }
 
-/** What a push carries. Sender and counts only — see the header. */
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function validState(value: unknown): value is PushState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Partial<PushState>;
+  if (!state.vapid || typeof state.vapid !== 'object') return false;
+  if (!nonEmpty(state.vapid.publicKey) || !nonEmpty(state.vapid.privateKey) || !nonEmpty(state.vapid.subject)) return false;
+  return Array.isArray(state.subscriptions) && state.subscriptions.every((subscription) =>
+    !!subscription && typeof subscription === 'object'
+      && nonEmpty(subscription.endpoint)
+      && !!subscription.keys && typeof subscription.keys === 'object'
+      && nonEmpty(subscription.keys.p256dh) && nonEmpty(subscription.keys.auth)
+      && nonEmpty(subscription.createdAt)
+      && (subscription.label === undefined || typeof subscription.label === 'string'));
+}
+
+function preservedStateError(file: string, reason: string): Error {
+  return new Error(
+    `Existing push state ${file} is ${reason}; it was left unchanged. `
+      + 'Restore valid push.json contents, or move the file aside explicitly before restarting to initialize new VAPID keys.',
+  );
+}
+
 export interface PushEvent {
-  readonly kind: 'message' | 'file';
-  readonly from?: string;
-  readonly count: number;
+  readonly v: 1;
+  readonly kind: 'message' | 'file' | 'photo' | 'voice';
+  readonly title: string;
+  readonly body: string;
+  readonly contact_id: string;
+  readonly wire_id: string;
+  readonly url: string;
 }
 
 export class PushStore {
@@ -69,9 +98,18 @@ export class PushStore {
 
     let state: PushState | undefined;
     try {
-      state = JSON.parse(readFileSync(file, 'utf8')) as PushState;
-    } catch {
-      state = undefined;
+      const stat = lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw preservedStateError(file, 'not a safe regular file');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+      } catch (error) {
+        throw preservedStateError(file, `corrupt or unreadable (${error instanceof Error ? error.message : String(error)})`);
+      }
+      if (!validState(parsed)) throw preservedStateError(file, 'schema-invalid');
+      state = parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
     const subject = env.OURS_MESSENGER_VAPID_SUBJECT ?? 'mailto:admin@localhost';

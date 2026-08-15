@@ -236,7 +236,7 @@ function manifest(root: string, pathPrefix = ''): StateManifest {
   };
 }
 
-function manifestLogicalPayload(runtimeDir: string, pushPath: string | null): StateManifest {
+function manifestLogicalPayload(runtimeDir: string, pushPath: string | null, mediaDir: string | null): StateManifest {
   // Use a streaming entry collector so source paths normalize to the exact
   // destination layout (`runtime/*`, optional `push.json`).
   const entries: Array<{ path: string; bytes: number; sha256: string }> = [];
@@ -258,6 +258,7 @@ function manifestLogicalPayload(runtimeDir: string, pushPath: string | null): St
     const body = readFileSync(pushPath);
     entries.push({ path: 'push.json', bytes: body.length, sha256: createHash('sha256').update(body).digest('hex') });
   }
+  if (mediaDir) collect(mediaDir, 'media');
   entries.sort((a, b) => a.path.localeCompare(b.path));
   const digest = createHash('sha256');
   for (const entry of entries) digest.update(`${entry.path}\0${entry.bytes}\0${entry.sha256}\n`);
@@ -364,7 +365,13 @@ export function migrateMessengerState(input: {
     const sourcePushPath = sourceKind === 'messenger-root' && existsSync(join(source, 'push.json'))
       ? join(source, 'push.json')
       : null;
-    const sourceManifest = manifestLogicalPayload(sourceRuntimeDir, sourcePushPath);
+    const sourceMediaDir = sourceKind === 'messenger-root' && existsSync(join(source, 'media'))
+      ? join(source, 'media')
+      : null;
+    if (sourceMediaDir && !lstatFile(sourceMediaDir).isDirectory()) {
+      throw new Error(`state migration refuses non-directory media state ${sourceMediaDir}`);
+    }
+    const sourceManifest = manifestLogicalPayload(sourceRuntimeDir, sourcePushPath, sourceMediaDir);
 
     // All invalid-input checks above are deliberately mutation-free. From here on
     // the explicit backup is created before the destination is populated.
@@ -379,11 +386,13 @@ export function migrateMessengerState(input: {
     mkdirSync(stage, { mode: 0o700 });
     cpSync(sourceRuntimeDir, join(stage, 'runtime'), { recursive: true, preserveTimestamps: true, errorOnExist: true });
     if (sourcePushPath) cpSync(sourcePushPath, join(stage, 'push.json'), { preserveTimestamps: true, errorOnExist: true });
+    if (sourceMediaDir) cpSync(sourceMediaDir, join(stage, 'media'), { recursive: true, preserveTimestamps: true, errorOnExist: true });
     enforcePrivateTree(stage);
 
     const destinationManifest = manifestLogicalPayload(
       join(stage, 'runtime'),
       existsSync(join(stage, 'push.json')) ? join(stage, 'push.json') : null,
+      existsSync(join(stage, 'media')) ? join(stage, 'media') : null,
     );
     if (sourceManifest.digest !== destinationManifest.digest || sourceManifest.files !== destinationManifest.files) {
       throw new Error('migration verification failed: destination manifest does not match source');

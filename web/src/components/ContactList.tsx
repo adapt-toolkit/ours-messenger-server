@@ -45,7 +45,7 @@ export function ContactList(props: {
             onSelect={props.onSelect}
           />
         ))}
-        {visible.length === 0 && <p className="empty-copy">No conversations found.</p>}
+        {visible.length === 0 && <p className="empty-copy">{props.state.loaded ? 'No conversations found.' : 'Loading conversations…'}</p>}
       </div>
     </aside>
   );

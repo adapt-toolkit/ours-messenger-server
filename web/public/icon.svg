@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ours messenger">
+  <rect width="512" height="512" rx="112" fill="#101310"/>
+  <path d="M110 168c0-32 26-58 58-58h176c32 0 58 26 58 58v117c0 32-26 58-58 58H235l-91 68 23-68c-32 0-57-26-57-58V168Z" fill="#9dea6d"/>
+  <circle cx="202" cy="228" r="18" fill="#101310"/><circle cx="256" cy="228" r="18" fill="#101310"/><circle cx="310" cy="228" r="18" fill="#101310"/>
+</svg>

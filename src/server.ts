@@ -14,6 +14,7 @@ import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { publicInternalError, reportFailure } from './security.js';
 import { assertStateInitializedForServe } from './lifecycle.js';
+import { MediaStore } from './media.js';
 
 export interface ServerHandle {
   readonly port: number;
@@ -26,7 +27,7 @@ const log = {
   warn: (message: string) => console.warn(`[messenger] ${message}`),
 };
 
-const APP_CSP = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'";
+const APP_CSP = "default-src 'self'; connect-src 'self'; img-src 'self' blob:; media-src 'self' blob:; frame-src 'self' blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'";
 
 const MIME_TYPES: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
@@ -95,7 +96,10 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
     }
     asset = candidate;
     cacheControl = 'public, max-age=31536000, immutable';
-  } else if (pathname === '/manifest.webmanifest' || pathname === '/version.json') {
+  } else if (
+    pathname === '/manifest.webmanifest' || pathname === '/version.json' || pathname === '/sw.js'
+    || pathname === '/icon.svg' || pathname === '/maskable-icon.svg'
+  ) {
     asset = resolve(appDir, pathname.slice(1));
   } else if (/\.[a-z0-9]+$/i.test(pathname)) {
     // Unknown file-like requests are not browser routes and must not receive HTML.
@@ -174,8 +178,11 @@ export async function start(
     const push = PushStore.open(cfg.stateDir);
     log.info(`push state ready (${push.list().length} subscription(s))`);
 
+    const media = MediaStore.open(cfg.stateDir);
+    log.info(`media index ready (${media.list().length} file(s))`);
+
     events = new MessengerEventBus();
-    watcher = startWatcher(runtime.client, cfg.identity, push, log, events);
+    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media });
 
     const deps: ApiDeps = {
       runtime,
@@ -185,6 +192,7 @@ export async function start(
       watcherStats: () => ({ ...(watcher?.stats ?? { pushes: 0, events: 0, reconnects: 0 }) }),
       events,
       identityCid: bound.cid,
+      media,
     };
 
     const moduleDir = dirname(fileURLToPath(import.meta.url));

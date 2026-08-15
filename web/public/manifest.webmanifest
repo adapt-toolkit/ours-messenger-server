@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "ours messenger",
+  "short_name": "ours",
+  "description": "A private self-hosted messenger for an ours identity.",
+  "start_url": "/chats",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090b0a",
+  "theme_color": "#101310",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/maskable-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

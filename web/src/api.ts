@@ -1,4 +1,6 @@
-import type { ContactsResponse, ConversationPage, CreatedInvite, IdentityView, InviteView } from './types.js';
+import type {
+  ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
+} from './types.js';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
@@ -7,6 +9,15 @@ export class ApiError extends Error {
 }
 
 export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
 
 export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) {
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -42,10 +53,13 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
 
   return {
     identity: () => request<IdentityView>('/api/identity'),
+    identities: () => request<IdentityTreeRow[]>('/api/identities'),
     contacts: () => request<ContactsResponse>('/api/contacts'),
     invites: () => request<InviteView[]>('/api/invites'),
-    conversation: (cid: string) =>
-      request<ConversationPage>(`/api/conversations/${encodeURIComponent(cid)}/page?limit=50`),
+    conversation: (cid: string, before?: string) =>
+      request<ConversationPage>(
+        `/api/conversations/${encodeURIComponent(cid)}/page?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+      ),
     markRead: (cid: string) =>
       request<{ contact: string; marked: number }>(`/api/conversations/${encodeURIComponent(cid)}/read`, { method: 'POST' }),
     send: (contact: string, text: string, replyTo?: string) =>
@@ -53,16 +67,49 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
         method: 'POST',
         body: JSON.stringify({ contact, text, ...(replyTo ? { reply_to_wire_id: replyTo } : {}) }),
       }),
+    sendFile: async (contact: string, file: Blob, filename: string, mime: string, replyTo?: string) =>
+      request<unknown>('/api/messages/send-file', {
+        method: 'POST',
+        body: JSON.stringify({
+          contact,
+          data_base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+          filename,
+          mime,
+          ...(replyTo ? { reply_to_wire_id: replyTo } : {}),
+        }),
+      }),
+    files: (cid: string) =>
+      request<DialogFiles>(`/api/conversations/${encodeURIComponent(cid)}/files`),
+    fetchFiles: (wireIds: string[]) => request<unknown>('/api/files/fetch', {
+      method: 'POST', body: JSON.stringify({ wire_ids: wireIds }),
+    }),
+    mediaUrl: (wireId: string) => `/api/media/${encodeURIComponent(wireId)}`,
     createInvite: (mode: 'one_time' | 'public' = 'one_time') =>
       request<CreatedInvite>('/api/invites', { method: 'POST', body: JSON.stringify({ mode }) }),
     addContact: (invite: string, name?: string) =>
       request<unknown>('/api/contacts/add', {
         method: 'POST', body: JSON.stringify({ invite, ...(name ? { name } : {}) }),
       }),
+    renameContact: (contact: string, name: string) => request<unknown>('/api/contacts/rename', {
+      method: 'POST', body: JSON.stringify({ contact, name }),
+    }),
+    removeContact: (contact: string) => request<unknown>('/api/contacts/remove', {
+      method: 'POST', body: JSON.stringify({ contact }),
+    }),
+    revokeInvite: (inviteId: string) => request<unknown>('/api/invites/revoke', {
+      method: 'POST', body: JSON.stringify({ invite_id: inviteId }),
+    }),
     respondToIntroduction: (contact: string, action: 'approve' | 'reject') =>
       request<unknown>('/api/contacts/introductions', {
         method: 'POST', body: JSON.stringify({ contact, action }),
       }),
+    vapidPublicKey: () => request<{ publicKey: string }>('/api/push/vapid-public-key'),
+    subscribePush: (subscription: PushSubscriptionJSON, label?: string) => request<unknown>('/api/push/subscribe', {
+      method: 'POST', body: JSON.stringify({ ...subscription, ...(label ? { label } : {}) }),
+    }),
+    unsubscribePush: (endpoint: string) => request<{ removed: boolean }>('/api/push/unsubscribe', {
+      method: 'POST', body: JSON.stringify({ endpoint }),
+    }),
   };
 }
 

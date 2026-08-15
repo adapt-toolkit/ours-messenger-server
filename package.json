@@ -32,9 +32,10 @@
     "dev:server": "tsx src/cli.ts serve",
     "serve": "node dist/cli.js serve",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:offline": "for f in tests/owned-runtime.test.mjs tests/runtime-lock.test.mjs tests/lifecycle-gate.test.mjs tests/sdk-signal-ownership.blocker.test.mjs tests/bundle-smoke.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/events.test.mjs tests/sse-e2e.test.mjs tests/static-hosting.test.mjs tests/web-contract.test.mjs web/tests/api.test.ts web/tests/router-store.test.ts web/tests/components.test.tsx web/tests/read-gate.test.ts; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
+    "test:offline": "for f in tests/owned-runtime.test.mjs tests/runtime-lock.test.mjs tests/lifecycle-gate.test.mjs tests/sdk-signal-ownership.blocker.test.mjs tests/bundle-smoke.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/media-store.test.mjs tests/media-response.test.mjs tests/push-store.test.mjs tests/events.test.mjs tests/sse-e2e.test.mjs tests/static-hosting.test.mjs tests/pwa-contract.test.mjs tests/web-contract.test.mjs web/tests/api.test.ts web/tests/router-store.test.ts web/tests/components.test.tsx web/tests/markdown.test.tsx web/tests/voice.test.ts web/tests/read-gate.test.ts; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
     "test:loopback": "for f in tests/receipts.test.mjs tests/state-dir-isolation.test.mjs tests/package-runtime-assets.test.mjs tests/rest-e2e.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
-    "test": "npm run build && npm run test:offline && npm run test:loopback"
+    "test:browser": "node tests/browser-pwa.test.mjs",
+    "test": "npm run build && npm run test:offline && npm run test:loopback && npm run test:browser"
   },
   "dependencies": {
     "@ours.network/sdk": "1.3.1",
@@ -43,6 +44,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

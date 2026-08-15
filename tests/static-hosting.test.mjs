@@ -10,6 +10,9 @@ writeFileSync(join(root, 'index.html'), '<!doctype html><div id="app"></div>');
 writeFileSync(join(root, 'assets', 'index-A1b2C3.js'), 'export const ready = true;');
 writeFileSync(join(root, 'assets', 'index-A1b2C3.css'), ':root{color-scheme:dark}');
 writeFileSync(join(root, 'version.json'), '{"sha":"abc"}\n');
+writeFileSync(join(root, 'manifest.webmanifest'), '{"name":"ours"}\n');
+writeFileSync(join(root, 'sw.js'), 'self.addEventListener("fetch",()=>{});');
+writeFileSync(join(root, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
 
 async function request(url, method = 'GET') {
   let status = 0;
@@ -49,6 +52,16 @@ assert.equal(css.headers['cache-control'], 'public, max-age=31536000, immutable'
 const version = await request('/version.json');
 assert.equal(version.headers['cache-control'], 'no-cache', 'mutable metadata is never cached');
 assert.equal(version.headers['content-type'], 'application/json; charset=utf-8');
+
+const manifest = await request('/manifest.webmanifest');
+assert.equal(manifest.status, 200);
+assert.equal(manifest.headers['content-type'], 'application/manifest+json; charset=utf-8');
+assert.equal(manifest.headers['cache-control'], 'no-cache');
+const worker = await request('/sw.js');
+assert.equal(worker.status, 200);
+assert.equal(worker.headers['content-type'], 'text/javascript; charset=utf-8');
+assert.equal(worker.headers['cache-control'], 'no-cache', 'service worker lifecycle never sticks behind an immutable cache');
+assert.match(worker.headers['content-security-policy'], /object-src 'none'/);
 
 for (const path of [
   '/assets/missing.js', '/api/not-a-route', '/api%2Fnot-a-route',
