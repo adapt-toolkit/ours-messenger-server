@@ -1,5 +1,6 @@
 import type {
   ConnectionState,
+  ConversationMessage,
   ContactsResponse,
   ConversationPage,
   IdentityView,
@@ -11,6 +12,7 @@ export interface AppState {
   contacts: ContactsResponse;
   route: AppRoute;
   pages: Record<string, ConversationPage | undefined>;
+  pendingSends: Record<string, ConversationMessage[] | undefined>;
   drafts: Record<string, string | undefined>;
   replies: Record<string, string | undefined>;
   connection: ConnectionState;
@@ -28,6 +30,7 @@ export type AppAction =
   | { type: 'snapshot'; identity: IdentityView; contacts: ContactsResponse }
   | { type: 'contacts'; contacts: ContactsResponse }
   | { type: 'page'; contactCid: string; page: ConversationPage }
+  | { type: 'sent_message'; contactCid: string; message: ConversationMessage }
   | {
       type: 'older_page'; contactCid: string; page: ConversationPage;
       /** Snapshot that followed this cursor when the request began; closes refresh races without gaps. */
@@ -52,6 +55,7 @@ export function initialState(route: AppRoute): AppState {
     contacts: emptyContacts(),
     route,
     pages: {},
+    pendingSends: {},
     drafts: {},
     replies: {},
     connection: 'connecting',
@@ -113,7 +117,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         loaded: true,
         error: null,
         ...(identityChanged ? {
-          pages: {}, drafts: {}, replies: {}, sendingDialog: null,
+          pages: {}, pendingSends: {}, drafts: {}, replies: {}, sendingDialog: null,
           generatedInvite: null, coveringDialog: false, dialogBusy: false,
         } : {}),
       };
@@ -123,7 +127,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       if (!state.identity) return state;
       const key = dialogKey(state.identity.cid, action.contactCid);
       const current = state.pages[key];
-      const page = current && current.messages.length > 50
+      const pending = state.pendingSends[key] ?? [];
+      const canonicalWireIds = new Set(action.page.messages.map((message) => message.wire_id));
+      const remainingPending = pending.filter((message) => !canonicalWireIds.has(message.wire_id));
+      const canonicalPage = current && current.messages.length > 50
         ? {
             ...action.page,
             messages: mergeMessages(current.messages, action.page.messages),
@@ -131,7 +138,34 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             nextBefore: current.nextBefore,
           }
         : action.page;
-      return { ...state, pages: { ...state.pages, [key]: page } };
+      const messages = mergeMessages(canonicalPage.messages, remainingPending);
+      const page = {
+        ...canonicalPage,
+        messages,
+        total: Math.max(canonicalPage.total + remainingPending.length, messages.length),
+      };
+      return {
+        ...state,
+        pages: { ...state.pages, [key]: page },
+        pendingSends: { ...state.pendingSends, [key]: remainingPending.length ? remainingPending : undefined },
+      };
+    }
+    case 'sent_message': {
+      if (!state.identity) return state;
+      const key = dialogKey(state.identity.cid, action.contactCid);
+      const current = state.pages[key];
+      if (current?.messages.some((message) => message.wire_id === action.message.wire_id)) return state;
+      const pending = mergeMessages(state.pendingSends[key] ?? [], [action.message]);
+      if (!current) return { ...state, pendingSends: { ...state.pendingSends, [key]: pending } };
+      const messages = mergeMessages(current.messages, [action.message]);
+      return {
+        ...state,
+        pages: {
+          ...state.pages,
+          [key]: { ...current, messages, total: Math.max(current.total + 1, messages.length) },
+        },
+        pendingSends: { ...state.pendingSends, [key]: pending },
+      };
     }
     case 'older_page': {
       if (!state.identity) return state;

@@ -405,6 +405,15 @@ export function AppShell() {
             if (!selectedCid) return;
             const cid = selectedCid;
             const sent = await api.send(cid, text, reply, signal);
+            dispatch({
+              type: 'sent_message',
+              contactCid: cid,
+              message: {
+                dir: 'out', text, date: new Date().toISOString(), read: true,
+                wire_id: sent.wire_id, receipt: null,
+                reply_to: reply ? { wire_id: reply } : null,
+              },
+            });
             void converge(cid, (page) => page.messages.some((message) => message.wire_id === sent.wire_id));
           }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
