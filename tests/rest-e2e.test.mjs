@@ -290,6 +290,7 @@ const sent = await api('POST', '/api/messages/send', {
   reply_to_wire_id: sentId,
 });
 t.eq(sent.status, 200, 'POST /api/messages/send sends as the bound identity');
+t.eq(typeof sent.json.wire_id, 'string', 'text send response exposes the canonical wire id to browser reconciliation');
 await until('the reply to reach the peer', async () => {
   const v = await peer.getConversation({ contact: 'Me' });
   return v.messages.some((m) => m.dir === 'in' && m.text === 'reply from the server') ? v : undefined;

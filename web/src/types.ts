@@ -60,6 +60,10 @@ export interface ConversationPage {
   nextBefore: string | null;
 }
 
+export interface SendMessageResult {
+  wire_id: string;
+}
+
 export type ServerEvent =
   | { v: 1; type: 'sync_required'; reason: string; identity?: string }
   | { v: 1; type: 'message_received'; contact_id: string; wire_id: string; date: string }

@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { dispatchLiveEvent } from './events.js';
 import type { PushPreviewMode, PushState, PushView } from './types.js';
 
 export interface WorkerState {
@@ -80,6 +81,21 @@ export async function registerMessengerWorker(
   const workerMessage = (event: MessageEvent) => {
     if (event.data?.type === 'ours-push-repair-required') {
       window.dispatchEvent(new Event('ours-push-repair-required'));
+      return;
+    }
+    if (event.data?.type === 'ours-push-foreground') {
+      const contact = event.data.contact_id;
+      const wire = event.data.wire_id;
+      const kind = event.data.kind;
+      if (typeof contact === 'string' && typeof wire === 'string') {
+        dispatchLiveEvent({
+          v: 1,
+          type: kind === 'file' ? 'file_received' : 'message_received',
+          contact_id: contact,
+          wire_id: wire,
+          date: new Date().toISOString(),
+        });
+      }
     }
   };
   // Snapshot before registration: clients.claim() on the very first install is

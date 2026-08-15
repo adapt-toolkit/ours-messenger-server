@@ -59,6 +59,25 @@ try {
   assert.equal(store.queueStats().pending, 0);
   assert.equal(store.queueStats().sent, 1);
 
+  const foregroundDir = mkdtempSync(join(tmpdir(), 'messenger-push-foreground-'));
+  try {
+    const foregroundStore = PushStore.open(foregroundDir, 'CID-ME', env, { sendNotification: async () => {
+      throw new Error('foreground delivery must be suppressed before provider I/O');
+    } });
+    foregroundStore.ensure(subscription);
+    const foregroundQueue = new PushDeliveryQueue({
+      store: foregroundStore, client: {}, identityCid: 'CID-ME', log: { info() {}, warn() {} },
+      isForeground: () => true, autoStart: false,
+      project: async () => { throw new Error('foreground delivery must be suppressed before projection'); },
+    });
+    assert.equal(foregroundQueue.enqueue({ event: 'message_received', sender_id: 'CID-A', wire_id: 'FOREGROUND-1' }), true);
+    assert.equal(foregroundQueue.stats.suppressed, 1);
+    assert.equal(foregroundStore.queueStats().pending, 0);
+    assert.equal(foregroundStore.queueStats().sent, 1, 'suppression is terminal in the durable dedupe ledger');
+  } finally {
+    rmSync(foregroundDir, { recursive: true, force: true });
+  }
+
   const reopened = PushStore.open(stateDir, 'CID-ME', env, { sendNotification: async () => {} });
   const resumed = new PushDeliveryQueue({
     store: reopened, client: {}, identityCid: 'CID-ME', log: { info() {}, warn() {} },
@@ -131,6 +150,8 @@ try {
     assert.ok(full.some((event) => event.body === 'Photo: photo.png'));
     assert.ok(full.every((event) => event.contact_id === 'CID-A' && event.wire_id),
       'every payload preserves authenticated CID and wire correlation');
+    assert.ok(full.every((event) => event.url === `/chats/CID-A#chat-message-${encodeURIComponent(event.wire_id)}`),
+      'every notification deep-links to its exact conversation message');
     const privatePayloads = delivered.filter((row) => row.endpoint.endsWith('/private')).map((row) => row.event);
     assert.ok(privatePayloads.every((event) => event.title === 'ours messenger'
       && !event.body.includes('full message text') && !event.body.includes('.png') && !event.body.includes('.pdf') && !event.body.includes('.ogg')),

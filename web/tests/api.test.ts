@@ -4,7 +4,7 @@ import { ApiError, createApi, type Fetcher } from '../src/api.js';
 const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
 const fetcher: Fetcher = async (input, init) => {
   calls.push({ input, init });
-  return new Response(JSON.stringify({ ok: true }), {
+  return new Response(JSON.stringify({ wire_id: 'WIRE-SENT', ok: true }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
@@ -16,7 +16,8 @@ assert.equal(calls[0].init?.cache, 'no-store', 'REST snapshots opt out of browse
 assert.equal(calls[0].init?.credentials, 'same-origin', 'REST stays same-origin');
 
 const sendController = new AbortController();
-await client.send('CONTACT/A', 'hello', 'WIRE-1', sendController.signal);
+const sendResult = await client.send('CONTACT/A', 'hello', 'WIRE-1', sendController.signal);
+assert.equal(sendResult.wire_id, 'WIRE-SENT', 'send exposes the stable wire id for history convergence');
 const mutation = calls[1].init!;
 assert.equal(mutation.method, 'POST');
 assert.equal(mutation.signal, sendController.signal, 'text sends accept a bounded UI abort signal');

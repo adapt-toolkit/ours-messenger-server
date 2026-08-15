@@ -15,6 +15,7 @@ export interface PushDeliveryOptions {
   readonly now?: () => number;
   readonly random?: () => number;
   readonly project?: (job: PushJob) => Promise<PushEvent>;
+  readonly isForeground?: () => boolean;
   readonly autoStart?: boolean;
 }
 
@@ -24,6 +25,7 @@ export interface PushDeliveryStats {
   pruned: number;
   retried: number;
   dropped: number;
+  suppressed: number;
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -40,7 +42,7 @@ async function projectFromSdk(
   client: PushDeliveryOptions['client'],
   job: PushJob,
 ): Promise<PushEvent> {
-  const url = `/chats/${encodeURIComponent(job.contactId)}`;
+  const url = `/chats/${encodeURIComponent(job.contactId)}#chat-message-${encodeURIComponent(job.wireId)}`;
   if (job.kind === 'message') {
     if (!client.getConversation) throw new Error('message projection is unavailable');
     const conversation = await client.getConversation({ contact: job.contactId });
@@ -71,7 +73,7 @@ async function projectFromSdk(
  * attempt re-reads the canonical SDK projection before encrypted delivery.
  */
 export class PushDeliveryQueue {
-  readonly stats: PushDeliveryStats = { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0 };
+  readonly stats: PushDeliveryStats = { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0, suppressed: 0 };
   private readonly store: PushStore;
   private readonly client: PushDeliveryOptions['client'];
   private readonly identityCid: string;
@@ -80,6 +82,7 @@ export class PushDeliveryQueue {
   private readonly random: () => number;
   private readonly project: (job: PushJob) => Promise<PushEvent>;
   private readonly automatic: boolean;
+  private readonly isForeground: () => boolean;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private draining: Promise<void> | undefined;
   private stopped = false;
@@ -92,6 +95,7 @@ export class PushDeliveryQueue {
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
     this.project = options.project ?? ((job) => projectFromSdk(this.client, job));
+    this.isForeground = options.isForeground ?? (() => false);
     this.automatic = options.autoStart !== false;
     if (this.automatic) this.schedule(0);
   }
@@ -108,6 +112,12 @@ export class PushDeliveryQueue {
     }, this.now());
     if (queued) {
       this.stats.queued++;
+      const jobId = `${this.identityCid}:${record.wire_id}:${kind}`;
+      if (this.isForeground() && this.store.suppressJob(jobId, this.now())) {
+        this.stats.suppressed++;
+        this.log.info(`push queue: suppressed foreground kind=${kind} wire=${record.wire_id}`);
+        return true;
+      }
       this.log.info(`push queue: queued kind=${kind} wire=${record.wire_id} depth=${this.store.queueStats().pending}`);
       if (this.automatic) this.schedule(0);
     }

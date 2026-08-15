@@ -9,6 +9,16 @@ try {
   const created = PushStore.open(root, {});
   assert.ok(created.publicKey.length > 20, 'an absent push state is initialized');
   const validBytes = readFileSync(join(root, 'push.json'));
+  assert.equal(JSON.parse(validBytes).vapid.subject, 'https://ours.network', 'default VAPID subject is accepted by public push providers');
+
+  const legacy = JSON.parse(validBytes);
+  const originalPublicKey = legacy.vapid.publicKey;
+  legacy.vapid.subject = 'mailto:admin@localhost';
+  writeFileSync(join(root, 'push.json'), JSON.stringify(legacy));
+  PushStore.open(root, { OURS_MESSENGER_PUBLIC_ORIGIN: 'https://messenger.example.com' });
+  const repaired = JSON.parse(readFileSync(join(root, 'push.json')));
+  assert.equal(repaired.vapid.subject, 'https://messenger.example.com', 'legacy localhost subject repairs from the public origin');
+  assert.equal(repaired.vapid.publicKey, originalPublicKey, 'subject repair preserves the VAPID key and browser subscriptions');
 
   const corrupt = Buffer.from('{"vapid":');
   writeFileSync(join(root, 'push.json'), corrupt);

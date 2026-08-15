@@ -90,9 +90,14 @@ try {
         return route.abort('connectionreset');
       }
       await new Promise((resolveWait) => setTimeout(resolveWait, 80));
-      return body.text === 'fixture failure'
-        ? json({ error: { message: 'fixture rejected' } }, 500)
-        : json({ wire_id: `SENT-${sends.length}` });
+      if (body.text === 'fixture failure') return json({ error: { message: 'fixture rejected' } }, 500);
+      const wireId = `SENT-${sends.length}`;
+      conversationMessages.push({
+        dir: 'out', text: body.text, date: '2026-08-15T00:00:02.000Z', read: true,
+        wire_id: wireId, receipt: null,
+        ...(body.reply_to_wire_id ? { reply_to: { wire_id: body.reply_to_wire_id } } : {}),
+      });
+      return json({ wire_id: wireId });
     }
     if (url.pathname === '/api/events') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
     return json({}, 404);
@@ -119,6 +124,7 @@ try {
   await page.evaluate(() => { globalThis.__blockAsyncComposerFocus = true; });
   const successResponse = page.waitForResponse((response) => response.url().endsWith('/api/messages/send'));
   await sendButton.tap();
+  assert.equal(await composer.inputValue(), '', 'submitted text clears immediately instead of freezing until network settlement');
   assert.equal(await composer.isEnabled(), true, 'in-flight send never disables and blurs the focused textarea');
   assert.equal(await sendButton.isDisabled(), true, 'in-flight send still disables duplicate submit activation');
   await successResponse;

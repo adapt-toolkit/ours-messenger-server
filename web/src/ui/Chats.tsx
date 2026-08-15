@@ -486,6 +486,15 @@ export function Conversation(props: {
     previousContactRef.current = contact.id;
   }, [contact, messages.length]);
 
+  useLayoutEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith('#chat-message-')) return;
+    const target = document.getElementById(hash.slice(1));
+    if (!target) return;
+    target.scrollIntoView({ block: 'center' });
+    pinnedToBottomRef.current = false;
+  }, [contact?.id, messages.length]);
+
   // Loading older entries prepends DOM above the current viewport. Compensate
   // by the exact height delta so the message the reader was looking at does
   // not jump away.
@@ -565,9 +574,9 @@ export function Conversation(props: {
   // to a banner rather than discard a half-written message.
   const onDraftChange = props.onDraftChange;
   useEffect(() => {
-    onDraftChange?.(draft.trim().length > 0);
+    onDraftChange?.(draft.trim().length > 0 || sending);
     return () => onDraftChange?.(false);
-  }, [draft, onDraftChange]);
+  }, [draft, sending, onDraftChange]);
 
   // Resolve a message's reply pointer (wire id) back to the quoted message we
   // still hold, so the bubble can render the author + snippet.
@@ -648,6 +657,11 @@ export function Conversation(props: {
     const controller = new AbortController();
     let timedOut = false;
     let timeout = 0;
+    // A submitted draft is no longer editable content. Clear it immediately so
+    // a healthy send feels instant, while keeping the exact snapshot available
+    // for a deterministic restore if the transaction fails or becomes unknown.
+    setDraft('');
+    setReplyTo(null);
     try {
       await Promise.race([
         props.onSend(text, replyWireId, controller.signal),
@@ -660,9 +674,9 @@ export function Conversation(props: {
         }),
       ]);
       setUnknownSend(null);
-      setDraft((current) => current === submittedDraft ? '' : current);
-      setReplyTo((current) => current === submittedReply ? null : current);
     } catch (err) {
+      setDraft((current) => current === '' ? submittedDraft : current);
+      setReplyTo((current) => current === null ? submittedReply : current);
       if (timedOut || !(err instanceof ApiError)) {
         setUnknownSend({
           draft: submittedDraft,

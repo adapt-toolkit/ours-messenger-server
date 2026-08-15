@@ -1,5 +1,20 @@
 import type { ConnectionState, ServerEvent } from './types.js';
 
+export const LIVE_EVENT_NAME = 'ours-messenger-live-event';
+
+export function dispatchLiveEvent(event: ServerEvent): void {
+  window.dispatchEvent(new CustomEvent<ServerEvent>(LIVE_EVENT_NAME, { detail: event }));
+}
+
+export function listenLiveEvents(onEvent: (event: ServerEvent) => void): () => void {
+  const listener = (raw: Event) => {
+    const event = (raw as CustomEvent<ServerEvent>).detail;
+    if (event?.v === 1) onEvent(event);
+  };
+  window.addEventListener(LIVE_EVENT_NAME, listener);
+  return () => window.removeEventListener(LIVE_EVENT_NAME, listener);
+}
+
 export function connectEvents(
   onEvent: (event: ServerEvent) => void,
   onState: (state: ConnectionState) => void,
