@@ -21,6 +21,7 @@ import { createECDH, randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { counter, memSample, until } from './harness.mjs';
 
 // THE FAKE PUSH SERVICE IS HTTPS, AND IT HAS TO BE. `web-push` calls
@@ -74,6 +75,18 @@ const auth = randomBytes(16).toString('base64url');
 // ---- boot the real server and the runtime IT owns ----------------------------
 const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-state-'));
 const publicOrigin = 'http://messenger.test';
+execFileSync(process.execPath, [
+  '--import', 'tsx', fileURLToPath(new URL('../src/cli.ts', import.meta.url)),
+  'init', '--name', 'Me', '--bio', 'REST end-to-end fixture', '--yes',
+], {
+  env: {
+    ...process.env,
+    OURS_MESSENGER_STATE_DIR: ownStateDir,
+    OURS_MESSENGER_PUBLIC_ORIGIN: publicOrigin,
+    OURS_MESSENGER_BROKER_URL: 'wss://invalid.local/none',
+  },
+  stdio: 'ignore',
+});
 const { start } = await import('../src/server.ts');
 const server = await start(
   {
