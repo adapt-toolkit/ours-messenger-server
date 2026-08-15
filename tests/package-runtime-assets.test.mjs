@@ -5,13 +5,14 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { createServer } from 'node:http';
 import {
   closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync,
   readdirSync, rmSync, statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const scratch = mkdtempSync(join(tmpdir(), 'messenger-package-assets-'));
@@ -127,6 +128,56 @@ try {
   });
   assert.equal(help.code, 0, `packed --help failed:\n${help.stderr}`);
   assert.match(help.stdout, /ours-messenger-server <command>/);
+
+  // Exercise the exact bundled static router against the production-installed
+  // dist/web tree. This proves routing independently from file inclusion: the
+  // manifest and every icon must agree over a real non-production HTTP socket.
+  const bundledServers = readdirSync(join(installed, 'dist', 'chunks'))
+    .filter((name) => /^server-[A-Z0-9]+\.js$/.test(name));
+  assert.equal(bundledServers.length, 1, 'installed artifact has exactly one bundled server module');
+  const { serveApp } = await import(pathToFileURL(join(installed, 'dist', 'chunks', bundledServers[0])).href);
+  assert.equal(typeof serveApp, 'function', 'installed server exports its static router');
+  const installedWeb = join(installed, 'dist', 'web');
+  const installedManifest = JSON.parse(readFileSync(join(installedWeb, 'manifest.webmanifest'), 'utf8'));
+  assert.ok(installedManifest.icons.length > 0, 'installed manifest declares PWA icons');
+  const staticServer = createServer((request, response) => {
+    void serveApp(request, response, installedWeb).catch((error) => {
+      response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end(String(error));
+    });
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    staticServer.once('error', rejectListen);
+    staticServer.listen(0, '127.0.0.1', resolveListen);
+  });
+  try {
+    const address = staticServer.address();
+    assert.ok(address && typeof address === 'object');
+    const origin = `http://127.0.0.1:${address.port}`;
+    for (const icon of installedManifest.icons) {
+      const iconPath = join(installedWeb, `.${icon.src}`);
+      assert.equal(existsSync(iconPath), true, `${icon.src} physically exists in the installed artifact`);
+      assert.ok(packed.files.some(({ path }) => path === `dist/web${icon.src}`), `${icon.src} is listed in the npm tarball`);
+      const bytes = readFileSync(iconPath);
+
+      const get = await fetch(`${origin}${icon.src}`);
+      assert.equal(get.status, 200, `installed artifact GET ${icon.src}`);
+      assert.equal(get.headers.get('content-type'), icon.type);
+      assert.equal(get.headers.get('cache-control'), 'no-cache');
+      assert.equal(get.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(get.headers.get('content-length'), String(bytes.length));
+      assert.deepEqual(Buffer.from(await get.arrayBuffer()), bytes, `${icon.src} never falls back to SPA HTML`);
+
+      const head = await fetch(`${origin}${icon.src}`, { method: 'HEAD' });
+      assert.equal(head.status, 200, `installed artifact HEAD ${icon.src}`);
+      assert.equal(head.headers.get('content-type'), icon.type);
+      assert.equal(head.headers.get('content-length'), String(bytes.length));
+      assert.equal((await head.arrayBuffer()).byteLength, 0);
+    }
+  } finally {
+    await new Promise((resolveClose, rejectClose) =>
+      staticServer.close((error) => error ? rejectClose(error) : resolveClose()));
+  }
 
   // Recreate the reported package defect in a broken copy. Failure is before
   // the loopback listener: it must create neither an identity nor an

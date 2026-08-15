@@ -1,9 +1,9 @@
 // The HTTP host. It owns one isolated SDK runtime and one public REST/SSE server.
 
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { dirname, extname, resolve, sep } from 'node:path';
+import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { serveApi, type ApiDeps } from './api.js';
@@ -70,6 +70,18 @@ function appNotFound(res: ServerResponse): void {
   res.end(body);
 }
 
+async function readContainedFile(root: string, path: string): Promise<Buffer> {
+  const [canonicalRoot, canonicalPath] = await Promise.all([realpath(root), realpath(path)]);
+  const fromRoot = relative(canonicalRoot, canonicalPath);
+  if (
+    fromRoot === '' || fromRoot === '..' || fromRoot.startsWith(`..${sep}`)
+    || isAbsolute(fromRoot) || !(await stat(canonicalPath)).isFile()
+  ) {
+    throw new Error('static asset is not a contained regular file');
+  }
+  return readFile(canonicalPath);
+}
+
 /** Serve only Vite output and the SPA entry. API/MCP namespaces always fail closed. */
 export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir: string): Promise<void> {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -93,9 +105,10 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
   }
 
   let asset = 'index.html';
+  let assetRoot = appDir;
   let cacheControl = 'no-cache';
   if (pathname.startsWith('/assets/')) {
-    const assetRoot = resolve(appDir, 'assets');
+    assetRoot = resolve(appDir, 'assets');
     const candidate = resolve(appDir, `.${decodedPathname}`);
     if (candidate !== assetRoot && !candidate.startsWith(`${assetRoot}${sep}`)) {
       appNotFound(res);
@@ -103,6 +116,14 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
     }
     asset = candidate;
     cacheControl = 'public, max-age=31536000, immutable';
+  } else if (pathname.startsWith('/icons/')) {
+    assetRoot = resolve(appDir, 'icons');
+    const candidate = resolve(appDir, `.${decodedPathname}`);
+    if (candidate === assetRoot || !candidate.startsWith(`${assetRoot}${sep}`)) {
+      appNotFound(res);
+      return;
+    }
+    asset = candidate;
   } else if (
     pathname === '/manifest.webmanifest' || pathname === '/version.json' || pathname === '/sw.js'
     || pathname === '/icon.svg' || pathname === '/maskable-icon.svg'
@@ -117,7 +138,7 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
   }
 
   try {
-    const body = await readFile(asset);
+    const body = await readContainedFile(assetRoot, asset);
     const type = MIME_TYPES[extname(asset).toLowerCase()] ?? 'application/octet-stream';
     res.writeHead(200, appHeaders(type, cacheControl, body.length));
     res.end(req.method === 'HEAD' ? undefined : body);
