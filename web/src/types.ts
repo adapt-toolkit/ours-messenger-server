@@ -13,9 +13,16 @@ export interface ContactView {
   container_id: string;
 }
 
+export interface PendingContactView {
+  name: string;
+  container_id: string;
+  queued: number;
+}
+
 export interface ContactsResponse {
   contacts: ContactView[];
-  pending: Array<{ container_id: string; name: string; queued: number }>;
+  pending: PendingContactView[];
+  roots?: Record<string, unknown>;
 }
 
 export interface ConversationMessage {
@@ -49,3 +56,16 @@ export type ServerEvent =
     };
 
 export type ConnectionState = 'connecting' | 'live' | 'retrying';
+
+export interface InviteView {
+  invite_id: string;
+  mode: 'one_time' | 'public';
+  assigned?: string;
+}
+
+export interface CreatedInvite {
+  blob: string;
+  invite_id?: string;
+  inviteId?: string;
+  mode?: 'one_time' | 'public';
+}

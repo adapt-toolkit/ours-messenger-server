@@ -457,7 +457,7 @@ and `dist/events.d.ts`.
 
 | File | Change |
 | --- | --- |
-| `package.json`, lockfile | Pin the fixed SDK; add the chosen client build tool and scripts. Keep server/test entry points compatible. |
+| `package.json`, lockfile, `vite.config.ts` | Pin the fixed SDK and React 18/Vite client toolchain. Keep server/test entry points compatible. |
 | `src/watch.ts` | Generalize the single reconnecting watcher into a normalized event bridge with abort, backoff, overflow sync, and the existing push subscriber. |
 | `src/events.ts` (new) | Define internal event union and bounded SSE subscriber fan-out. No durable state. |
 | `src/api.ts` | Add `GET /api/events`, SSE lifecycle/heartbeat, and static-app fallback after all `/api/*` routes. Preserve existing route guards. |
@@ -474,12 +474,11 @@ and `dist/events.d.ts`.
 | `web/src/components/Conversation.tsx`, `MessageReceipt.tsx`, `Composer.tsx` (new) | Thread, receipt marks, send/reply flow. |
 | `web/src/components/IdentityHeader.tsx`, `InviteDialog.tsx` (new) | Bound identity and minimal contact/invite actions. |
 | `web/src/styles.css` (new) | Messenger-only responsive visual system derived from the control-plane reference. |
-| `web/tests/read-gate.test.ts` (new) | Predicate and coalescing unit tests. |
+| `web/tests/api.test.ts`, `router-store.test.ts`, `components.test.tsx`, `read-gate.test.ts` (new) | Typed client intent headers/no-store behavior, route and identity scoping, safe React rendering, and exact-visible read/coalescing tests. |
 | `web/e2e/receipts.spec.ts` (new) | Browser exact-dialog, visibility, mobile, and reconnect acceptance. |
 
-If the implementer selects plain TypeScript/DOM rather than React, preserve these
-module boundaries and acceptance tests; the framework is less important than one
-read gate and one authoritative state path.
+The phase-1 client uses React 18 with Vite. It keeps one read gate and one
+authoritative REST state path; EventSource events remain invalidation hints only.
 
 ## 13. Implementation sequence
 

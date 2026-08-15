@@ -15,18 +15,25 @@ const walk = (dir) => {
 };
 walk(webRoot);
 const source = sourceFiles.map((file) => readFileSync(file, 'utf8')).join('\n');
-const built = readFileSync(join(root, 'dist/web/app.js'), 'utf8');
-const css = readFileSync(join(root, 'dist/web/styles.css'), 'utf8');
 const html = readFileSync(join(root, 'dist/web/index.html'), 'utf8');
+const assets = readdirSync(join(root, 'dist/web/assets'));
+const jsAsset = assets.find((name) => /^index-[\w-]+\.js$/.test(name));
+const cssAsset = assets.find((name) => /^index-[\w-]+\.css$/.test(name));
+assert.ok(jsAsset && cssAsset, 'Vite emits content-hashed JS and CSS assets');
+const built = readFileSync(join(root, 'dist/web/assets', jsAsset), 'utf8');
+const css = readFileSync(join(root, 'dist/web/assets', cssAsset), 'utf8');
 
 assert.ok(ROUTE_NAMES.includes('GET /api/events'), 'SSE route is part of the published API table');
-assert.ok(html.includes('/app.js') && html.includes('/styles.css'), 'built entry document loads only same-origin assets');
+assert.match(html, /\/assets\/index-[\w-]+\.js/, 'built entry document loads a same-origin hashed script');
+assert.match(html, /\/assets\/index-[\w-]+\.css/, 'built entry document loads a same-origin hashed stylesheet');
 assert.ok(built.includes('/api/events'), 'built client opens the same-origin SSE invalidation stream');
 assert.ok(built.includes('/read') && built.includes('/api/messages/send'), 'built client has explicit read and send mutations');
 assert.ok(source.includes("'X-Ours-Messenger-CSRF': '1'"), 'every web mutation carries the fixed CSRF intent header');
 assert.ok(!source.includes('localStorage') && !source.includes('sessionStorage'), 'messages and receipts are not browser-persisted');
-assert.ok(source.includes("aria-label', label") || source.includes('aria-label", label'), 'receipt marks have accessible labels');
+assert.ok(!source.includes('dangerouslySetInnerHTML'), 'message content has no raw HTML rendering path');
+assert.ok(source.includes('aria-label={label}'), 'receipt marks have accessible labels');
 assert.ok(css.includes('@media (max-width: 859px)') && css.includes('prefers-reduced-motion'), 'mobile detail and reduced motion are explicit');
+assert.ok(source.includes('useReducer') && source.includes("from 'react-dom/client'"), 'the browser shell is React state rendered through createRoot');
 
 for (const excluded of ['Clusters', 'Backup', 'Notification settings', 'Service status', 'Monitoring']) {
   assert.ok(!source.includes(excluded), `focused messenger UI excludes ${excluded}`);

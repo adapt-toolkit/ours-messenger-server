@@ -14,6 +14,7 @@
 // stays lazy so `--help` does not initialise native/runtime state.
 
 import { build } from 'esbuild';
+import { build as viteBuild } from 'vite';
 import { copyFile, cp, mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -106,19 +107,4 @@ await Promise.all([
   cp(resolve(adaptDist, 'mufl_files'), adaptMuflFiles, { recursive: true }),
 ]);
 
-const webDist = resolve(dist, 'web');
-await mkdir(webDist, { recursive: true });
-await Promise.all([
-  copyFile(resolve(root, 'web/index.html'), resolve(webDist, 'index.html')),
-  copyFile(resolve(root, 'web/src/styles.css'), resolve(webDist, 'styles.css')),
-  build({
-    bundle: true,
-    platform: 'browser',
-    target: ['es2022'],
-    format: 'esm',
-    entryPoints: [resolve(root, 'web/src/main.ts')],
-    outfile: resolve(webDist, 'app.js'),
-    sourcemap: true,
-    logLevel: 'info',
-  }),
-]);
+await viteBuild({ configFile: resolve(root, 'vite.config.ts') });

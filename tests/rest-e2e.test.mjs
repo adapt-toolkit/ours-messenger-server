@@ -142,9 +142,11 @@ const api = async (method, path, body) => {
 const shellResponse = await fetch(base + '/');
 const shellHtml = await shellResponse.text();
 t.eq(shellResponse.status, 200, 'GET / serves the focused messenger client');
-t.ok(shellHtml.includes('id="app"') && shellHtml.includes('/app.js'), 'and its same-origin application entry');
-const appResponse = await fetch(base + '/app.js');
-t.eq(appResponse.status, 200, 'GET /app.js serves the built client bundle');
+const appAsset = shellHtml.match(/src="(\/assets\/index-[^"]+\.js)"/)?.[1];
+t.ok(shellHtml.includes('id="app"') && appAsset, 'and its same-origin content-hashed Vite entry');
+const appResponse = await fetch(base + appAsset);
+t.eq(appResponse.status, 200, 'GET the hashed Vite entry serves the built client bundle');
+t.eq(appResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable', 'hashed assets are immutable');
 t.ok((await appResponse.text()).includes('/api/events'), 'whose live path is the same-origin SSE endpoint');
 const clientRoute = await fetch(base + '/chats/peer');
 t.ok((await clientRoute.text()).includes('id="app"'), 'non-API client routes fall back to the app shell');

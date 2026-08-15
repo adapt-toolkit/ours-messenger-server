@@ -1,6 +1,6 @@
 export interface ReadGateState {
   visibility: DocumentVisibilityState;
-  appRoute: 'chats';
+  appRoute: 'chats' | 'other';
   selectedContactCid: string | null;
   desktopLayout: boolean;
   mobileDetailOpen: boolean;
