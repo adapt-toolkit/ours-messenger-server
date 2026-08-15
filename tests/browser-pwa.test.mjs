@@ -6,6 +6,10 @@ import { chromium } from '@playwright/test';
 
 const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the browser gate');
+const builtWorker = readFileSync(join(webRoot, 'sw.js'), 'utf8');
+const builtCacheName = /const SHELL_CACHE = '(ours-messenger-shell-[0-9a-f]{40})'/.exec(builtWorker)?.[1];
+assert.ok(builtCacheName, 'built service worker cache is scoped to the immutable release SHA');
+assert.doesNotMatch(builtWorker, /__MESSENGER_BUILD_SHA__/);
 
 const types = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -90,7 +94,7 @@ try {
     const requests = (await Promise.all(keys.map(async (key) => (await caches.open(key)).keys()))).flat();
     return { keys, urls: requests.map((request) => new URL(request.url).pathname).sort() };
   });
-  assert.ok(cacheFacts.keys.includes('ours-messenger-shell-v2'));
+  assert.ok(cacheFacts.keys.includes(builtCacheName));
   assert.ok(cacheFacts.urls.includes('/chats'));
   assert.ok(cacheFacts.urls.includes('/manifest.webmanifest'));
   assert.equal(cacheFacts.urls.some((path) => path.startsWith('/api/')), false, 'API responses never enter Cache Storage');
