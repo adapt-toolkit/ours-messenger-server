@@ -90,15 +90,44 @@ function safeText(value, fallback, max) {
   return typeof value === 'string' && value.trim() ? value.slice(0, max) : fallback;
 }
 
+// Match the durable update lifecycle used by ours-control-plane: an installed
+// PWA is commonly backgrounded rather than fully closed, so a new worker must
+// not remain parked in `waiting` behind an old client forever.
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL)));
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(Promise.all([
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== SHELL_CACHE).map((key) => caches.delete(key)))),
-    self.clients.claim(),
-  ]));
+  event.waitUntil((async () => {
+    await Promise.all([
+      caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== SHELL_CACHE).map((key) => caches.delete(key)))),
+      self.clients.claim(),
+    ]);
+
+    // Release bridge for clients predating automatic controllerchange reloads.
+    // New clients answer this probe and own their safe reload/veto flow. An old
+    // client cannot answer, so navigate it once to escape the stale app shell.
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    await Promise.all(windows.map(async (client) => {
+      const supported = await new Promise((resolve) => {
+        const channel = new MessageChannel();
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          try { channel.port1.close(); } catch { /* closed */ }
+          resolve(value);
+        };
+        channel.port1.onmessage = (reply) => finish(reply.data?.supported === true);
+        const timer = setTimeout(() => finish(false), 750);
+        try { client.postMessage({ type: 'ours-update-lifecycle-probe' }, [channel.port2]); }
+        catch { finish(false); }
+      });
+      if (!supported && 'navigate' in client) await client.navigate(client.url).catch(() => null);
+    }));
+  })());
 });
 
 self.addEventListener('message', (event) => {

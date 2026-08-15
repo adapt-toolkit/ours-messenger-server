@@ -8,6 +8,20 @@ export interface WorkerState {
   registration: ServiceWorkerRegistration | null;
 }
 
+export interface WorkerUpdateOptions {
+  shouldDeferReload?: () => boolean;
+  reload?: () => void;
+}
+
+export function workerControllerChangeAction(
+  hadControllerAtLoad: boolean,
+  reloading: boolean,
+  busy: boolean,
+): 'ignore' | 'defer' | 'reload' {
+  if (!hadControllerAtLoad || reloading) return 'ignore';
+  return busy ? 'defer' : 'reload';
+}
+
 interface NotificationApi {
   permission: NotificationPermission;
   requestPermission(callback?: (permission: NotificationPermission) => void): Promise<NotificationPermission> | void;
@@ -51,9 +65,11 @@ function timeout<T>(promise: Promise<T>, ms: number, description: string): Promi
 
 export async function registerMessengerWorker(
   onState: (state: WorkerState) => void,
+  options: WorkerUpdateOptions = {},
 ): Promise<() => void> {
   let registration: ServiceWorkerRegistration | null = null;
   let updateAvailable = false;
+  let reloading = false;
   const supported = 'serviceWorker' in navigator && window.isSecureContext;
   const emit = () => onState({ supported, offline: !navigator.onLine, updateAvailable, registration });
   const online = () => emit();
@@ -62,14 +78,33 @@ export async function registerMessengerWorker(
     if (document.visibilityState === 'visible') void registration?.update().catch(() => {});
   };
   const workerMessage = (event: MessageEvent) => {
+    if (event.data?.type === 'ours-update-lifecycle-probe') {
+      event.ports[0]?.postMessage({ supported: true });
+      return;
+    }
     if (event.data?.type === 'ours-push-repair-required') {
       window.dispatchEvent(new Event('ours-push-repair-required'));
     }
+  };
+  // Snapshot before registration: clients.claim() on the very first install is
+  // not an update and must not cause a redundant reload.
+  const hadControllerAtLoad = supported && !!navigator.serviceWorker.controller;
+  const controllerChanged = () => {
+    const action = workerControllerChangeAction(hadControllerAtLoad, reloading, options.shouldDeferReload?.() ?? false);
+    if (action === 'ignore') return;
+    if (action === 'defer') {
+      updateAvailable = true;
+      emit();
+      return;
+    }
+    reloading = true;
+    (options.reload ?? (() => location.reload()))();
   };
   window.addEventListener('online', online);
   window.addEventListener('offline', offline);
   document.addEventListener('visibilitychange', visible);
   navigator.serviceWorker?.addEventListener('message', workerMessage);
+  navigator.serviceWorker?.addEventListener('controllerchange', controllerChanged);
 
   if (supported) {
     registration = await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
@@ -90,6 +125,7 @@ export async function registerMessengerWorker(
     window.removeEventListener('offline', offline);
     document.removeEventListener('visibilitychange', visible);
     navigator.serviceWorker?.removeEventListener('message', workerMessage);
+    navigator.serviceWorker?.removeEventListener('controllerchange', controllerChanged);
   };
 }
 
@@ -99,7 +135,12 @@ export async function activateWorkerUpdate(
   serviceWorker: Pick<ServiceWorkerContainer, 'addEventListener' | 'removeEventListener'> = navigator.serviceWorker,
 ): Promise<void> {
   const waiting = registration.waiting;
-  if (!waiting) return;
+  // skipWaiting may already have promoted the new worker. In that deferred
+  // state the banner's explicit action is simply a safe page reload.
+  if (!waiting) {
+    reload();
+    return;
+  }
   await timeout(new Promise<void>((resolve) => {
     let applied = false;
     const changed = () => {

@@ -118,6 +118,7 @@ export function AppShell() {
   const historyLoads = useRef(new Set<string>());
   const [modal, setModal] = useState<'invite' | 'settings' | null>(null);
   const modalRef = useRef(modal);
+  const draftPresentRef = useRef(false);
   const [invites, setInvites] = useState<readonly InviteView[]>([]);
   const [build, setBuild] = useState<BuildInfoView | null>(null);
   const [dark, setDark] = useState(() => localStorage.getItem(DARK_KEY) !== '0');
@@ -132,6 +133,7 @@ export function AppShell() {
     stateRef.current = appReducer(stateRef.current, action);
     rawDispatch(action);
   }, []);
+  const noteDraftPresence = useCallback((hasText: boolean) => { draftPresentRef.current = hasText; }, []);
   useEffect(() => { stateRef.current = state; }, [state]);
   modalRef.current = modal;
   filesRef.current = files;
@@ -245,7 +247,7 @@ export function AppShell() {
       setWorker(next);
       void currentPushState(next.registration).then(setPush).catch(() =>
         setPush((current) => ({ ...current, status: 'error' })));
-    })
+    }, { shouldDeferReload: () => draftPresentRef.current || modalRef.current !== null })
       .then((stop) => { cleanup = stop; }).catch(showError);
     const prompt = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
     window.addEventListener('beforeinstallprompt', prompt);
@@ -367,6 +369,7 @@ export function AppShell() {
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
           onLoadEarlier={selectedCid && historyBusy !== selectedCid ? () => void loadOlder(selectedCid) : undefined}
           onBack={() => go({ name: 'chats', contactCid: null }, chatPath(), false)}
+          onDraftChange={noteDraftPresence}
           onSend={async (text, reply, signal) => {
             if (!selectedCid) return;
             try { await api.send(selectedCid, text, reply, signal); }

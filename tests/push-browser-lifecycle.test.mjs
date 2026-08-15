@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  activateWorkerUpdate,
+  activateWorkerUpdate, workerControllerChangeAction,
   currentPushState,
   disablePush,
   enablePush,
@@ -10,6 +10,11 @@ import {
 
 const key = (seed) => Uint8Array.from({ length: 65 }, (_, index) => index === 0 ? 4 : (seed + index) % 256);
 const publicKey = (bytes) => Buffer.from(bytes).toString('base64url');
+
+assert.equal(workerControllerChangeAction(false, false, false), 'ignore', 'first service-worker claim never reloads onboarding');
+assert.equal(workerControllerChangeAction(true, true, false), 'ignore', 'one update cannot trigger duplicate reloads');
+assert.equal(workerControllerChangeAction(true, false, true), 'defer', 'an unsent draft defers update reload to the banner');
+assert.equal(workerControllerChangeAction(true, false, false), 'reload', 'an idle controlled PWA automatically loads a new worker');
 
 async function permissionFrom(requestPermission, current = 'default') {
   return requestNotificationPermission({
@@ -120,6 +125,10 @@ const applying = activateWorkerUpdate({
 await applying;
 assert.equal(updateMessages, 1, 'the waiting worker is activated once');
 assert.equal(reloads, 1, 'controllerchange reloads exactly once rather than reloading immediately');
+
+let alreadyActiveReloads = 0;
+await activateWorkerUpdate({ waiting: null }, () => { alreadyActiveReloads++; }, workerContainer);
+assert.equal(alreadyActiveReloads, 1, 'a deferred update whose worker is already active reloads from the banner');
 
 let localDisable = 0;
 let serverDisable = 0;
