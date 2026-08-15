@@ -27,6 +27,9 @@ assert.deepEqual(normalizeNotification({ event: 'future_event', text: 'private' 
 assert.deepEqual(toSse({ type: 'sync_required', reason: 'connected' }, 'ME'), {
   event: 'sync_required', data: { v: 1, reason: 'connected', identity: 'ME' },
 });
+assert.deepEqual(normalizeNotification({
+  event: 'file_received', sender_id: 'CID-A', wire_id: 'FILE-1', date: 'D3', filename: 'private-name.txt',
+}), { type: 'file_received', contact_id: 'CID-A', wire_id: 'FILE-1', date: 'D3' });
 
 const bus = new MessengerEventBus();
 const first = bus.subscribe(1);
@@ -47,7 +50,11 @@ const warnings = [];
 const pushes = [];
 const controllerWait = async () => {};
 const handle = startWatcher(
-  {},
+  {
+    getConversation: async () => ({
+      messages: [{ dir: 'in', wire_id: 'WIRE-2', text: 'the full push body' }],
+    }),
+  },
   'Me',
   { send: async (event) => { pushes.push(event); return { sent: 1, pruned: 0, failed: 0, errors: [] }; } },
   { info() {}, warn(message) { warnings.push(message); } },
@@ -63,7 +70,7 @@ const handle = startWatcher(
       })();
       return (async function* () {
         yield { event: 'receipt_received', sender_id: 'CID-A', kind: 'delivered', wire_ids: ['WIRE-2'], date: 'D2' };
-        await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        if (!signal.aborted) await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
       })();
     },
   },
@@ -73,6 +80,15 @@ assert.deepEqual(await watched.next(), { type: 'sync_required', reason: 'daemon_
 assert.deepEqual(await watched.next(), { type: 'sync_required', reason: 'daemon_reconnected' });
 assert.equal((await watched.next()).type, 'receipt_received');
 assert.equal(pushes.length, 1, 'message event remains a push subscriber input');
+assert.deepEqual(pushes[0], {
+  v: 1,
+  kind: 'message',
+  title: 'Alice',
+  body: 'the full push body',
+  contact_id: 'CID-A',
+  wire_id: 'WIRE-2',
+  url: '/chats/CID-A',
+}, 'push is encrypted by Web Push with the canonical full text and click-through identifiers');
 assert.ok(warnings.some((line) => line.includes('watch stream') && line.includes('correlation')),
   'disconnect is observable through a correlation id');
 assert.ok(!warnings.join('\n').includes('SECRET-WATCH-PATH'), 'watch errors never expose exception content');

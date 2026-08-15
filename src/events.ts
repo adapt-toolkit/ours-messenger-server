@@ -25,6 +25,12 @@ export type MessengerEvent =
       readonly kind: 'delivered' | 'read';
       readonly wire_ids: readonly string[];
       readonly date: string;
+    }
+  | {
+      readonly type: 'file_received';
+      readonly contact_id: string;
+      readonly wire_id: string;
+      readonly date: string;
     };
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -69,6 +75,18 @@ export function normalizeNotification(record: Record<string, unknown>): Messenge
       // Receipt time is not present in the currently published actor contract.
       // A fixed actor should supply it; observation time is the explicit fallback.
       date: nonEmpty(record.date) ? record.date : new Date().toISOString(),
+    };
+  }
+
+  if (record.event === 'file_received') {
+    if (!nonEmpty(record.sender_id) || !nonEmpty(record.wire_id) || !nonEmpty(record.date)) {
+      return { type: 'sync_required', reason: 'legacy_event' };
+    }
+    return {
+      type: 'file_received',
+      contact_id: record.sender_id,
+      wire_id: record.wire_id,
+      date: record.date,
     };
   }
 

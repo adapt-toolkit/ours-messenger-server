@@ -12,9 +12,10 @@
 //      exists to avoid, and a push loop is the most natural place to reintroduce
 //      it, which is why the warning lives here and not only in the README.
 //
-//   2. IT IS CONTENT-FREE. The record carries who and when, not what. So the push
-//      we build from it cannot leak message text even by accident: there is no
-//      text in our hands at this point.
+//   2. IT IS CONTENT-FREE. The record carries stable authenticated correlation
+//      metadata, never bodies. For an explicitly subscribed owner we use that
+//      correlation to read the canonical conversation/file projection and build
+//      one encrypted Web Push payload. SSE remains metadata-only.
 //
 // The stream PRIMES AT EOF — a restart does not replay the backlog. That is
 // deliberate. Re-pushing every message received while the server was down would
@@ -24,14 +25,8 @@
 import type { OursClient } from '@ours.network/sdk';
 import { MessengerEventBus, normalizeNotification } from './events.js';
 import type { PushEvent, PushStore } from './push.js';
+import type { MediaStore } from './media.js';
 import { reportFailure } from './security.js';
-
-/** Events that mean "something arrived for the human". Anything else is not a push. */
-const PUSHABLE: Record<string, PushEvent['kind']> = {
-  message_received: 'message',
-  pending_message: 'message',
-  file_received: 'file',
-};
 
 export interface WatcherLog {
   info(msg: string): void;
@@ -51,6 +46,55 @@ export interface WatcherOptions {
   readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** A successful probe defines "reattached" before the sync broadcast. */
   readonly probe?: () => Promise<unknown>;
+  readonly media?: MediaStore;
+}
+
+const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+async function pushEventFor(client: OursClient, record: Record<string, unknown>): Promise<PushEvent | null> {
+  if (!nonEmpty(record.sender_id) || !nonEmpty(record.wire_id)) return null;
+  const contactId = record.sender_id;
+  const wireId = record.wire_id;
+  const url = `/chats/${encodeURIComponent(contactId)}`;
+
+  if (record.event === 'message_received') {
+    let message: Awaited<ReturnType<OursClient['getConversation']>>['messages'][number] | undefined;
+    for (const delay of [0, 50, 200, 500]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      const conversation = await client.getConversation({ contact: contactId });
+      message = conversation.messages.find((row) => row.wire_id === wireId && row.dir === 'in');
+      if (message) break;
+    }
+    if (!message) throw new Error('canonical message was not available for push projection');
+    const sender = nonEmpty(record.sender_name) ? record.sender_name : 'New message';
+    return { v: 1, kind: 'message', title: sender, body: message.text, contact_id: contactId, wire_id: wireId, url };
+  }
+
+  if (record.event === 'file_received') {
+    let file: Awaited<ReturnType<OursClient['listIncomingFiles']>>[number] | undefined;
+    for (const delay of [0, 50, 200, 500]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      const files = await client.listIncomingFiles();
+      file = files.find((row) => row.wire_id === wireId && row.from.id === contactId);
+      if (file) break;
+    }
+    if (!file) throw new Error('canonical file metadata was not available for push projection');
+    const kind: PushEvent['kind'] = file.kind === 'voice_message'
+      ? 'voice'
+      : file.mime.toLowerCase().startsWith('image/') ? 'photo' : 'file';
+    const label = kind === 'voice' ? 'Voice message' : kind === 'photo' ? 'Photo' : 'File';
+    return {
+      v: 1,
+      kind,
+      title: file.from.name || label,
+      body: `${label}: ${file.filename}`,
+      contact_id: contactId,
+      wire_id: wireId,
+      url,
+    };
+  }
+
+  return null;
 }
 
 function abortableWait(ms: number, signal: AbortSignal): Promise<void> {
@@ -110,13 +154,14 @@ export function startWatcher(
           // event to history; browsers recover truth from REST.
           events.publish(normalizeNotification(record));
 
-          const name = typeof record.event === 'string' ? record.event : '';
-          const kind = PUSHABLE[name];
-          if (!kind) continue;
-
-          const from = typeof record.from === 'string' ? record.from : undefined;
           try {
-            const result = await push.send({ kind, from, count: 1 });
+            if (record.event === 'file_received' && options.media) {
+              const incoming = await client.listIncomingFiles();
+              options.media.reconcileIncoming(incoming);
+            }
+            const event = await pushEventFor(client, record);
+            if (!event) continue;
+            const result = await push.send(event);
             stats.pushes += result.sent;
             if (result.pruned) log.info(`push: pruned ${result.pruned} dead subscription(s)`);
             if (result.failed) {

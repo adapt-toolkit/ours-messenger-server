@@ -145,7 +145,7 @@ try {
   assert.equal(statSync(join(destination, 'migration.json')).mode & 0o077, 0);
 
   // An existing messenger root contributes both its nested SDK runtime and the
-  // outer push state; neither may be silently dropped.
+  // outer push and media state; none may be silently dropped.
   const messengerSource = join(root, 'messenger-source');
   const messengerDestination = join(root, 'messenger-destination');
   const messengerBackup = join(root, 'messenger-backup');
@@ -153,6 +153,9 @@ try {
   writeFileSync(join(messengerSource, 'runtime', 'Human', 'identity.key'), 'KEY-HUMAN');
   writeFileSync(join(messengerSource, 'runtime', 'Human', 'state_data.bin'), 'ACTOR-WITH-HISTORY-AND-RECEIPTS');
   writeFileSync(join(messengerSource, 'push.json'), '{"subscriptions":[{"endpoint":"opaque"}]}');
+  mkdirSync(join(messengerSource, 'media', 'blobs'), { recursive: true });
+  writeFileSync(join(messengerSource, 'media', 'index.json'), '{"version":1,"files":[]}');
+  writeFileSync(join(messengerSource, 'media', 'blobs', 'WIRE-1'), Buffer.from([0, 255, 1, 254]));
   const messengerMigration = migrateMessengerState({
     source: messengerSource,
     destinationStateDir: messengerDestination,
@@ -160,14 +163,22 @@ try {
     confirmed: true,
   });
   assert.equal(messengerMigration.sourceKind, 'messenger-root');
-  assert.equal(messengerMigration.sourceManifest.files, 3);
+  assert.equal(messengerMigration.sourceManifest.files, 5);
   assert.equal(messengerMigration.sourceManifest.digest, messengerMigration.destinationManifest.digest);
   assert.deepEqual(readFileSync(join(messengerDestination, 'push.json')), readFileSync(join(messengerSource, 'push.json')));
+  assert.deepEqual(
+    readFileSync(join(messengerDestination, 'media', 'blobs', 'WIRE-1')),
+    readFileSync(join(messengerSource, 'media', 'blobs', 'WIRE-1')),
+  );
   assert.deepEqual(
     readFileSync(join(messengerDestination, 'runtime', 'Human', 'state_data.bin')),
     readFileSync(join(messengerSource, 'runtime', 'Human', 'state_data.bin')),
   );
   assert.deepEqual(readFileSync(join(messengerBackup, 'source', 'push.json')), readFileSync(join(messengerSource, 'push.json')));
+  assert.deepEqual(
+    readFileSync(join(messengerBackup, 'source', 'media', 'index.json')),
+    readFileSync(join(messengerSource, 'media', 'index.json')),
+  );
 
   // Invalid/non-empty destination is checked before backup or destination mutation.
   const blockedDestination = join(root, 'blocked-destination');

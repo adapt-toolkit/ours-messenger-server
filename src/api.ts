@@ -28,6 +28,7 @@ import type { Runtime } from './daemon.js';
 import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
+import type { MediaStore, ReplyReference } from './media.js';
 import { publicEngineError, publicInternalError } from './security.js';
 
 export const API_PREFIX = '/api/';
@@ -42,6 +43,7 @@ export interface ApiDeps {
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
+  readonly media?: MediaStore;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
   readonly sseQueueLimit?: number;
@@ -75,6 +77,37 @@ function optBool(body: Record<string, unknown>, key: string): boolean | undefine
   if (v === undefined || v === null) return undefined;
   if (typeof v !== 'boolean') throw bad(`${key}, when present, must be a boolean`);
   return v;
+}
+
+function filename(body: Record<string, unknown>): string {
+  const value = str(body, 'filename').normalize('NFC');
+  if (value.length > 255 || /[\u0000-\u001f\u007f/\\]/.test(value) || value === '.' || value === '..') {
+    throw bad('filename must be a safe basename of at most 255 characters');
+  }
+  return value;
+}
+
+function mime(body: Record<string, unknown>): string {
+  const value = body.mime === undefined ? 'application/octet-stream' : str(body, 'mime');
+  if (value.length > 255 || /[\r\n]/.test(value) || !/^[\w!#$&^_.+-]+\/[\w!#$&^_.+-]+(?:\s*;\s*[\w!#$&^_.+-]+=[\w!#$&^_.+:-]+)*$/i.test(value)) {
+    throw bad('mime must be a safe MIME type with optional token parameters');
+  }
+  return value;
+}
+
+function replyReference(body: Record<string, unknown>): ReplyReference | null {
+  const wireId = optStr(body, 'reply_to_wire_id');
+  if (!wireId) return null;
+  if (body.reply_to_sentence === undefined) return { wire_id: wireId };
+  const sentence = Number(body.reply_to_sentence);
+  if (!Number.isSafeInteger(sentence) || sentence < 1) throw bad('reply_to_sentence must be a positive integer');
+  return { wire_id: wireId, sentence };
+}
+
+function outcomeWireId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const wireId = (value as Record<string, unknown>).wireId;
+  return typeof wireId === 'string' && wireId ? wireId : undefined;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -301,40 +334,67 @@ const ROUTES: Record<string, Handler> = {
   },
 
   // ---- messaging -----------------------------------------------------------
-  'POST /api/messages/send': async ({ client, body }) =>
-    client.sendMessage({
+  'POST /api/messages/send': async ({ client, body, deps }) => {
+    const reply = replyReference(body);
+    const result = await client.sendMessage({
       contact: str(body, 'contact'),
       text: str(body, 'text'),
-      reply_to_wire_id: optStr(body, 'reply_to_wire_id'),
-      reply_to_sentence: body.reply_to_sentence === undefined ? undefined : Number(body.reply_to_sentence),
-    }),
-
-  'POST /api/messages/send-file': async ({ client, body }) => {
-    const dataBase64 = inlineBase64(body);
-    return client.sendFile({
-      contact: str(body, 'contact'),
-      data_base64: dataBase64,
-      filename: optStr(body, 'filename'),
-      mime: optStr(body, 'mime'),
-      reply_to_wire_id: optStr(body, 'reply_to_wire_id'),
-      reply_to_sentence: body.reply_to_sentence === undefined ? undefined : Number(body.reply_to_sentence),
+      reply_to_wire_id: reply?.wire_id,
+      reply_to_sentence: reply?.sentence,
     });
+    deps.media?.recordReply(outcomeWireId(result), reply);
+    return result;
+  },
+
+  'POST /api/messages/send-file': async ({ client, body, deps }) => {
+    const dataBase64 = inlineBase64(body);
+    const contact = str(body, 'contact');
+    const safeFilename = filename(body);
+    const safeMime = mime(body);
+    const reply = replyReference(body);
+    const result = await client.sendFile({
+      contact,
+      data_base64: dataBase64,
+      filename: safeFilename,
+      mime: safeMime,
+      reply_to_wire_id: reply?.wire_id,
+      reply_to_sentence: reply?.sentence,
+    });
+    const wireId = outcomeWireId(result);
+    if (wireId && (result as { kind?: string }).kind !== 'refused') {
+      deps.media?.recordOutgoing({
+        wire_id: wireId,
+        contact_id: contact,
+        sender_id: deps.identityCid,
+        sender_name: deps.config.identity,
+        filename: safeFilename,
+        mime: safeMime,
+        reply_to: reply,
+      }, Buffer.from(dataBase64, 'base64'));
+    }
+    return result;
   },
 
   // ---- conversations: THE NON-CONSUMING READ PATH --------------------------
   'GET /api/conversations/:contact': async ({ client, params }) =>
     client.getConversation({ contact: params.contact }),
 
-  'GET /api/conversations/:contact/page': async ({ client, params, query }) => {
+  'GET /api/conversations/:contact/page': async ({ client, params, query, deps }) => {
     const contact = params.contact;
     const rawLimit = query.get('limit');
     const limit = rawLimit === null ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
     const before = query.get('before') ?? undefined;
-    const [conversation, receipts] = await Promise.all([
+    const [conversation, receipts, incoming] = await Promise.all([
       client.getConversation({ contact }),
       client.getReceipts({ contact }),
+      client.listIncomingMessages(),
     ]);
-    return projectPage(contact, conversation.messages, receipts, { limit, before });
+    const incomingReplies = new Map(incoming.map((message) => [message.wire_id, message.reply_to]));
+    const withReplies = conversation.messages.map((message) => ({
+      ...message,
+      reply_to: incomingReplies.get(message.wire_id) ?? deps.media?.replyFor(message.wire_id) ?? null,
+    }));
+    return projectPage(contact, withReplies, receipts, { limit, before });
   },
 
   'GET /api/conversations/:contact/receipts': async ({ client, params }) =>
@@ -425,13 +485,28 @@ const ROUTES: Record<string, Handler> = {
   // ---- files ---------------------------------------------------------------
   'GET /api/files/incoming': async ({ client }) => client.listIncomingFiles(),
 
-  'POST /api/files/fetch': async ({ client, body }) => {
+  'GET /api/conversations/:contact/files': async ({ client, deps, params }) => {
+    const incoming = await client.listIncomingFiles();
+    deps.media?.reconcileIncoming(incoming);
+    return { contact: params.contact, files: deps.media?.list(params.contact) ?? [] };
+  },
+
+  'POST /api/files/fetch': async ({ client, body, deps }) => {
     const ids = body.wire_ids;
-    if (ids === undefined || ids === null) return publicFetchedFiles(await client.getFiles(undefined));
+    if (ids === undefined || ids === null) throw bad('wire_ids is required for browser file retrieval');
     if (!Array.isArray(ids) || !ids.every((v) => typeof v === 'string' && v !== '')) {
       throw bad('wire_ids, when present, must be an array of non-empty strings');
     }
-    return publicFetchedFiles(await client.getFiles({ wire_ids: ids as string[] }));
+    const fetched = await client.getFiles({ wire_ids: ids as string[] });
+    if (deps.media) {
+      const incoming = await client.listIncomingFiles();
+      deps.media.reconcileIncoming(incoming);
+      for (const row of fetched.files) {
+        const bytes = await client.fetchFile(row.wire_id);
+        deps.media.storeIncoming(row.wire_id, bytes, row);
+      }
+    }
+    return publicFetchedFiles(fetched);
   },
 
   // NOTE THE IDENTIFIER SPLIT, which reads as a typo and gets "fixed": deferFiles
@@ -455,6 +530,21 @@ const ROUTES: Record<string, Handler> = {
       'content-length': String(bytes.byteLength),
     });
     res.end(Buffer.from(bytes));
+    return undefined;
+  },
+
+  'GET /api/media/:wireId': async ({ deps, params, res }) => {
+    if (!deps.media) throw new Error('messenger media store is unavailable');
+    const { record, bytes } = deps.media.read(params.wireId);
+    const encodedName = encodeURIComponent(record.filename).replaceAll("'", '%27');
+    res.writeHead(200, {
+      'content-type': record.mime.split(';', 1)[0],
+      'content-length': String(bytes.byteLength),
+      'content-disposition': `inline; filename*=UTF-8''${encodedName}`,
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    res.end(bytes);
     return undefined;
   },
 

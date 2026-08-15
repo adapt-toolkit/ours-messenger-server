@@ -5,7 +5,18 @@ export interface IdentityView {
   cid: string;
   bio?: string;
   rootName?: string;
+  rootCid?: string;
+  roleId?: string;
   isRoot?: boolean;
+  temporary?: boolean;
+}
+
+export interface IdentityTreeRow {
+  name: string;
+  cid: string;
+  kind: 'root' | 'role' | 'flat';
+  session: 'mine' | 'other-live' | null;
+  temp: null | { state: string; ownerPid: number };
 }
 
 export interface ContactView {
@@ -32,6 +43,12 @@ export interface ConversationMessage {
   read: boolean;
   wire_id: string;
   receipt: Receipt;
+  reply_to?: ReplyReference | null;
+}
+
+export interface ReplyReference {
+  wire_id: string;
+  sentence?: number;
 }
 
 export interface ConversationPage {
@@ -53,7 +70,8 @@ export type ServerEvent =
       kind: 'delivered' | 'read';
       wire_ids: string[];
       date: string;
-    };
+    }
+  | { v: 1; type: 'file_received'; contact_id: string; wire_id: string; date: string };
 
 export type ConnectionState = 'connecting' | 'live' | 'retrying';
 
@@ -69,3 +87,37 @@ export interface CreatedInvite {
   inviteId?: string;
   mode?: 'one_time' | 'public';
 }
+
+export interface MediaRecord {
+  wire_id: string;
+  contact_id: string;
+  dir: 'in' | 'out';
+  sender_id: string;
+  sender_name: string;
+  filename: string;
+  logical_name: string;
+  version: number;
+  mime: string;
+  size: number;
+  sha256: string | null;
+  date: string;
+  date_source: 'protocol' | 'server_observed';
+  kind: 'file' | 'photo' | 'voice_message';
+  reply_to: ReplyReference | null;
+  available: boolean;
+  transcription?: {
+    configured?: boolean;
+    attempted?: boolean;
+    status?: string;
+    provider?: string | null;
+    text?: string | null;
+    error_category?: string | null;
+  };
+}
+
+export interface DialogFiles {
+  contact: string;
+  files: MediaRecord[];
+}
+
+export type PushState = 'unsupported' | 'idle' | 'blocked' | 'subscribed' | 'busy' | 'error';

@@ -20,6 +20,8 @@ The runtime always uses:
 - an `OursClient` carrying that token and a per-process lease;
 - `<OURS_MESSENGER_STATE_DIR>/runtime` for identities and runtime state;
 - `<OURS_MESSENGER_STATE_DIR>/push.json` for messenger WebPush state;
+- `<OURS_MESSENGER_STATE_DIR>/media` for owner-only immutable media blobs,
+  reply correlations, provenance, hashes, and logical file versions;
 - `<OURS_MESSENGER_STATE_DIR>/runtime/config.json` as the only SDK config path.
 
 Ambient `OURS_STATE_DIR`, `OURS_CONFIG`, `OURS_PORT`, broker selection and API
@@ -43,23 +45,14 @@ watcher or public-listen failure closes the public server if present, stops the
 watcher, releases the lease, and closes the runtime. Normal `close()` is
 idempotent and uses the same ordered path. Tests require both loopback ports,
 listening server handles, and advisory ownership to be released afterward; OS signal
-listener ownership is the separate SDK blocker below.
+listener ownership is enforced by the SDK lifecycle gate described below.
 
 ## Running
 
-The checked-in package and lockfile intentionally remain pinned to the published
-`@ours.network/sdk@1.0.1`. That release does not yet contain the daemon/receipt
-contract required by this branch. Development and tests currently require the
-locally linked SDK at exactly:
-
-```text
-d357bb7de76eeefc7178175bb5801cc521002bc4
-```
-
-SDK receipt PR #16 is merged, and SDK signal-ownership PR #17 is awaiting CI and
-release. No published SDK release contains both contracts. The local link is not
-a release claim. Do not publish the messenger until a released SDK contains the
-required APIs and the dependency/lockfile can be pinned to that published version.
+The package and lockfile pin the published `@ours.network/sdk@1.3.1`. This release
+provides the embedded daemon, receipt/event metadata, file/voice operations, and
+`handleSignals: false` contract required by the messenger. The server owns signal
+handling and ordered shutdown; it never removes another component's listeners.
 
 ```bash
 npm install
@@ -100,10 +93,12 @@ existing backup, or any non-empty destination before mutation. It first copies
 source and empty-destination backups, then copies the complete runtime through a
 private sibling staging root, verifies a deterministic path/size/SHA-256
 manifest, and atomically installs the destination. For a messenger-root source,
-outer `push.json` is included as well. `migration.json` records source, backup,
+outer `push.json` and the complete `media/` tree are included as well.
+`migration.json` records source, backup,
 identities, file/byte totals, and matching source/destination manifests. Because
 identity keys and the complete actor state blob are copied byte-for-byte, CID,
-conversation history, receipts, `keep_history`, and push state are preserved
+conversation history, receipts, `keep_history`, push subscriptions, file bytes,
+reply correlations, provenance, and media version history are preserved
 across the clean destination restart. Never point messenger at a concurrently
 used `~/.ours` directory.
 
@@ -119,7 +114,7 @@ OURS_MESSENGER_KEEP_HISTORY      default true
 OURS_MESSENGER_FORCE             default false
 ```
 
-The production build is a React 18 + TypeScript SPA emitted by Vite under
+The production build is an installable React 18 + TypeScript PWA emitted by Vite under
 `dist/web`: `index.html` is no-cache, while content-hashed `/assets/*` are served
 immutable with explicit MIME types and `nosniff`. During frontend-only work,
 `npm run dev` starts Vite on loopback and proxies `/api` and `/mcp` to the
@@ -153,21 +148,35 @@ transitions produce receipt wire IDs.
 - backpressure overflow collapses details to one `sync_required(reason=overflow)`;
 - there is no replay ID; REST snapshots recover all durable state.
 
-The focused client does not persist messages in browser storage and exposes no
-monitoring, cluster, backup or service-management UI.
+The focused client does not persist messages, identities, receipts, or API
+responses in browser storage. Its service worker caches only the application
+shell and static assets for offline launch; all `/api/*` requests bypass it.
+
+The web UI includes identity hierarchy and active-binding status; contact add,
+approval, rename and removal; one-time/public invite creation and revocation;
+message replies; drag/drop/paste and picker uploads with bounded progress/error
+states; per-dialog file and version history; photo/audio/Markdown previews; and
+voice recording. Incoming files are fetched only after an explicit user action.
+HTML previews run in a sandboxed frame with a deny-by-default CSP, and Markdown
+is rendered to React nodes without raw HTML execution.
 
 ## WebPush
 
-The browser registers a standard WebPush subscription with this server. The
-server stores it, signs notifications with VAPID and sends sender/count metadata.
-The notification watcher is non-consuming and content-free, so push delivery
-cannot mark a message read or include its text.
+Web Push is an explicit per-browser opt-in in Settings. The server sends a full
+notification label/body and dialog click-through URL, encrypted to the browser
+with the standard Web Push content-encoding contract and signed with VAPID. The
+upstream watcher and SSE stream remain non-consuming and metadata-only, so push
+delivery cannot mark a message read. Web Push is separate from the ours
+end-to-end channel: the push provider observes delivery metadata, and the device
+may display decrypted notification text on its lock screen. The UI states this
+before subscription.
 
 ## REST surface
 
 Routes live under `/api/`; `src/api.ts` is the executable route list. Principal
 routes include identity/contact/invite operations, conversation snapshots,
-explicit read, send/file mutations, WebPush compatibility routes, `/api/state`,
+explicit read, text/file mutations, per-dialog media inventory and explicit
+incoming fetch, owner-only media download, WebPush routes, `/api/state`,
 `/api/healthz`, `/api/build-info`, and `/api/events`. Health returns 200 only when
 the owned runtime responds before its deadline with the startup-bound identity
 CID; failures use one fixed 503 shape. State excludes runtime paths, broker,
@@ -193,6 +202,7 @@ npm run typecheck
 npm run build
 npm run test:offline
 npm run test:loopback
+npm run test:browser
 npm test
 ```
 
@@ -203,46 +213,17 @@ empty-serve non-mutation, stable CID provenance, byte-complete migration and
 invalid-input non-mutation, live lock collisions, graceful release, SIGKILL/PID
 reuse recovery, bundle execution, ambient state isolation, real-token redaction,
 `/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
-REST/WebPush, SSE backpressure and reconnect, paging, focused-client contracts
-and the exact-dialog read gate.
+REST/WebPush encryption and full payloads, reply correlation, immutable media and
+version round-trips, exact voice MIME/bytes, sandboxed previews, PWA cache
+isolation/installability/offline launch in Chromium, SSE backpressure and
+reconnect, paging, focused-client contracts and the exact-dialog read gate.
 
-## Explicit SDK lifecycle blocker
+## SDK lifecycle ownership
 
-The linked SDK currently installs process handlers unconditionally in
-`src/http/server.ts` inside `startHttpDaemon`:
-
-```text
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
-```
-
-That `shutdown` calls `process.exit(0)`. Programmatic close and messenger rollback
-do close their ports, handles, leases and advisory ownership, but a real OS signal can run
-SDK teardown/exit before the messenger closes its public HTTP server and watcher
-in host-owned order. Signal-listener installation/removal therefore remains out
-of the default lifecycle assertions until the host can disable it entirely.
-
-The minimal SDK API is:
-
-```ts
-interface DaemonOptions {
-  handleSignals?: boolean // default true for existing CLI/MCP hosts
-}
-```
-
-Messenger must call `startDaemon({ ..., handleSignals: false })`; in that mode
-the SDK installs no signal handlers and never calls `process.exit`. The targeted
-test reports a deterministic skip while the option is absent and asserts the
-messenger call automatically once the SDK declaration exists:
-
-```bash
-node tests/sdk-signal-ownership.blocker.test.mjs
-```
-
-Do not work around this by removing process listeners from messenger. Until the
-SDK option is released and the blocker test exercises the call, ordered signal
-shutdown and publication remain blocked even though programmatic lifecycle is
-complete.
+The pinned SDK exposes `DaemonOptions.handleSignals?: boolean`; messenger calls
+`startDaemon({ handleSignals: false })`. The SDK therefore installs no process
+signal handlers and never exits the host process. The targeted source-contract
+test plus owned-runtime shutdown tests enforce this boundary.
 
 The known SDK teardown report of one bounded `AdaptPacketContext` allocation is
 unchanged and remains upstream lifecycle accounting, not messenger state growth.

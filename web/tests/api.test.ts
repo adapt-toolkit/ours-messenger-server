@@ -26,6 +26,25 @@ assert.deepEqual(JSON.parse(String(mutation.body)), {
   contact: 'CONTACT/A', text: 'hello', reply_to_wire_id: 'WIRE-1',
 });
 
+await client.sendFile('CONTACT/A', new Blob([Uint8Array.from([0, 1, 2, 255])]), 'photo.png', 'image/png', 'WIRE-1');
+const fileMutation = calls[2].init!;
+assert.deepEqual(JSON.parse(String(fileMutation.body)), {
+  contact: 'CONTACT/A', data_base64: 'AAEC/w==', filename: 'photo.png', mime: 'image/png', reply_to_wire_id: 'WIRE-1',
+}, 'browser file bytes use the capped REST upload contract and never enter the DOM');
+
+await client.fetchFiles(['FILE-WIRE']);
+assert.deepEqual(JSON.parse(String(calls[3].init?.body)), { wire_ids: ['FILE-WIRE'] });
+
+await client.subscribePush({ endpoint: 'https://push.example/device', keys: { p256dh: 'P', auth: 'A' } }, 'browser');
+assert.equal(calls[4].input, '/api/push/subscribe');
+
+await client.renameContact('CONTACT/A', 'Alice');
+assert.equal(calls[5].input, '/api/contacts/rename');
+assert.deepEqual(JSON.parse(String(calls[5].init?.body)), { contact: 'CONTACT/A', name: 'Alice' });
+await client.removeContact('CONTACT/A');
+assert.equal(calls[6].input, '/api/contacts/remove');
+assert.deepEqual(JSON.parse(String(calls[6].init?.body)), { contact: 'CONTACT/A' });
+
 const rejected = createApi(async () => new Response(
   JSON.stringify({ error: { code: 'BAD_REQUEST', message: 'text must be a non-empty string' } }),
   { status: 400 },
