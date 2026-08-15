@@ -10,6 +10,8 @@ import { ChatList, Conversation } from './ui/Chats.js';
 import type { ChatMessage } from './ui/chatTypes.js';
 import { clearMediaRecords, configureMediaProvider, filePreviewLabel, registerMediaRecords } from './ui/fileStore.js';
 import { fmtWhen, initials, type ContactVM, type RootMetaVM, shortCid } from './ui/viewmodel.js';
+// @ts-ignore -- canonical pure-JS helper is typed at this seam.
+import { timeMs as timeMsJs } from './ui/timelineCore.mjs';
 import { Icon } from './ui/icons.js';
 import MessageToasts, { useMessageToasts } from './ui/MessageToast.js';
 import { InviteModal, SettingsModal } from './ui/MessengerModals.js';
@@ -18,6 +20,7 @@ const convergenceDelays = [0, 100, 400, 1_000] as const;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const receiptRank = { delivered: 1, read: 2 } as const;
 const DARK_KEY = 'ours-dark-v3';
+const timelineTimeMs = timeMsJs as (date: string) => number;
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -26,7 +29,7 @@ interface InstallPromptEvent extends Event {
 
 const publicError = (error: unknown) => error instanceof Error && error.message ? error.message : 'The request could not be completed.';
 
-function timeline(page: ReturnType<typeof pageFor>, media: readonly MediaRecord[]): ChatMessage[] {
+export function timeline(page: ReturnType<typeof pageFor>, media: readonly MediaRecord[]): ChatMessage[] {
   const rows = new Map<string, ChatMessage>();
   const legacy: ChatMessage[] = [];
   for (const message of page?.messages ?? []) {
@@ -53,8 +56,8 @@ function timeline(page: ReturnType<typeof pageFor>, media: readonly MediaRecord[
     });
   }
   return [...legacy, ...rows.values()].sort((a, b) => {
-    const delta = new Date(a.date).getTime() - new Date(b.date).getTime();
-    return Number.isNaN(delta) || delta === 0 ? a.wireId.localeCompare(b.wireId) : delta;
+    const delta = timelineTimeMs(a.date) - timelineTimeMs(b.date);
+    return delta === 0 ? a.wireId.localeCompare(b.wireId) : delta;
   });
 }
 
