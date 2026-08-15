@@ -14,16 +14,19 @@
 // stays lazy so `--help` does not initialise native/runtime state.
 
 import { build } from 'esbuild';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, cp, mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, 'dist');
+const adaptMuflFiles = resolve(root, 'mufl_files');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const releaseBuild = process.env.OURS_MESSENGER_RELEASE_BUILD === '1';
+const resolveModule = createRequire(import.meta.url).resolve;
 
 function command(args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -50,7 +53,10 @@ if (releaseBuild && dirty) {
 }
 const buildInfo = Object.freeze({ name: pkg.name, version: pkg.version, sha, dirty });
 
-await rm(dist, { recursive: true, force: true });
+await Promise.all([
+  rm(dist, { recursive: true, force: true }),
+  rm(adaptMuflFiles, { recursive: true, force: true }),
+]);
 await mkdir(dist, { recursive: true });
 
 await build({
@@ -83,6 +89,22 @@ await build({
   chunkNames: 'chunks/[name]-[hash]',
   logLevel: 'info',
 });
+
+// The SDK locates its compiled MUFL packet beside its emitted module. Bundling
+// rewrites that module into dist/chunks, whose supported fallback is
+// dist/mufl_code. The ADAPT evaluator likewise resolves its WASM binary beside
+// the bundled wasm chunk and its protocol unit two levels above that chunk.
+// esbuild does not copy any of these non-JS runtime assets.
+const sdkDaemon = resolveModule('@ours.network/sdk/daemon');
+const sdkDist = dirname(sdkDaemon);
+const resolveSdkDependency = createRequire(sdkDaemon).resolve;
+const adaptWasm = resolveSdkDependency('@adapt-toolkit/sdk/mufl-bindings.wasm');
+const adaptDist = resolve(dirname(adaptWasm), '..');
+await Promise.all([
+  cp(resolve(sdkDist, 'mufl_code'), resolve(dist, 'mufl_code'), { recursive: true }),
+  copyFile(adaptWasm, resolve(dist, 'chunks', 'mufl-bindings.wasm')),
+  cp(resolve(adaptDist, 'mufl_files'), adaptMuflFiles, { recursive: true }),
+]);
 
 const webDist = resolve(dist, 'web');
 await mkdir(webDist, { recursive: true });

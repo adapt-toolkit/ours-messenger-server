@@ -20,6 +20,7 @@
   },
   "files": [
     "dist",
+    "mufl_files",
     "README.md"
   ],
   "engines": {
@@ -31,7 +32,7 @@
     "serve": "node dist/cli.js serve",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:offline": "for f in tests/owned-runtime.test.mjs tests/runtime-lock.test.mjs tests/lifecycle-gate.test.mjs tests/sdk-signal-ownership.blocker.test.mjs tests/bundle-smoke.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/events.test.mjs tests/sse-e2e.test.mjs tests/web-contract.test.mjs web/tests/read-gate.test.ts; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
-    "test:loopback": "for f in tests/receipts.test.mjs tests/state-dir-isolation.test.mjs tests/rest-e2e.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
+    "test:loopback": "for f in tests/receipts.test.mjs tests/state-dir-isolation.test.mjs tests/package-runtime-assets.test.mjs tests/rest-e2e.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
     "test": "npm run build && npm run test:offline && npm run test:loopback"
   },
   "dependencies": {
