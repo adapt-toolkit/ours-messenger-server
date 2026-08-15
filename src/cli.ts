@@ -133,7 +133,10 @@ async function main(): Promise<void> {
       `Set OURS_MESSENGER_IDENTITY=${receipt.identity.name} when serving; startup verifies this CID from ${receipt.stateDir}/initialization.json.\n`,
       () => resolveWrite(),
     ));
-    return;
+    // initializeMessengerState has already closed the owned runtime, and the
+    // awaited write above prevents truncation. Exit explicitly because native
+    // SDK handles can otherwise keep this one-shot command alive indefinitely.
+    process.exit(0);
   }
 
   if (cmd === 'migrate') {
