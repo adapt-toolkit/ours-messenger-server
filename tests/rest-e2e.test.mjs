@@ -76,14 +76,14 @@ const auth = randomBytes(16).toString('base64url');
 const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-state-'));
 const publicOrigin = 'http://messenger.test';
 execFileSync(process.execPath, [
-  '--import', 'tsx', fileURLToPath(new URL('../src/cli.ts', import.meta.url)),
-  'init', '--name', 'Me', '--bio', 'REST end-to-end fixture', '--yes',
+  '--import', 'tsx', fileURLToPath(new URL('./fixtures/owned-runtime-child.mjs', import.meta.url)),
 ], {
   env: {
     ...process.env,
+    TEST_MODE: 'init',
+    TEST_RESULT_PATH: join(certDir, 'init-result.json'),
+    TEST_INIT_NAME: 'Me',
     OURS_MESSENGER_STATE_DIR: ownStateDir,
-    OURS_MESSENGER_PUBLIC_ORIGIN: publicOrigin,
-    OURS_MESSENGER_BROKER_URL: 'wss://invalid.local/none',
   },
   stdio: 'ignore',
 });
