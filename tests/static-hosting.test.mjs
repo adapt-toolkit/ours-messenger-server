@@ -8,7 +8,10 @@ const root = mkdtempSync(join(tmpdir(), 'messenger-static-'));
 mkdirSync(join(root, 'assets'));
 mkdirSync(join(root, 'icons'));
 mkdirSync(join(root, 'outside-icons'));
-writeFileSync(join(root, 'index.html'), '<!doctype html><div id="app"></div>');
+writeFileSync(
+  join(root, 'index.html'),
+  '<!doctype html><link rel="stylesheet" href="/assets/index-A1b2C3.css"><div id="app"></div><script type="module" src="/assets/index-A1b2C3.js"></script>',
+);
 writeFileSync(join(root, 'assets', 'index-A1b2C3.js'), 'export const ready = true;');
 writeFileSync(join(root, 'assets', 'index-A1b2C3.css'), ':root{color-scheme:dark}');
 writeFileSync(join(root, 'version.json'), '{"sha":"abc"}\n');
@@ -63,6 +66,23 @@ const css = await request('/assets/index-A1b2C3.css');
 assert.equal(css.headers['content-type'], 'text/css; charset=utf-8');
 assert.equal(css.headers['cache-control'], 'public, max-age=31536000, immutable');
 
+for (const [stalePath, currentPath] of [
+  ['/assets/index-Previous1.js', '/assets/index-A1b2C3.js'],
+  ['/assets/index-Previous1.css', '/assets/index-A1b2C3.css'],
+]) {
+  const stale = await request(stalePath);
+  assert.equal(stale.status, 307, `${stalePath} follows the current SPA entry across a release`);
+  assert.equal(stale.headers.location, currentPath);
+  assert.equal(stale.headers['cache-control'], 'no-cache');
+  assert.equal(stale.headers['content-length'], '0');
+  assert.equal(stale.text, '');
+
+  const staleHead = await request(stalePath, 'HEAD');
+  assert.equal(staleHead.status, 307);
+  assert.equal(staleHead.headers.location, currentPath);
+  assert.equal(staleHead.text, '');
+}
+
 const version = await request('/version.json');
 assert.equal(version.headers['cache-control'], 'no-cache', 'mutable metadata is never cached');
 assert.equal(version.headers['content-type'], 'application/json; charset=utf-8');
@@ -93,7 +113,7 @@ assert.equal(worker.headers['cache-control'], 'no-cache', 'service worker lifecy
 assert.match(worker.headers['content-security-policy'], /object-src 'none'/);
 
 for (const path of [
-  '/assets/missing.js', '/api/not-a-route', '/api%2Fnot-a-route',
+  '/assets/missing.js', '/assets/chunk-Previous1.js', '/api/not-a-route', '/api%2Fnot-a-route',
   '/mcp', '/mcp/tools', '/mcp%2Ftools', '/robots.txt', '/icons/missing.png',
   '/icons/', '/icons/%2E%2E%2Foutside.png', '/icons/escape-dir/secret.png',
   '/assets/escape.js',
