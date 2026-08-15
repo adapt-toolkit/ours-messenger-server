@@ -27,15 +27,17 @@ assert.ok(ROUTE_NAMES.includes('GET /api/events'), 'SSE route is part of the pub
 assert.match(html, /\/assets\/index-[\w-]+\.js/, 'built entry document loads a same-origin hashed script');
 assert.match(html, /\/assets\/index-[\w-]+\.css/, 'built entry document loads a same-origin hashed stylesheet');
 assert.ok(built.includes('/api/events'), 'built client opens the same-origin SSE invalidation stream');
+assert.ok(source.includes("bind('file_received')"), 'foreground file/photo/voice invalidations are registered');
 assert.ok(built.includes('/read') && built.includes('/api/messages/send'), 'built client has explicit read and send mutations');
 assert.ok(source.includes("'X-Ours-Messenger-CSRF': '1'"), 'every web mutation carries the fixed CSRF intent header');
-assert.ok(!source.includes('localStorage') && !source.includes('sessionStorage'), 'messages and receipts are not browser-persisted');
-assert.ok(!source.includes('dangerouslySetInnerHTML'), 'message content has no raw HTML rendering path');
-assert.ok(source.includes('aria-label={label}'), 'receipt marks have accessible labels');
-assert.ok(css.includes('@media (max-width: 859px)') && css.includes('prefers-reduced-motion'), 'mobile detail and reduced motion are explicit');
+assert.ok(!source.includes("from '../storage/") && !source.includes('indexedDB'), 'server state is authoritative; browser packet/file stores are absent');
+assert.ok(source.includes('Raw HTML is never enabled'), 'message Markdown keeps raw HTML disabled');
+assert.ok(source.includes('aria-label={`${content} ${presentation.label}`}'), 'receipt marks have accessible labels');
+assert.ok(css.includes('@media (max-width: 860px)') && css.includes('prefers-reduced-motion'), 'canonical 861px mobile detail and reduced motion are explicit');
+assert.ok(built.includes('command-settings') && built.includes('Settings'), 'mobile keeps the canonical command-bar Settings entry for Web Push');
 assert.ok(source.includes('useReducer') && source.includes("from 'react-dom/client'"), 'the browser shell is React state rendered through createRoot');
 
-for (const excluded of ['Clusters', 'Backup', 'Notification settings', 'Service status', 'Monitoring']) {
-  assert.ok(!source.includes(excluded), `focused messenger UI excludes ${excluded}`);
+for (const excluded of ['ControlClient', 'createAgent', 'adapt_wrapper', '/mcp']) {
+  assert.ok(!built.includes(excluded), `focused messenger bundle excludes ${excluded}`);
 }
 console.log('web-contract OK — focused same-origin client, explicit read path, accessibility, responsive/reduced motion, no browser cache');

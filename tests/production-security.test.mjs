@@ -204,12 +204,16 @@ assert.deepEqual(unhealthyBodies[1], unhealthyBodies[2]);
 
 // State and error responses expose only explicit public projections.
 const leakyClient = {
-  currentIdentity: async () => ({ cid: 'BOUND-CID', name: 'Me', persona: HEALTH_SECRET, stateDir: '/private' }),
+  currentIdentity: async () => ({ cid: 'BOUND-CID', name: 'Me', bio: 'Public bio', persona: HEALTH_SECRET, stateDir: '/private' }),
   version: async () => ({ brokerUrl: HEALTH_SECRET, internalPort: 49152 }),
 };
+const profile = await call(makeDeps(leakyClient), { url: '/api/identity' });
+assert.equal(profile.status, 200);
+assert.deepEqual(profile.json, { cid: 'BOUND-CID', name: 'Me', bio: 'Public bio' });
+assert.ok(!profile.wire.includes(HEALTH_SECRET) && !profile.wire.includes('/private'), '/api/identity projects only public profile fields');
 const state = await call(makeDeps(leakyClient), { url: '/api/state' });
 assert.equal(state.status, 200);
-assert.deepEqual(state.json.identity, { cid: 'BOUND-CID', name: 'Me' });
+assert.deepEqual(state.json.identity, { cid: 'BOUND-CID', name: 'Me', bio: 'Public bio' });
 assert.equal(state.json.runtime.ownership, 'embedded-sdk');
 for (const forbidden of [HEALTH_SECRET, '/private', 'stateDir', 'brokerUrl', 'internalPort', 'selection', 'tokenSource']) {
   assert.ok(!state.wire.includes(forbidden), `/api/state redacts ${forbidden}`);

@@ -1,0 +1,72 @@
+/* ============================================================
+   ours — motion system
+   One easing family (--ease-soft), three speeds (--dur-1/2/3).
+   Everything here is decorative: it must all collapse cleanly
+   under prefers-reduced-motion.
+   ============================================================ */
+
+@media (prefers-reduced-motion: no-preference) {
+
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  @keyframes step-in-r {   /* advancing: content arrives from the right */
+    from { opacity: 0; transform: translateX(26px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  @keyframes step-in-l {   /* going back: content arrives from the left */
+    from { opacity: 0; transform: translateX(-26px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  @keyframes check-pop {
+    0%   { transform: scale(0.4); opacity: 0; }
+    60%  { transform: scale(1.15); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes pulse-soft {
+    0%, 100% { box-shadow: 0 0 0 3px var(--ok-soft); }
+    50%      { box-shadow: 0 0 0 5px color-mix(in oklab, var(--ok-soft) 55%, transparent); }
+  }
+
+  @keyframes float-slow {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-5px); }
+  }
+
+  @keyframes draw-line {
+    from { stroke-dashoffset: var(--draw-len, 120); }
+    to   { stroke-dashoffset: 0; }
+  }
+
+  /* shared utilities */
+  .anim-rise  { animation: rise-in var(--dur-2) var(--ease-soft) both; }
+  .anim-scale { animation: scale-in var(--dur-1) var(--ease-soft) both; }
+
+  /* list rows settle in with a light stagger on first paint */
+  .listcol-scroll > * { animation: rise-in var(--dur-2) var(--ease-soft) both; }
+  .listcol-scroll > *:nth-child(1)  { animation-delay: 0ms; }
+  .listcol-scroll > *:nth-child(2)  { animation-delay: 22ms; }
+  .listcol-scroll > *:nth-child(3)  { animation-delay: 44ms; }
+  .listcol-scroll > *:nth-child(4)  { animation-delay: 66ms; }
+  .listcol-scroll > *:nth-child(5)  { animation-delay: 88ms; }
+  .listcol-scroll > *:nth-child(6)  { animation-delay: 110ms; }
+  .listcol-scroll > *:nth-child(7)  { animation-delay: 132ms; }
+  .listcol-scroll > *:nth-child(8)  { animation-delay: 154ms; }
+  .listcol-scroll > *:nth-child(n+9) { animation-delay: 176ms; }
+
+  .modal { animation: scale-in var(--dur-1) var(--ease-soft) both; }
+  .modal-backdrop { animation: rise-in var(--dur-1) linear both; }
+  .menu  { animation: scale-in var(--dur-1) var(--ease-soft) both; transform-origin: bottom left; }
+
+  .dot.on { animation: pulse-soft 3.2s ease-in-out infinite; }
+}

@@ -152,11 +152,14 @@ The focused client does not persist messages, identities, receipts, or API
 responses in browser storage. Its service worker caches only the application
 shell and static assets for offline launch; all `/api/*` requests bypass it.
 
-The web UI includes identity hierarchy and active-binding status; contact add,
-approval, rename and removal; one-time/public invite creation and revocation;
-message replies; drag/drop/paste and picker uploads with bounded progress/error
-states; per-dialog file and version history; photo/audio/Markdown previews; and
-voice recording. Conversations open on the newest 50 messages and load older
+The web UI is the messenger-only port of the canonical ours-control-plane
+interface at commit `bc0183c80e9ee0ea2dd5adecb58460b0564e90d5`; its exact source inventory and
+transport exclusions are recorded in `web/src/CANONICAL_UI_PROVENANCE.md`. It
+includes grouped identity-root contacts; contact add, approval, rename and
+removal; one-time/public invite creation and revocation; public bio editing;
+message and attachment replies; drag/drop/paste and picker uploads with bounded
+progress/error states; per-dialog file and version history; photo/audio/Markdown
+previews; voice recording and transcript display. Conversations open on the newest 50 messages and load older
 history with an exclusive cursor while preserving the visible scroll position.
 Incoming files are fetched only after an explicit user action. HTML previews run
 in a sandboxed frame with a deny-by-default CSP, and Markdown is rendered to

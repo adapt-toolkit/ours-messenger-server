@@ -1,0 +1,276 @@
+/* ============================================================
+   ours — "warm control plane" design language (tokens v2)
+   Warm-tinted, soft, human. Teal = the network; apricot = you.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,400..800;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* surfaces — warm ivory neutrals, never stark white */
+  --bg:          oklch(0.972 0.008 90);
+  --bg-rail:     oklch(0.952 0.010 88);
+  --surface:     oklch(0.995 0.003 95);
+  --surface-2:   oklch(0.980 0.007 92);
+  --surface-3:   oklch(0.960 0.009 90);
+  --inset:       oklch(0.955 0.009 90);
+
+  /* borders / lines — warm to match */
+  --line:        oklch(0.915 0.010 88);
+  --line-soft:   oklch(0.942 0.008 90);
+  --line-strong: oklch(0.868 0.012 86);
+
+  /* text — warm charcoal, not blue-gray */
+  --text:        oklch(0.30 0.014 75);
+  --text-2:      oklch(0.51 0.014 78);
+  --text-3:      oklch(0.65 0.012 80);
+  --text-inv:    oklch(0.99 0.004 95);
+
+  /* accent — calm teal-green, the ours mark, used sparingly.
+     Override --accent alone and the rest follow. */
+  --accent:      #2c9c8d;
+  --accent-deep: color-mix(in oklab, var(--accent) 78%, #000);
+  --accent-soft: color-mix(in oklab, var(--accent) 13%, var(--surface));
+  --accent-line: color-mix(in oklab, var(--accent) 38%, var(--line));
+  --on-accent:   oklch(0.99 0.01 178);
+
+  /* accent-2 — warm apricot: the "you" color. Identity, keys, the
+     recovery phrase, everything that belongs to the person. */
+  --accent-2:      #e08a4e;
+  --accent-2-deep: color-mix(in oklab, var(--accent-2) 72%, #000);
+  --accent-2-soft: color-mix(in oklab, var(--accent-2) 14%, var(--surface));
+  --accent-2-line: color-mix(in oklab, var(--accent-2) 40%, var(--line));
+
+  /* motion — one easing family, three speeds */
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-1: 160ms;
+  --dur-2: 280ms;
+  --dur-3: 480ms;
+
+  /* the one primary action per screen gets a soft colored halo */
+  --glow-accent: 0 6px 22px color-mix(in oklab, var(--accent) 32%, transparent),
+                 0 1px 3px color-mix(in oklab, var(--accent) 22%, transparent);
+
+  /* quiet status hues — same chroma family */
+  --ok:          oklch(0.66 0.10 168);
+  --ok-soft:     oklch(0.955 0.03 168);
+  --warn:        oklch(0.72 0.10 75);
+  --warn-soft:   oklch(0.96 0.035 80);
+  --danger:      oklch(0.58 0.13 22);
+  --danger-soft: oklch(0.955 0.028 22);
+
+  /* shape & depth */
+  --r-xs: 6px;
+  --r-sm: 9px;
+  --r-md: 13px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --shadow-sm: 0 1px 2px oklch(0.5 0.02 260 / 0.06), 0 1px 1px oklch(0.5 0.02 260 / 0.04);
+  --shadow-md: 0 4px 16px oklch(0.45 0.03 260 / 0.08), 0 1px 3px oklch(0.45 0.03 260 / 0.06);
+  --shadow-lg: 0 18px 50px oklch(0.4 0.03 260 / 0.16), 0 4px 12px oklch(0.4 0.03 260 / 0.08);
+
+  --font: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* density (fixed for production) */
+  --pad: 1;
+}
+
+/* ---- dark variant — warm-black, ember accents ---- */
+.theme-dark {
+  --bg:          oklch(0.205 0.010 70);
+  --bg-rail:     oklch(0.182 0.010 70);
+  --surface:     oklch(0.245 0.011 72);
+  --surface-2:   oklch(0.226 0.010 72);
+  --surface-3:   oklch(0.276 0.012 74);
+  --inset:       oklch(0.20 0.010 70);
+
+  --line:        oklch(0.33 0.012 72);
+  --line-soft:   oklch(0.29 0.011 72);
+  --line-strong: oklch(0.40 0.013 74);
+
+  --text:        oklch(0.94 0.006 85);
+  --text-2:      oklch(0.74 0.011 82);
+  --text-3:      oklch(0.60 0.012 80);
+
+  --accent:      #45c9b8;
+  --accent-deep: color-mix(in oklab, var(--accent) 88%, #fff);
+  --accent-soft: color-mix(in oklab, var(--accent) 20%, var(--surface));
+  --accent-line: color-mix(in oklab, var(--accent) 42%, var(--line));
+  --on-accent:   oklch(0.18 0.02 200);
+
+  --accent-2:      #f0a468;
+  --accent-2-deep: color-mix(in oklab, var(--accent-2) 85%, #fff);
+  --accent-2-soft: color-mix(in oklab, var(--accent-2) 18%, var(--surface));
+  --accent-2-line: color-mix(in oklab, var(--accent-2) 42%, var(--line));
+
+  --glow-accent: 0 6px 26px color-mix(in oklab, var(--accent) 38%, transparent),
+                 0 1px 3px oklch(0 0 0 / 0.4);
+
+  --ok:          oklch(0.76 0.11 168);
+  --ok-soft:     oklch(0.32 0.05 168);
+  --warn:        oklch(0.80 0.10 78);
+  --warn-soft:   oklch(0.34 0.05 75);
+  --danger:      oklch(0.70 0.14 22);
+  --danger-soft: oklch(0.33 0.06 22);
+
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-md: 0 4px 16px oklch(0 0 0 / 0.4);
+  --shadow-lg: 0 18px 50px oklch(0 0 0 / 0.55), 0 4px 12px oklch(0 0 0 / 0.4);
+
+  /* body computes color/background at :root scope; re-anchor them here so
+     text that merely inherits (h1/h3, list titles) resolves the dark values.
+     Pre-existing bug: inherited text was charcoal-on-charcoal in dark mode. */
+  background: var(--bg);
+  color: var(--text);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button { font-family: inherit; }
+::selection { background: var(--accent-soft); }
+
+/* scrollbars — quiet */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-clip: content-box; background-color: var(--text-3); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================
+   Generic primitives
+   ============================================================ */
+
+.mono { font-family: var(--mono); }
+.muted { color: var(--text-2); }
+.faint { color: var(--text-3); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 0.5rem 0.85rem;
+  font-size: 0.9rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1),
+              box-shadow var(--dur-1), transform var(--dur-1) var(--ease-soft);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--line-strong); }
+.btn:active:not(:disabled) { transform: translateY(0.5px); }
+.btn.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  box-shadow: var(--glow-accent);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-deep); border-color: var(--accent-deep);
+  transform: translateY(-1px);
+}
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-3); }
+.btn.danger { color: var(--danger); border-color: color-mix(in oklab, var(--danger) 28%, var(--line)); }
+.btn.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+.btn.sm { padding: 0.32rem 0.62rem; font-size: 0.82rem; border-radius: var(--r-xs); }
+.btn:disabled { opacity: 0.45; cursor: default; pointer-events: none; }
+.btn .ic { width: 16px; height: 16px; }
+
+.icon-btn {
+  display: inline-grid; place-items: center;
+  width: 34px; height: 34px;
+  background: transparent; border: 1px solid transparent;
+  border-radius: var(--r-sm); color: var(--text-2); cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+.icon-btn:hover { background: var(--surface-3); color: var(--text); }
+.icon-btn .ic { width: 18px; height: 18px; }
+
+.linkbtn {
+  background: none; border: none; padding: 0; margin: 0;
+  color: var(--accent-deep); font-size: 0.85rem; font-family: inherit;
+  cursor: pointer; font-weight: 550;
+}
+.linkbtn:hover { text-decoration: underline; }
+.linkbtn.quiet { color: var(--text-2); font-weight: 500; }
+.linkbtn.quiet:hover { color: var(--text); }
+
+.field {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.92rem;
+  font-family: inherit;
+  transition: border-color 0.14s, box-shadow 0.14s;
+}
+.field::placeholder { color: var(--text-3); }
+.field:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+textarea.field { resize: vertical; }
+select.field { cursor: pointer; appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5L6 7.5L9 4.5' stroke='%23888' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 0.65rem center; padding-right: 2rem;
+}
+
+/* chips & dots */
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.72rem; font-weight: 600;
+  padding: 0.1rem 0.5rem; border-radius: 99px;
+  background: var(--surface-3); color: var(--text-2);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.chip.role { background: var(--inset); color: var(--text-2); border-color: var(--line-soft); }
+.chip.accent { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--accent-line); }
+.chip.monitored { background: var(--warn-soft); color: color-mix(in oklab, var(--warn) 65%, #000); border-color: color-mix(in oklab, var(--warn) 40%, var(--line)); }
+.theme-dark .chip.monitored { color: var(--warn); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.dot.off { background: var(--text-3); }
+.dot.idle { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+
+.avatar {
+  width: 32px; height: 32px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-size: 0.82rem; font-weight: 700;
+  background: var(--surface-3); color: var(--text-2);
+  border: 1px solid var(--line); flex-shrink: 0;
+  text-transform: uppercase;
+}
+.avatar.lg { width: 44px; height: 44px; border-radius: 12px; font-size: 1.05rem; }
+.avatar.sm { width: 26px; height: 26px; border-radius: 7px; font-size: 0.72rem; }
+.avatar.accent { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--accent-line); }
+
+.count {
+  min-width: 19px; height: 19px; padding: 0 5px;
+  display: inline-grid; place-items: center;
+  font-size: 0.72rem; font-weight: 700;
+  border-radius: 99px;
+  background: var(--accent); color: var(--on-accent);
+}
+
+.divider { height: 1px; background: var(--line); border: none; margin: 0; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
