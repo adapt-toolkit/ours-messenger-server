@@ -341,7 +341,11 @@ export function AppShell() {
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
           onLoadEarlier={selectedCid && historyBusy !== selectedCid ? () => void loadOlder(selectedCid) : undefined}
           onBack={() => go({ name: 'chats', contactCid: null }, chatPath(), false)}
-          onSend={async (text, reply) => { if (!selectedCid) return; await api.send(selectedCid, text, reply); await refreshPage(selectedCid); }}
+          onSend={async (text, reply, signal) => {
+            if (!selectedCid) return;
+            try { await api.send(selectedCid, text, reply, signal); }
+            finally { void refreshPage(selectedCid); }
+          }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
           onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}
           onRename={(name) => { if (selectedCid) void api.renameContact(selectedCid, name).then(refreshSnapshot).catch(showError); }}

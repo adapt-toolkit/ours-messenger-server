@@ -15,9 +15,11 @@ assert.equal(calls[0].input, '/api/contacts');
 assert.equal(calls[0].init?.cache, 'no-store', 'REST snapshots opt out of browser HTTP caching');
 assert.equal(calls[0].init?.credentials, 'same-origin', 'REST stays same-origin');
 
-await client.send('CONTACT/A', 'hello', 'WIRE-1');
+const sendController = new AbortController();
+await client.send('CONTACT/A', 'hello', 'WIRE-1', sendController.signal);
 const mutation = calls[1].init!;
 assert.equal(mutation.method, 'POST');
+assert.equal(mutation.signal, sendController.signal, 'text sends accept a bounded UI abort signal');
 assert.deepEqual(mutation.headers, {
   'content-type': 'application/json',
   'X-Ours-Messenger-CSRF': '1',
