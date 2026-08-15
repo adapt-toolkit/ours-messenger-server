@@ -78,6 +78,31 @@ try {
     rmSync(foregroundDir, { recursive: true, force: true });
   }
 
+  const multiDeviceDir = mkdtempSync(join(tmpdir(), 'messenger-push-multi-device-'));
+  try {
+    const deliveredEndpoints = [];
+    const multiDeviceStore = PushStore.open(multiDeviceDir, 'CID-ME', env, {
+      sendNotification: async (target) => { deliveredEndpoints.push(target.endpoint); },
+    });
+    const pc = multiDeviceStore.ensure({ ...subscription, endpoint: 'https://push.example/pc' });
+    multiDeviceStore.ensure({ ...subscription, endpoint: 'https://push.example/phone' });
+    const multiDeviceQueue = new PushDeliveryQueue({
+      store: multiDeviceStore, client: {}, identityCid: 'CID-ME', log: { info() {}, warn() {} },
+      foregroundBindingIds: () => new Set([pc.bindingId]), autoStart: false,
+      project: async (job) => ({
+        v: 1, kind: job.kind, title: 'Alice', body: 'device-scoped', contact_id: job.contactId,
+        wire_id: job.wireId, url: `/chats/${job.contactId}`,
+      }),
+    });
+    assert.equal(multiDeviceQueue.enqueue({ event: 'message_received', sender_id: 'CID-A', wire_id: 'MULTI-1' }), true);
+    assert.equal(multiDeviceQueue.stats.suppressed, 1, 'only the foreground browser binding is suppressed');
+    await multiDeviceQueue.drainDue();
+    assert.deepEqual(deliveredEndpoints, ['https://push.example/phone'], 'background phone still receives push while PC is open');
+    assert.equal(multiDeviceStore.queueStats().sent, 1);
+  } finally {
+    rmSync(multiDeviceDir, { recursive: true, force: true });
+  }
+
   const reopened = PushStore.open(stateDir, 'CID-ME', env, { sendNotification: async () => {} });
   const resumed = new PushDeliveryQueue({
     store: reopened, client: {}, identityCid: 'CID-ME', log: { info() {}, warn() {} },

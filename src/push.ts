@@ -365,15 +365,20 @@ export class PushStore {
   hasBindings(): boolean { return this.bindingCount > 0; }
 
   matchesCredential(endpoint: unknown, auth: unknown): boolean {
-    if (!nonEmpty(endpoint, MAX_ENDPOINT_LENGTH) || !nonEmpty(auth, 256)) return false;
+    return this.bindingForCredential(endpoint, auth) !== null;
+  }
+
+  bindingForCredential(endpoint: unknown, auth: unknown): string | null {
+    if (!nonEmpty(endpoint, MAX_ENDPOINT_LENGTH) || !nonEmpty(auth, 256)) return null;
     let candidate: Buffer;
-    try { candidate = Buffer.from(auth, 'base64url'); } catch { return false; }
-    if (candidate.length !== 16 || candidate.toString('base64url') !== auth) return false;
-    return this.list().some((binding) => {
-      if (binding.endpoint !== endpoint) return false;
-      const expected = Buffer.from(binding.keys.auth, 'base64url');
+    try { candidate = Buffer.from(auth, 'base64url'); } catch { return null; }
+    if (candidate.length !== 16 || candidate.toString('base64url') !== auth) return null;
+    const binding = this.list().find((row) => {
+      if (row.endpoint !== endpoint) return false;
+      const expected = Buffer.from(row.keys.auth, 'base64url');
       return expected.length === candidate.length && timingSafeEqual(expected, candidate);
     });
+    return binding?.bindingId ?? null;
   }
 
   ensure(input: {
@@ -485,6 +490,27 @@ export class PushStore {
     });
     this.persist();
     return true;
+  }
+
+  suppressBindings(jobId: string, bindingIds: ReadonlySet<string>, now = Date.now()): number {
+    const owner = identityState(this.state, this.identityCid);
+    const job = owner.jobs.find((row) => row.id === jobId);
+    if (!job || job.status !== 'pending' || bindingIds.size === 0) return 0;
+    const completed = new Set(job.deliveredBindingIds);
+    let suppressed = 0;
+    for (const bindingId of job.targetBindingIds) {
+      if (bindingIds.has(bindingId) && !completed.has(bindingId)) {
+        completed.add(bindingId);
+        suppressed++;
+      }
+    }
+    if (suppressed === 0) return 0;
+    Object.assign(job, { deliveredBindingIds: [...completed] });
+    const outstanding = job.targetBindingIds.some((id) => !completed.has(id)
+      && owner.bindings.some((binding) => binding.bindingId === id));
+    if (!outstanding) Object.assign(job, { status: 'sent', completedAt: now });
+    this.persist();
+    return suppressed;
   }
 
   async dispatchJob(jobId: string, event: PushEvent, now = Date.now(), random: () => number = Math.random): Promise<{

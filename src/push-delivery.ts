@@ -16,6 +16,7 @@ export interface PushDeliveryOptions {
   readonly random?: () => number;
   readonly project?: (job: PushJob) => Promise<PushEvent>;
   readonly isForeground?: () => boolean;
+  readonly foregroundBindingIds?: () => ReadonlySet<string>;
   readonly autoStart?: boolean;
 }
 
@@ -83,6 +84,7 @@ export class PushDeliveryQueue {
   private readonly project: (job: PushJob) => Promise<PushEvent>;
   private readonly automatic: boolean;
   private readonly isForeground: () => boolean;
+  private readonly foregroundBindingIds: () => ReadonlySet<string>;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private draining: Promise<void> | undefined;
   private stopped = false;
@@ -96,6 +98,7 @@ export class PushDeliveryQueue {
     this.random = options.random ?? Math.random;
     this.project = options.project ?? ((job) => projectFromSdk(this.client, job));
     this.isForeground = options.isForeground ?? (() => false);
+    this.foregroundBindingIds = options.foregroundBindingIds ?? (() => new Set());
     this.automatic = options.autoStart !== false;
     if (this.automatic) this.schedule(0);
   }
@@ -113,7 +116,12 @@ export class PushDeliveryQueue {
     if (queued) {
       this.stats.queued++;
       const jobId = `${this.identityCid}:${record.wire_id}:${kind}`;
-      if (this.isForeground() && this.store.suppressJob(jobId, this.now())) {
+      const suppressedBindings = this.store.suppressBindings(jobId, this.foregroundBindingIds(), this.now());
+      if (suppressedBindings > 0) {
+        this.stats.suppressed += suppressedBindings;
+        this.log.info(`push queue: suppressed ${suppressedBindings} foreground binding(s) kind=${kind} wire=${record.wire_id}`);
+        if (this.store.queueStats().pending === 0) return true;
+      } else if (this.isForeground() && this.store.suppressJob(jobId, this.now())) {
         this.stats.suppressed++;
         this.log.info(`push queue: suppressed foreground kind=${kind} wire=${record.wire_id}`);
         return true;

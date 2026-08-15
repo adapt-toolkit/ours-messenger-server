@@ -45,6 +45,27 @@ assert.deepEqual(pageFor(state, 'A')?.messages.map((message) => message.wire_id)
 state = appReducer(state, { type: 'older_page', contactCid: 'A', page: older, newer: newest.messages });
 assert.equal(pageFor(state, 'A')?.messages.length, 100, 'replayed cursor responses de-duplicate stable wire ids');
 
+const sentMessage = {
+  dir: 'out' as const, text: 'optimistic canonical send', date: 'DATE-101', read: true,
+  wire_id: 'SENT-101', receipt: null,
+};
+state = appReducer(state, { type: 'sent_message', contactCid: 'A', message: sentMessage });
+assert.equal(pageFor(state, 'A')?.messages.at(-1)?.wire_id, 'SENT-101',
+  'the settled send response becomes visible without waiting for conversation polling');
+assert.equal(pageFor(state, 'A')?.total, 101);
+state = appReducer(state, { type: 'page', contactCid: 'A', page: { ...older, total: 100 } });
+assert.equal(pageFor(state, 'A')?.messages.at(-1)?.wire_id, 'SENT-101',
+  'a lagging conversation refresh cannot erase a locally settled send');
+state = appReducer(state, { type: 'sent_message', contactCid: 'A', message: sentMessage });
+assert.equal(pageFor(state, 'A')?.messages.filter((message) => message.wire_id === 'SENT-101').length, 1,
+  'replayed send responses de-duplicate by canonical wire id');
+state = appReducer(state, {
+  type: 'page', contactCid: 'A',
+  page: { ...older, messages: [...older.messages, sentMessage], total: 101 },
+});
+assert.equal(state.pendingSends[dialogKey('IDENTITY-1', 'A')], undefined,
+  'the canonical page retires the local send overlay by wire id');
+
 let raceState = initialState({ name: 'chats', contactCid: 'A' });
 raceState = appReducer(raceState, { type: 'snapshot', identity: { name: 'Me', cid: 'IDENTITY-1' }, contacts });
 raceState = appReducer(raceState, { type: 'page', contactCid: 'A', page: newest });

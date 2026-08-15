@@ -409,7 +409,7 @@ export async function start(
     const presence = new PresenceRegistry();
     delivery = new PushDeliveryQueue({
       store: push, client: runtime.client, identityCid: bound.cid, log,
-      isForeground: () => presence.isOnline(bound.cid),
+      foregroundBindingIds: () => presence.onlineBindings(bound.cid),
     });
     watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media, delivery });
 
@@ -463,8 +463,11 @@ export async function start(
     });
     presenceServer = attachPresenceServer(http, presence, {
       allowedOrigin: cfg.publicOrigin,
-      verify: (frame) => frame.identity === bound.cid && push.matchesCredential(frame.endpoint, frame.auth)
-        ? bound.cid : null,
+      verify: (frame) => {
+        if (frame.identity !== bound.cid) return null;
+        const bindingId = push.bindingForCredential(frame.endpoint, frame.auth);
+        return bindingId ? { cid: bound.cid, bindingId } : null;
+      },
       subscribe: () => events!.subscribe(),
       onChange: (cid, online) => log.info(`presence: cid=${cid} online=${online}`),
     });

@@ -37,6 +37,7 @@ try {
   const sends = [];
   let stallConversationRefresh = false;
   let sendBehavior = 'resolved';
+  let releaseManualSend = null;
   const conversationMessages = [
     { dir: 'in', text: 'reply target', date: '2026-08-15T00:00:00.000Z', read: true, wire_id: 'WIRE-1', receipt: null },
   ];
@@ -89,6 +90,9 @@ try {
         await new Promise((resolveWait) => setTimeout(resolveWait, 200));
         return route.abort('connectionreset');
       }
+      if (sendBehavior === 'manual') {
+        await new Promise((resolveWait) => { releaseManualSend = resolveWait; });
+      }
       await new Promise((resolveWait) => setTimeout(resolveWait, 80));
       if (body.text === 'fixture failure') return json({ error: { message: 'fixture rejected' } }, 500);
       const wireId = `SENT-${sends.length}`;
@@ -118,6 +122,18 @@ try {
   assert.equal(await composer.getAttribute('aria-busy'), 'false',
     'a resolved send transaction settles the composer without waiting for a later REST/SSE reconciliation');
   stallConversationRefresh = false;
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
+
+  sendBehavior = 'manual';
+  await composer.fill('optimistic message stays visible');
+  const optimisticResponse = page.waitForResponse((response) => response.url().endsWith('/api/messages/send'));
+  await sendButton.tap();
+  await page.getByText('optimistic message stays visible', { exact: true }).waitFor();
+  assert.equal(await composer.getAttribute('aria-busy'), 'true',
+    'the visible optimistic bubble does not pretend the network transaction has settled');
+  releaseManualSend?.();
+  await optimisticResponse;
+  sendBehavior = 'resolved';
   await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
 
   await composer.fill('successful async send');

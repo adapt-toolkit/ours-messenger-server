@@ -398,6 +398,7 @@ export function Conversation(props: {
   const { contact, messages } = props;
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [optimisticSend, setOptimisticSend] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unknownSend, setUnknownSend] = useState<{
     draft: string;
@@ -429,6 +430,7 @@ export function Conversation(props: {
     setDraft('');
     setError(null);
     setUnknownSend(null);
+    setOptimisticSend(null);
     setReplyTo(null);
     setEditingName(null);
     setShowIdCard(false);
@@ -458,6 +460,11 @@ export function Conversation(props: {
     setReplyTo((current) => current === unknownSend.reply ? null : current);
   }, [messages, unknownSend]);
 
+  const displayMessages = useMemo(
+    () => optimisticSend ? [...messages, optimisticSend] : messages,
+    [messages, optimisticSend],
+  );
+
   useLayoutEffect(() => {
     const input = composerInputRef.current;
     if (!input) return;
@@ -484,7 +491,7 @@ export function Conversation(props: {
       pinnedToBottomRef.current = true;
     }
     previousContactRef.current = contact.id;
-  }, [contact, messages.length]);
+  }, [contact, displayMessages.length]);
 
   useLayoutEffect(() => {
     const hash = window.location.hash;
@@ -493,7 +500,7 @@ export function Conversation(props: {
     if (!target) return;
     target.scrollIntoView({ block: 'center' });
     pinnedToBottomRef.current = false;
-  }, [contact?.id, messages.length]);
+  }, [contact?.id, displayMessages.length]);
 
   // Loading older entries prepends DOM above the current viewport. Compensate
   // by the exact height delta so the message the reader was looking at does
@@ -511,7 +518,7 @@ export function Conversation(props: {
       prependScrollRef.current = null;
     });
     return () => cancelAnimationFrame(frame);
-  }, [messages.length]);
+  }, [displayMessages.length]);
 
   useEffect(() => {
     const scroller = messageScrollRef.current;
@@ -581,7 +588,7 @@ export function Conversation(props: {
   // Resolve a message's reply pointer (wire id) back to the quoted message we
   // still hold, so the bubble can render the author + snippet.
   const byWireId = new Map<string, ChatMessage>();
-  for (const m of messages) if (m.wireId) byWireId.set(m.wireId, m);
+  for (const m of displayMessages) if (m.wireId) byWireId.set(m.wireId, m);
   // A cowork room relays every message as a signed JSON body, so this is where a
   // room conversation stops being a wall of JSON: the body becomes an author +
   // role + what they said, and the room's own notices become system lines. Any
@@ -590,7 +597,7 @@ export function Conversation(props: {
   // each visible message once per page refresh, not once at every call site.
   const roomLines = useMemo(() => {
     const lines = new Map<ChatMessage, RoomLine | null>();
-    for (const message of messages) {
+    for (const message of displayMessages) {
       lines.set(
         message,
         message.kind === 'file'
@@ -599,7 +606,7 @@ export function Conversation(props: {
       );
     }
     return lines;
-  }, [messages, contact?.announcedName]);
+  }, [displayMessages, contact?.announcedName]);
   const roomLineOf = (m: ChatMessage): RoomLine | null => roomLines.get(m) ?? null;
   const authorOf = (m: ChatMessage) => {
     if (m.dir === 'out') return 'You';
@@ -662,6 +669,10 @@ export function Conversation(props: {
     // for a deterministic restore if the transaction fails or becomes unknown.
     setDraft('');
     setReplyTo(null);
+    setOptimisticSend({
+      dir: 'out', text, date: new Date().toISOString(), read: true, wireId: '',
+      replyTo: replyWireId ? { wireId: replyWireId } : null,
+    });
     try {
       await Promise.race([
         props.onSend(text, replyWireId, controller.signal),
@@ -673,8 +684,10 @@ export function Conversation(props: {
           }, TEXT_SEND_TIMEOUT_MS);
         }),
       ]);
+      setOptimisticSend(null);
       setUnknownSend(null);
     } catch (err) {
+      setOptimisticSend(null);
       setDraft((current) => current === '' ? submittedDraft : current);
       setReplyTo((current) => current === null ? submittedReply : current);
       if (timedOut || !(err instanceof ApiError)) {
@@ -836,10 +849,10 @@ export function Conversation(props: {
               use the ABSOLUTE history index so loading earlier entries never
               re-keys (and never re-animates) the ones already on screen. */}
           <AnimatePresence initial={false}>
-            {messages.map((m, i) => {
+            {displayMessages.map((m, i) => {
               const key = m.wireId || `${m.date}-${(props.hiddenEarlier ?? 0) + i}`;
-              const prev = messages[i - 1];
-              const next = messages[i + 1];
+              const prev = displayMessages[i - 1];
+              const next = displayMessages[i + 1];
               const room = roomLineOf(m);
               // A system line breaks the bubble run on either side of it, and a
               // room chat line groups by SPEAKER — consecutive members are

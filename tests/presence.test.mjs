@@ -15,7 +15,7 @@ const events = new MessengerEventBus();
 const presence = attachPresenceServer(http, registry, {
   allowedOrigin: 'https://messenger.example',
   verify: (frame) => frame.identity === 'CID-ME' && frame.endpoint === 'ENDPOINT' && frame.auth === 'AUTH'
-    ? 'CID-ME' : null,
+    ? { cid: 'CID-ME', bindingId: 'BINDING-PC' } : null,
   subscribe: () => events.subscribe(),
   pingIntervalMs: 50,
   authTimeoutMs: 200,
@@ -36,6 +36,7 @@ try {
   const [ack] = await once(socket, 'message');
   assert.deepEqual(JSON.parse(String(ack)), { ok: true });
   assert.equal(registry.isOnline('CID-ME'), true, 'authenticated live socket marks the identity online');
+  assert.deepEqual([...registry.onlineBindings('CID-ME')], ['BINDING-PC'], 'presence is scoped to the authenticated device binding');
 
   events.publish({ type: 'message_received', contact_id: 'PEER', wire_id: 'WIRE-1', date: 'DATE' });
   const [raw] = await once(socket, 'message');
@@ -48,6 +49,7 @@ try {
   await once(socket, 'close');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(registry.isOnline('CID-ME'), false, 'socket loss immediately resumes background push eligibility');
+  assert.deepEqual([...registry.onlineBindings('CID-ME')], []);
 } finally {
   events.close();
   await presence.close();

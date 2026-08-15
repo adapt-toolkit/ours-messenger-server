@@ -8,7 +8,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { EventSubscription, MessengerEvent } from './events.js';
 
 export interface PresenceOptions {
-  readonly verify: (frame: Record<string, unknown>) => string | null | Promise<string | null>;
+  readonly verify: (frame: Record<string, unknown>) => PresencePrincipal | null | Promise<PresencePrincipal | null>;
   readonly subscribe: () => EventSubscription;
   readonly allowedOrigin?: string;
   readonly path?: string;
@@ -17,28 +17,42 @@ export interface PresenceOptions {
   readonly onChange?: (cid: string, online: boolean) => void;
 }
 
+export interface PresencePrincipal {
+  readonly cid: string;
+  readonly bindingId: string;
+}
+
 export class PresenceRegistry {
-  readonly #online = new Map<string, Set<WebSocket>>();
+  readonly #online = new Map<string, Map<string, Set<WebSocket>>>();
 
   isOnline(cid: string): boolean { return (this.#online.get(cid)?.size ?? 0) > 0; }
+  onlineBindings(cid: string): ReadonlySet<string> {
+    return new Set(this.#online.get(cid)?.keys() ?? []);
+  }
   get onlineCount(): number { return this.#online.size; }
   get socketCount(): number {
     let count = 0;
-    for (const sockets of this.#online.values()) count += sockets.size;
+    for (const bindings of this.#online.values()) {
+      for (const sockets of bindings.values()) count += sockets.size;
+    }
     return count;
   }
 
-  add(cid: string, socket: WebSocket): void {
-    const sockets = this.#online.get(cid) ?? new Set<WebSocket>();
+  add(cid: string, bindingId: string, socket: WebSocket): void {
+    const bindings = this.#online.get(cid) ?? new Map<string, Set<WebSocket>>();
+    const sockets = bindings.get(bindingId) ?? new Set<WebSocket>();
     sockets.add(socket);
-    this.#online.set(cid, sockets);
+    bindings.set(bindingId, sockets);
+    this.#online.set(cid, bindings);
   }
 
-  remove(cid: string, socket: WebSocket): boolean {
-    const sockets = this.#online.get(cid);
-    if (!sockets) return false;
+  remove(cid: string, bindingId: string, socket: WebSocket): boolean {
+    const bindings = this.#online.get(cid);
+    const sockets = bindings?.get(bindingId);
+    if (!bindings || !sockets) return false;
     const removed = sockets.delete(socket);
-    if (sockets.size === 0) this.#online.delete(cid);
+    if (sockets.size === 0) bindings.delete(bindingId);
+    if (bindings.size === 0) this.#online.delete(cid);
     return removed && !this.isOnline(cid);
   }
 }
@@ -71,14 +85,14 @@ export function attachPresenceServer(
   server.on('upgrade', upgrade);
 
   wss.on('connection', (socket: LiveSocket) => {
-    let boundCid: string | null = null;
+    let bound: PresencePrincipal | null = null;
     let authStarted = false;
     let subscription: EventSubscription | null = null;
     socket.isAlive = true;
     socket.on('pong', () => { socket.isAlive = true; });
 
     const authTimer = setTimeout(() => {
-      if (!boundCid) socket.close(4001, 'auth timeout');
+      if (!bound) socket.close(4001, 'auth timeout');
     }, authTimeoutMs);
     authTimer.unref?.();
 
@@ -94,17 +108,17 @@ export function attachPresenceServer(
         socket.close(4002, 'bad auth frame');
         return;
       }
-      let cid: string | null = null;
-      try { cid = await options.verify(frame); } catch { cid = null; }
-      if (!cid) {
+      let principal: PresencePrincipal | null = null;
+      try { principal = await options.verify(frame); } catch { principal = null; }
+      if (!principal) {
         try { socket.send(JSON.stringify({ ok: false, error: 'auth rejected' })); } catch { /* closing */ }
         socket.close(4004, 'auth rejected');
         return;
       }
       clearTimeout(authTimer);
-      boundCid = cid;
-      registry.add(cid, socket);
-      options.onChange?.(cid, true);
+      bound = principal;
+      registry.add(principal.cid, principal.bindingId, socket);
+      options.onChange?.(principal.cid, true);
       subscription = options.subscribe();
       socket.send(JSON.stringify({ ok: true }));
       void (async () => {
@@ -120,10 +134,10 @@ export function attachPresenceServer(
       clearTimeout(authTimer);
       subscription?.close();
       subscription = null;
-      if (boundCid) {
-        const offline = registry.remove(boundCid, socket);
-        if (offline) options.onChange?.(boundCid, false);
-        boundCid = null;
+      if (bound) {
+        const offline = registry.remove(bound.cid, bound.bindingId, socket);
+        if (offline) options.onChange?.(bound.cid, false);
+        bound = null;
       }
     };
     socket.on('close', drop);
