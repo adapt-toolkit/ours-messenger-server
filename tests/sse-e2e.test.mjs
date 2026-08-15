@@ -26,8 +26,8 @@ const events = new MessengerEventBus();
 const deps = {
   runtime: { client: {}, described: {} },
   push: {},
-  config: {},
-  buildInfo: { name: 'test', version: 'test' },
+  config: { publicOrigin: 'http://messenger.test' },
+  buildInfo: { name: 'test', version: 'test', sha: '0000000000000000000000000000000000000001', dirty: true },
   watcherStats: () => ({}),
   events,
   identityCid: 'BOUND-CID',

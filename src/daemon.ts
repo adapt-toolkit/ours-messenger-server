@@ -5,6 +5,8 @@ import { readFile } from 'node:fs/promises';
 import type { OursClient } from '@ours.network/sdk';
 import { configureOwnedRuntime, releaseOwnedRuntimeLock } from './boot-env.js';
 import type { MessengerConfig } from './config.js';
+import type { BuildInfo } from './build-info.js';
+import { InitializationRequiredError, readInitializationReceipt } from './lifecycle.js';
 
 interface SdkDaemonHandle {
   readonly port: number;
@@ -27,18 +29,18 @@ function hasCode(error: unknown, code: string): boolean {
 
 export async function startRuntime(
   cfg: MessengerConfig,
-  buildInfo: { readonly name: string; readonly version: string },
+  buildInfo: BuildInfo,
 ): Promise<Runtime> {
   const env = configureOwnedRuntime(cfg);
-
-  // Dynamic imports are load-bearing: SDK module evaluation reads the env above.
-  const [{ OursClient }, { startDaemon }] = await Promise.all([
-    import('@ours.network/sdk'),
-    import('@ours.network/sdk/daemon'),
-  ]);
-
   let daemon: SdkDaemonHandle | undefined;
   try {
+    // Dynamic imports are load-bearing: SDK module evaluation reads the env
+    // above. They remain inside rollback ownership so a missing/broken SDK
+    // cannot strand the advisory lock until process exit.
+    const [{ OursClient }, { startDaemon }] = await Promise.all([
+      import('@ours.network/sdk'),
+      import('@ours.network/sdk/daemon'),
+    ]);
     daemon = await startDaemon({
       version: `${buildInfo.name}@${buildInfo.version}`,
       handleSignals: false,
@@ -88,7 +90,7 @@ export async function startRuntime(
   }
 }
 
-/** Bind the configured identity, creating it only for a genuinely empty store. */
+/** Bind an explicitly initialized identity. Serve never provisions identities. */
 export async function bindIdentity(
   runtime: Runtime,
   cfg: MessengerConfig,
@@ -100,13 +102,15 @@ export async function bindIdentity(
     if (!hasCode(error, 'NO_SUCH_IDENTITY')) throw error;
     const identities = await runtime.client.listIdentities();
     if (identities.length !== 0) throw error;
-    const created = await runtime.client.createIdentity({
-      name: cfg.identity,
-      bio: '',
-      exposeLocal: true,
-      localAutoAccept: true,
-    });
-    binding = { cid: created.info.cid };
+    throw new InitializationRequiredError(cfg.stateDir);
+  }
+
+  const provenance = readInitializationReceipt(cfg.stateDir);
+  if (provenance && (provenance.identity.name !== cfg.identity || provenance.identity.cid !== binding.cid)) {
+    throw new Error(
+      `initialized identity provenance mismatch: expected ${provenance.identity.name} (${provenance.identity.cid}), ` +
+      `bound ${cfg.identity} (${binding.cid})`,
+    );
   }
 
   const policy = await runtime.client.setConversationPolicy({ keep_history: cfg.keepHistory });

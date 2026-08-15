@@ -59,7 +59,7 @@ const handle = startWatcher(
       attempts++;
       if (attempts === 1) return (async function* () {
         yield { event: 'message_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'WIRE-2', date: 'D' };
-        throw new Error('forced disconnect');
+        throw new Error('forced disconnect SECRET-WATCH-PATH-/private/token');
       })();
       return (async function* () {
         yield { event: 'receipt_received', sender_id: 'CID-A', kind: 'delivered', wire_ids: ['WIRE-2'], date: 'D2' };
@@ -73,7 +73,9 @@ assert.deepEqual(await watched.next(), { type: 'sync_required', reason: 'daemon_
 assert.deepEqual(await watched.next(), { type: 'sync_required', reason: 'daemon_reconnected' });
 assert.equal((await watched.next()).type, 'receipt_received');
 assert.equal(pushes.length, 1, 'message event remains a push subscriber input');
-assert.ok(warnings.some((line) => line.includes('forced disconnect')), 'disconnect is observable without event content');
+assert.ok(warnings.some((line) => line.includes('watch stream') && line.includes('correlation')),
+  'disconnect is observable through a correlation id');
+assert.ok(!warnings.join('\n').includes('SECRET-WATCH-PATH'), 'watch errors never expose exception content');
 await handle.stop();
 watched.close();
 assert.equal(handle.stats.reconnects, 1);

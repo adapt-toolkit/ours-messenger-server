@@ -15,11 +15,40 @@
 
 import { build } from 'esbuild';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, 'dist');
+const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+const releaseBuild = process.env.OURS_MESSENGER_RELEASE_BUILD === '1';
+
+function command(args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+}
+
+let sha = process.env.OURS_MESSENGER_BUILD_SHA ?? '';
+let dirty = true;
+let gitSha = '';
+try {
+  gitSha = command(['rev-parse', 'HEAD']);
+  if (sha && sha !== gitSha) throw new Error('provided build SHA does not match git HEAD');
+  sha ||= gitSha;
+  dirty = command(['status', '--porcelain']) !== '';
+} catch (error) {
+  if (gitSha) throw error;
+  // A source-less package build may supply the immutable release SHA explicitly.
+  dirty = process.env.OURS_MESSENGER_BUILD_CLEAN !== '1';
+}
+if (!/^[0-9a-f]{40}$/.test(sha)) {
+  throw new Error('build requires a full 40-hex OURS_MESSENGER_BUILD_SHA or git commit');
+}
+if (releaseBuild && dirty) {
+  throw new Error('release build refused: source tree is dirty');
+}
+const buildInfo = Object.freeze({ name: pkg.name, version: pkg.version, sha, dirty });
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
@@ -45,6 +74,9 @@ await build({
     // isolation itself lives in configureOwnedRuntime and happens before the
     // dynamic SDK chunk is imported.
     js: "import { createRequire as __messengerCreateRequire } from 'node:module'; const require = __messengerCreateRequire(import.meta.url);",
+  },
+  define: {
+    __MESSENGER_BUILD_INFO__: JSON.stringify(buildInfo),
   },
   entryPoints: { cli: resolve(root, 'src/cli.ts') },
   outdir: dist,

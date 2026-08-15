@@ -26,21 +26,26 @@ import { ConversationPageError, DEFAULT_PAGE_LIMIT, projectPage } from './conver
 import type { PushStore } from './push.js';
 import type { Runtime } from './daemon.js';
 import type { MessengerConfig } from './config.js';
+import type { BuildInfo } from './build-info.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
+import { publicEngineError, publicInternalError } from './security.js';
 
 export const API_PREFIX = '/api/';
+export const MAX_HTTP_BODY_BYTES = 32 * 1024 * 1024;
+export const MAX_INLINE_FILE_BYTES = 20 * 1024 * 1024;
 
 export interface ApiDeps {
   readonly runtime: Runtime;
   readonly push: PushStore;
   readonly config: MessengerConfig;
-  readonly buildInfo: { readonly name: string; readonly version: string };
+  readonly buildInfo: BuildInfo;
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
   readonly sseQueueLimit?: number;
+  readonly healthTimeoutMs?: number;
 }
 
 class HttpError extends Error {
@@ -80,7 +85,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
     // A cap, because this process has no auth in front of it and an unbounded
     // body is the cheapest way to take a self-hosted box down. sendFile's
     // base64 path is the largest legitimate body, hence 32 MiB rather than 1.
-    if (bytes > 32 * 1024 * 1024) throw new HttpError(413, 'request body too large (32 MiB cap)');
+    if (bytes > MAX_HTTP_BODY_BYTES) throw new HttpError(413, 'request body too large (32 MiB cap)');
     chunks.push(c as Buffer);
   }
   if (bytes === 0) return {};
@@ -100,6 +105,100 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   const body = Buffer.from(JSON.stringify(value));
   res.writeHead(status, { 'content-type': 'application/json', 'content-length': String(body.length) });
   res.end(body);
+}
+
+function rawHeaderValues(req: IncomingMessage, name: string): string[] {
+  const values: string[] = [];
+  const raw = req.rawHeaders ?? [];
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    if (raw[i].toLowerCase() === name) values.push(raw[i + 1]);
+  }
+  if (values.length !== 0 || raw.length !== 0) return values;
+  const fallback = req.headers[name];
+  return Array.isArray(fallback) ? fallback : typeof fallback === 'string' ? [fallback] : [];
+}
+
+/** Enforce browser mutation intent before body iteration or route dispatch. */
+function requireMutationIntent(req: IncomingMessage, expectedOrigin: string): void {
+  const contentTypes = rawHeaderValues(req, 'content-type');
+  const mediaType = contentTypes.length === 1 ? contentTypes[0].split(';', 1)[0].trim().toLowerCase() : '';
+  if (mediaType !== 'application/json') throw new HttpError(415, 'Content-Type must be application/json');
+
+  const origins = rawHeaderValues(req, 'origin');
+  if (origins.length !== 1 || origins[0] !== expectedOrigin) {
+    throw new HttpError(403, 'Request origin is not allowed');
+  }
+
+  const csrf = rawHeaderValues(req, 'x-ours-messenger-csrf');
+  if (csrf.length !== 1 || csrf[0] !== '1') throw new HttpError(403, 'CSRF header is required');
+}
+
+function inlineBase64(body: Record<string, unknown>): string {
+  if (Object.hasOwn(body, 'path')) throw bad('path is not accepted; use data_base64');
+  const value = body.data_base64;
+  if (typeof value !== 'string') throw bad('data_base64 must be a base64 string');
+  if (value.length % 4 !== 0) throw bad('data_base64 must be valid canonical base64');
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const decodedBytes = (value.length / 4) * 3 - padding;
+  if (decodedBytes > MAX_INLINE_FILE_BYTES) {
+    throw new HttpError(413, `decoded file exceeds ${MAX_INLINE_FILE_BYTES} byte cap`);
+  }
+  const contentLength = value.length - padding;
+  for (let i = 0; i < contentLength; i++) {
+    const code = value.charCodeAt(i);
+    const valid = (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) || code === 43 || code === 47;
+    if (!valid) throw bad('data_base64 must be valid canonical base64');
+  }
+  for (let i = contentLength; i < value.length; i++) {
+    if (value.charCodeAt(i) !== 61) throw bad('data_base64 must be valid canonical base64');
+  }
+  return value;
+}
+
+function publicIdentity(value: unknown): Readonly<Record<string, string>> {
+  if (value === null || typeof value !== 'object') return {};
+  const identity = value as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  if (typeof identity.cid === 'string') out.cid = identity.cid;
+  if (typeof identity.name === 'string') out.name = identity.name;
+  return out;
+}
+
+function publicFetchedFiles(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== 'object') return { files: [] };
+  const result = value as Record<string, unknown>;
+  const files = Array.isArray(result.files) ? result.files.map((entry) => {
+    if (entry === null || typeof entry !== 'object') return {};
+    const file = entry as Record<string, unknown>;
+    const safe: Record<string, unknown> = {};
+    for (const key of [
+      'file_id', 'wire_id', 'from', 'filename', 'mime', 'size', 'sha256',
+      'status', 'date', 'kind', 'transcription',
+    ]) {
+      if (file[key] !== undefined) safe[key] = file[key];
+    }
+    return safe;
+  }) : [];
+  return {
+    files,
+    ...(result.mode === 'all_unread' || result.mode === 'selected' ? { mode: result.mode } : {}),
+    ...(Array.isArray(result.requested) || result.requested === null ? { requested: result.requested } : {}),
+  };
+}
+
+async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('health deadline exceeded')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -210,16 +309,17 @@ const ROUTES: Record<string, Handler> = {
       reply_to_sentence: body.reply_to_sentence === undefined ? undefined : Number(body.reply_to_sentence),
     }),
 
-  'POST /api/messages/send-file': async ({ client, body }) =>
-    client.sendFile({
+  'POST /api/messages/send-file': async ({ client, body }) => {
+    const dataBase64 = inlineBase64(body);
+    return client.sendFile({
       contact: str(body, 'contact'),
-      path: optStr(body, 'path'),
-      data_base64: optStr(body, 'data_base64'),
+      data_base64: dataBase64,
       filename: optStr(body, 'filename'),
       mime: optStr(body, 'mime'),
       reply_to_wire_id: optStr(body, 'reply_to_wire_id'),
       reply_to_sentence: body.reply_to_sentence === undefined ? undefined : Number(body.reply_to_sentence),
-    }),
+    });
+  },
 
   // ---- conversations: THE NON-CONSUMING READ PATH --------------------------
   'GET /api/conversations/:contact': async ({ client, params }) =>
@@ -327,11 +427,11 @@ const ROUTES: Record<string, Handler> = {
 
   'POST /api/files/fetch': async ({ client, body }) => {
     const ids = body.wire_ids;
-    if (ids === undefined || ids === null) return client.getFiles(undefined);
+    if (ids === undefined || ids === null) return publicFetchedFiles(await client.getFiles(undefined));
     if (!Array.isArray(ids) || !ids.every((v) => typeof v === 'string' && v !== '')) {
       throw bad('wire_ids, when present, must be an array of non-empty strings');
     }
-    return client.getFiles({ wire_ids: ids as string[] });
+    return publicFetchedFiles(await client.getFiles({ wire_ids: ids as string[] }));
   },
 
   // NOTE THE IDENTIFIER SPLIT, which reads as a typo and gets "fixed": deferFiles
@@ -375,9 +475,8 @@ const ROUTES: Record<string, Handler> = {
       keys: { p256dh: k.p256dh, auth: k.auth },
       label: optStr(body, 'label'),
     });
-    // The endpoint is echoed but the keys are not: they are the subscription's
-    // credential, and there is no reason for a response to repeat one.
-    return { subscribed: true, endpoint: saved.endpoint, createdAt: saved.createdAt };
+    // Endpoint and keys are both capabilities; neither belongs in a response.
+    return { subscribed: true, createdAt: saved.createdAt };
   },
 
   'POST /api/push/unsubscribe': async ({ deps, body }) => ({
@@ -386,26 +485,40 @@ const ROUTES: Record<string, Handler> = {
 
   // ---- state & build info --------------------------------------------------
   'GET /api/state': async ({ deps, client }) => {
-    const [identity, daemon] = await Promise.all([client.currentIdentity(), client.version()]);
+    const identity = await client.currentIdentity();
     return {
-      identity,
+      identity: publicIdentity(identity),
       keepHistory: deps.config.keepHistory,
-      daemon,
-      // Runtime ownership and token provenance, never token material. This
-      // route is unauthenticated like the rest of the public messenger API.
-      runtime: deps.runtime.described,
-      // Compatibility alias for clients written against the former state shape.
-      selection: deps.runtime.described,
+      runtime: { ownership: 'embedded-sdk', mcp: false },
       watcher: deps.watcherStats(),
       pushSubscriptions: deps.push.list().length,
     };
   },
 
-  'GET /api/build-info': async ({ deps }) => ({
-    ...deps.buildInfo,
-    node: process.version,
-    pid: process.pid,
-  }),
+  'GET /api/build-info': async ({ deps }) => ({ ...deps.buildInfo }),
+
+  'GET /api/healthz': async ({ deps, client, res }) => {
+    const unavailable = {
+      status: 'unavailable',
+      message: 'Service unavailable',
+      version: deps.buildInfo.version,
+      sha: deps.buildInfo.sha,
+    };
+    try {
+      const current = await within(client.currentIdentity(), deps.healthTimeoutMs ?? 1_500);
+      const identity = publicIdentity(current);
+      if (identity.cid !== deps.identityCid) throw new Error('bound identity mismatch');
+      sendJson(res, 200, {
+        status: 'ok',
+        version: deps.buildInfo.version,
+        sha: deps.buildInfo.sha,
+        identityCid: deps.identityCid,
+      });
+    } catch {
+      sendJson(res, 503, unavailable);
+    }
+    return undefined;
+  },
 };
 
 /** Split `METHOD /a/:b/c` patterns against a concrete path. */
@@ -432,15 +545,16 @@ export const ROUTE_NAMES: readonly string[] = Object.keys(ROUTES);
 
 export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: ApiDeps): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  const hit = match(req.method ?? 'GET', url.pathname);
-
-  if (!hit) {
-    sendJson(res, 404, { error: { code: 'NO_SUCH_ROUTE', message: `no route for ${req.method} ${url.pathname}` } });
-    return;
-  }
 
   try {
-    const body = req.method === 'GET' ? {} : await readJsonBody(req);
+    const method = req.method ?? 'GET';
+    if (method !== 'GET' && method !== 'HEAD') requireMutationIntent(req, deps.config.publicOrigin);
+    const hit = match(method, url.pathname);
+    if (!hit) {
+      sendJson(res, 404, { error: { code: 'NO_SUCH_ROUTE', message: 'No such route' } });
+      return;
+    }
+    const body = method === 'GET' || method === 'HEAD' ? {} : await readJsonBody(req);
     const out = await ROUTES[hit.key]({
       deps,
       client: deps.runtime.client,
@@ -453,18 +567,20 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
     if (out === undefined) return; // handler already wrote the response
     sendJson(res, 200, out);
   } catch (e) {
-    // AN ENGINE ERROR KEEPS ITS OWN CODE AND MESSAGE. `OursError.message` is
-    // byte-identical to what the operation raised, and a frontend showing a user
-    // "the identity is bound elsewhere" is showing them the truth. Flattening
-    // everything to 500 would throw that away.
+    // Engine text is untrusted: it may contain local paths, endpoints, or packet
+    // content. Only fixed code/message pairs from the central allowlist survive.
     if (isOursError(e)) {
-      sendJson(res, 400, { error: { code: e.code, message: e.message } });
+      sendJson(res, 400, { error: publicEngineError(e.code) });
     } else if (e instanceof HttpError) {
-      sendJson(res, e.status, { error: { code: 'BAD_REQUEST', message: e.message } });
+      const code = e.status === 403 ? 'FORBIDDEN'
+        : e.status === 415 ? 'UNSUPPORTED_MEDIA_TYPE'
+          : e.status === 413 ? 'PAYLOAD_TOO_LARGE'
+            : 'BAD_REQUEST';
+      sendJson(res, e.status, { error: { code, message: e.message } });
     } else if (e instanceof ConversationPageError) {
-      sendJson(res, 400, { error: { code: 'BAD_CURSOR', message: e.message } });
+      sendJson(res, 400, { error: { code: 'BAD_CURSOR', message: 'Invalid conversation cursor' } });
     } else {
-      sendJson(res, 500, { error: { code: 'INTERNAL', message: (e as Error).message } });
+      sendJson(res, 500, { error: publicInternalError(e, 'API request') });
     }
   }
 }

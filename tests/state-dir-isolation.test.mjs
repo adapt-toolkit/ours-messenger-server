@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { counter } from './harness.mjs';
+import { migrateMessengerState } from '../src/lifecycle.ts';
 
 const t = counter();
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,7 +37,7 @@ const before = Object.fromEntries(readdirSync(decoy).map((name) => {
   return [name, { bytes: readFileSync(path, 'base64'), mtime: statSync(path).mtimeMs }];
 }));
 
-async function run(mode, stateDir) {
+async function run(mode, stateDir, extraEnv = {}) {
   const resultPath = join(scratch, `${mode}.json`);
   const outputPath = join(scratch, `${mode}.log`);
   const outputFd = openSync(outputPath, 'w');
@@ -51,6 +52,7 @@ async function run(mode, stateDir) {
       OURS_PORT: '1',
       OURS_BROKER_URL: 'wss://ambient.invalid/forbidden',
       OURS_API_TOKEN: ambientToken,
+      ...extraEnv,
     },
     stdio: ['ignore', outputFd, outputFd],
   });
@@ -61,7 +63,16 @@ async function run(mode, stateDir) {
   return { result: JSON.parse(readFileSync(resultPath, 'utf8')), output };
 }
 
+const empty = await run('empty-serve', own);
+t.eq(empty.result.code, 'INITIALIZATION_REQUIRED', 'empty serve fails with the stable typed lifecycle code');
+t.ok(!empty.result.stateMutated, 'empty serve creates no identity, lock, token, registrar, or other state entry');
+t.eq(empty.result.listeningServersAfter, empty.result.listeningServersBefore, 'empty serve opens no enduring listener');
+
+const initialized = await run('init', own);
+t.eq(initialized.result.identityNames, ['Messenger'], 'offline init creates exactly one named Human/root identity');
+t.ok(initialized.result.lockReleased, 'offline init releases runtime ownership before returning');
 const lifecycle = await run('lifecycle', own);
+t.eq(lifecycle.result.boundCid, initialized.result.cid, 'restart binds the identical CID pinned by offline initialization');
 t.eq(lifecycle.result.stateStatus, 200, '/api/state remains available on the public messenger server');
 t.eq(lifecycle.result.outerMcp, 404, 'messenger /mcp is 404');
 t.eq(lifecycle.result.innerMcp, 404, 'embedded runtime /mcp is 404 without an injected MCP integration');
@@ -77,11 +88,24 @@ if (!lifecycle.result.listenersRestored) {
     JSON.stringify(lifecycle.result.signalListenersAfter),
   );
 }
-t.ok(lifecycle.result.lockReleased, 'programmatic close releases the exclusive runtime state lock');
+t.ok(lifecycle.result.lockReleased, 'programmatic close releases advisory runtime ownership');
 t.ok(lifecycle.result.outerClosed && lifecycle.result.runtimeClosed, 'programmatic close stops both public and runtime loopback ports');
 t.eq(lifecycle.result.listeningServersAfter, lifecycle.result.listeningServersBefore, 'programmatic close leaves no listening Server handle');
 
+const migratedState = mkdtempSync(join(tmpdir(), 'messenger-migrated-'));
+const migrationBackup = join(scratch, 'migration-backup');
+const migration = migrateMessengerState({
+  source: own,
+  destinationStateDir: migratedState,
+  backupDir: migrationBackup,
+  confirmed: true,
+});
+t.eq(migration.sourceManifest.digest, migration.destinationManifest.digest, 'offline migration verifies the complete copied payload');
+const migratedRestart = await run('lifecycle', migratedState);
+t.eq(migratedRestart.result.boundCid, initialized.result.cid, 'migration restart preserves the original Human CID');
+
 const rollbackState = mkdtempSync(join(tmpdir(), 'messenger-rollback-'));
+await run('init', rollbackState, { TEST_INIT_NAME: 'Existing' });
 const rollback = await run('rollback', rollbackState);
 t.ok(rollback.result.rejected, 'invalid identity fails after runtime startup');
 if (!rollback.result.listenersRestored) {
@@ -90,7 +114,7 @@ if (!rollback.result.listenersRestored) {
     JSON.stringify(rollback.result.signalListenersAfter),
   );
 }
-t.ok(rollback.result.lockReleased, 'partial-start rollback releases the exclusive runtime state lock');
+t.ok(rollback.result.lockReleased, 'partial-start rollback releases advisory runtime ownership');
 t.eq(rollback.result.listeningServersAfter, rollback.result.listeningServersBefore, 'partial-start rollback leaves no listening Server handle');
 
 const after = Object.fromEntries(readdirSync(decoy).map((name) => {
@@ -103,6 +127,7 @@ t.ok(true, 'ambient OURS_STATE_DIR and OURS_CONFIG remain byte-for-byte untouche
 rmSync(decoy, { recursive: true, force: true });
 rmSync(own, { recursive: true, force: true });
 rmSync(rollbackState, { recursive: true, force: true });
+rmSync(migratedState, { recursive: true, force: true });
 rmSync(scratch, { recursive: true, force: true });
 console.log(`\nstate-dir-isolation OK (${t.count} checks)`);
 process.exit(0);
