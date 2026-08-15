@@ -91,6 +91,9 @@ assert.match(conversation, /verified identity/, 'canonical identity header rende
 assert.match(conversation, /Load earlier messages/, 'bounded history control renders');
 assert.match(conversation, /voice-bubble/, 'received voice renders as a canonical timeline bubble');
 assert.match(conversation, /image-bubble/, 'sent photo renders as a canonical timeline bubble');
+const composerTextarea = conversation.match(/<textarea[^>]*>/)?.[0] ?? '';
+assert.match(composerTextarea, /aria-busy="false"/, 'composer exposes async send state without disabling its focus anchor');
+assert.doesNotMatch(composerTextarea, /\sdisabled(?:=|\s|>)/, 'composer textarea remains focusable for mobile keyboard continuity');
 assert.ok(conversation.indexOf('chat-message-WIRE-0') < conversation.indexOf('chat-message-WIRE-MEDIA-IN'));
 assert.ok(conversation.indexOf('chat-message-WIRE-MEDIA-IN') < conversation.indexOf('chat-message-WIRE-1'));
 assert.ok(conversation.indexOf('chat-message-WIRE-1') < conversation.indexOf('chat-message-WIRE-MEDIA-OUT'));

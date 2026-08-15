@@ -410,8 +410,7 @@ export function Conversation(props: {
   const [showSharedMedia, setShowSharedMedia] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
-  const composerEngagedRef = useRef(false);
-  const restoreComposerFocusRef = useRef(false);
+  const sendingRef = useRef(false);
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
   const previousContactRef = useRef<string | null>(null);
@@ -431,15 +430,7 @@ export function Conversation(props: {
     fileReadGenerationRef.current += 1;
     setPreviewRec(null);
     setShowSharedMedia(false);
-    composerEngagedRef.current = false;
-    restoreComposerFocusRef.current = false;
   }, [contact?.id]);
-
-  useEffect(() => {
-    if (sending || !restoreComposerFocusRef.current) return;
-    restoreComposerFocusRef.current = false;
-    composerInputRef.current?.focus({ preventScroll: true });
-  }, [sending]);
 
   useLayoutEffect(() => {
     const input = composerInputRef.current;
@@ -616,19 +607,22 @@ export function Conversation(props: {
   }
 
   const send = async () => {
-    const text = draft.trim();
-    if (!text || sending) return;
-    restoreComposerFocusRef.current = composerEngagedRef.current;
+    const submittedDraft = draft;
+    const text = submittedDraft.trim();
+    if (!text || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setError(null);
-    const replyWireId = replyTo?.wireId;
+    const submittedReply = replyTo;
+    const replyWireId = submittedReply?.wireId;
     try {
       await props.onSend(text, replyWireId);
-      setDraft('');
-      setReplyTo(null);
+      setDraft((current) => current === submittedDraft ? '' : current);
+      setReplyTo((current) => current === submittedReply ? null : current);
     } catch (err) {
       setError(`Send failed: ${String(err)} — the message was not delivered.`);
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   };
@@ -982,10 +976,7 @@ export function Conversation(props: {
             rows={1}
             placeholder={(replyTo ? 'Reply to ' + replyTo.author : 'Message ' + contact.name) + '…'}
             value={draft}
-            disabled={sending}
-            onFocus={() => {
-              composerEngagedRef.current = true;
-            }}
+            aria-busy={sending}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -997,7 +988,16 @@ export function Conversation(props: {
               } else if (e.key === 'Escape') setReplyTo(null);
             }}
           />
-          <button className="btn primary" onClick={() => void send()} disabled={sending || !draft.trim()}>
+          <button
+            className="btn primary"
+            onPointerDown={(e) => {
+              // Preserve the focused textarea under the submitting touch. A
+              // post-request focus() cannot reopen iOS's software keyboard.
+              if (e.button === 0 && document.activeElement === composerInputRef.current) e.preventDefault();
+            }}
+            onClick={() => void send()}
+            disabled={sending || !draft.trim()}
+          >
             <Icon name="send" size={16} />
             Send
           </button>
