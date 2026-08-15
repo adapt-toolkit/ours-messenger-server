@@ -43,10 +43,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .icon-button { width: 38px; height: 38px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line); font-size: 20px; }
 
 .messenger-main { min-height: 0; display: grid; grid-template-columns: clamp(320px, 28vw, 382px) minmax(0, 1fr); }
-.contact-rail { min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); border-right: 1px solid var(--line); background: rgba(16,19,16,.88); }
+.contact-rail { min-width: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid var(--line); background: rgba(16,19,16,.88); }
 .rail-tools { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 18px; }
 .search, .field, .invite-output { width: 100%; border: 1px solid var(--line); border-radius: 13px; background: #0c0f0c; color: var(--text); padding: 11px 13px; }
-.contacts { overflow: auto; padding: 0 10px 18px; }
+.contacts { grid-row: 3; overflow: auto; padding: 0 10px 18px; }
+.pending-introductions { margin: 0 12px 10px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.025); }
+.pending-introductions h2 { margin: 0 0 9px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.pending-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pending-row > span:first-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pending-row small { color: var(--muted); }
+.pending-actions { display: flex; gap: 6px; }
+.secondary.compact { padding: 8px 11px; font-size: 12px; }
 .contact-row { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid transparent; border-radius: 16px; background: transparent; text-align: left; cursor: pointer; }
 .contact-row:hover { background: rgba(255,255,255,.035); }
 .contact-row.selected { background: var(--green-deep); border-color: #365a31; }
@@ -64,6 +71,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .message-row.out { justify-content: flex-end; }
 .bubble { max-width: min(68ch, 78%); display: flex; flex-direction: column; gap: 7px; padding: 11px 13px 8px; border: 0; border-radius: 18px 18px 18px 5px; background: var(--panel-2); color: var(--text); text-align: left; cursor: pointer; box-shadow: 0 7px 30px rgba(0,0,0,.13); }
 .bubble.out { border-radius: 18px 18px 5px 18px; background: #263b23; }
+.bubble:disabled { cursor: default; opacity: 1; }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.42; }
 .message-meta { display: flex; align-items: center; justify-content: flex-end; gap: 7px; color: var(--muted); font-size: 10px; }
 .receipt { font-weight: 800; letter-spacing: -3px; padding-right: 3px; }
@@ -90,11 +98,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .divider { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .error, .error-toast { color: var(--danger); }
-.error-toast { position: fixed; right: 18px; bottom: 18px; z-index: 30; max-width: 430px; padding: 12px 15px; border: 1px solid #6e3732; border-radius: 13px; background: #261412; }
+.error-toast { position: fixed; right: 18px; bottom: 18px; z-index: 30; max-width: 430px; display: flex; align-items: center; gap: 12px; padding: 12px 15px; border: 1px solid #6e3732; border-radius: 13px; background: #261412; }
+.connection-banner { position: fixed; top: 72px; left: 50%; z-index: 10; transform: translateX(-50%); padding: 8px 13px; border: 1px solid #5b4929; border-top: 0; border-radius: 0 0 12px 12px; background: #251f13; color: #f1c272; font-size: 12px; }
+.centered-screen { height: 100%; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; background: var(--canvas); }
+.centered-screen h1, .centered-screen p { margin: 0; }
 
 @media (max-width: 859px) {
   .app-shell { grid-template-rows: 64px minmax(0, 1fr); }
   .identity-header { grid-template-columns: 1fr auto auto; padding: 0 13px; gap: 10px; }
+  .connection-banner { top: 64px; width: min(92vw, 430px); text-align: center; }
   .brand-product, .identity-cid { display: none; }
   .brand { min-width: 0; }
   .identity-block { display: none; }

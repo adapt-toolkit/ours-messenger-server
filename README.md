@@ -119,6 +119,12 @@ OURS_MESSENGER_KEEP_HISTORY      default true
 OURS_MESSENGER_FORCE             default false
 ```
 
+The production build is a React 18 + TypeScript SPA emitted by Vite under
+`dist/web`: `index.html` is no-cache, while content-hashed `/assets/*` are served
+immutable with explicit MIME types and `nosniff`. During frontend-only work,
+`npm run dev` starts Vite on loopback and proxies `/api` and `/mcp` to the
+messenger server; use `npm run dev:server` for the backend process.
+
 Every state-changing HTTP request must carry `Content-Type: application/json`,
 an exact single `Origin` equal to `OURS_MESSENGER_PUBLIC_ORIGIN`, and
 `X-Ours-Messenger-CSRF: 1`. The check runs before body parsing and route handlers;

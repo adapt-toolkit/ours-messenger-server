@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { dirname, resolve } from 'node:path';
+import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serveApi, type ApiDeps } from './api.js';
 import { bindIdentity, startRuntime, type Runtime } from './daemon.js';
@@ -26,29 +26,98 @@ const log = {
   warn: (message: string) => console.warn(`[messenger] ${message}`),
 };
 
-async function serveApp(req: IncomingMessage, res: ServerResponse, appDir: string): Promise<void> {
+const APP_CSP = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'";
+
+const MIME_TYPES: Readonly<Record<string, string>> = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+function appHeaders(type: string, cacheControl: string, length?: number): Record<string, string> {
+  return {
+    'content-type': type,
+    ...(length === undefined ? {} : { 'content-length': String(length) }),
+    'cache-control': cacheControl,
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': APP_CSP,
+  };
+}
+
+function appNotFound(res: ServerResponse): void {
+  const body = Buffer.from('Not found');
+  res.writeHead(404, appHeaders('text/plain; charset=utf-8', 'no-cache', body.length));
+  res.end(body);
+}
+
+/** Serve only Vite output and the SPA entry. API/MCP namespaces always fail closed. */
+export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir: string): Promise<void> {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' }).end();
     return;
   }
   const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-  const asset = pathname === '/app.js' ? 'app.js' : pathname === '/styles.css' ? 'styles.css' : 'index.html';
+  let decodedPathname: string;
   try {
-    const body = await readFile(resolve(appDir, asset));
-    const type = asset.endsWith('.js') ? 'text/javascript; charset=utf-8'
-      : asset.endsWith('.css') ? 'text/css; charset=utf-8'
-        : 'text/html; charset=utf-8';
-    res.writeHead(200, {
-      'content-type': type,
-      'content-length': String(body.length),
-      'cache-control': asset === 'index.html' ? 'no-cache' : 'public, max-age=3600',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'",
-    });
-    res.end(req.method === 'HEAD' ? undefined : body);
+    decodedPathname = decodeURIComponent(pathname);
   } catch {
-    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Messenger client is not built. Run npm run build.');
+    appNotFound(res);
+    return;
+  }
+  if (
+    decodedPathname === '/api' || decodedPathname.startsWith('/api/')
+    || decodedPathname === '/mcp' || decodedPathname.startsWith('/mcp/')
+  ) {
+    appNotFound(res);
+    return;
+  }
+
+  let asset = 'index.html';
+  let cacheControl = 'no-cache';
+  if (pathname.startsWith('/assets/')) {
+    const assetRoot = resolve(appDir, 'assets');
+    const candidate = resolve(appDir, `.${decodedPathname}`);
+    if (candidate !== assetRoot && !candidate.startsWith(`${assetRoot}${sep}`)) {
+      appNotFound(res);
+      return;
+    }
+    asset = candidate;
+    cacheControl = 'public, max-age=31536000, immutable';
+  } else if (pathname === '/manifest.webmanifest' || pathname === '/version.json') {
+    asset = resolve(appDir, pathname.slice(1));
+  } else if (/\.[a-z0-9]+$/i.test(pathname)) {
+    // Unknown file-like requests are not browser routes and must not receive HTML.
+    appNotFound(res);
+    return;
+  } else {
+    asset = resolve(appDir, 'index.html');
+  }
+
+  try {
+    const body = await readFile(asset);
+    const type = MIME_TYPES[extname(asset).toLowerCase()] ?? 'application/octet-stream';
+    res.writeHead(200, appHeaders(type, cacheControl, body.length));
+    res.end(req.method === 'HEAD' ? undefined : body);
+  } catch (error) {
+    if (asset !== resolve(appDir, 'index.html')) {
+      appNotFound(res);
+      return;
+    }
+    const body = Buffer.from('Messenger client is not built. Run npm run build.');
+    res.writeHead(503, appHeaders('text/plain; charset=utf-8', 'no-cache', body.length));
+    res.end(req.method === 'HEAD' ? undefined : body);
   }
 }
 
@@ -121,17 +190,18 @@ export async function start(
     const moduleDir = dirname(fileURLToPath(import.meta.url));
     const appCandidates = [
       resolve(moduleDir, '../web'),
-      resolve(moduleDir, 'web'),
       resolve(moduleDir, '../dist/web'),
+      resolve(moduleDir, 'web'),
     ];
     const appDir = process.env.OURS_MESSENGER_WEB_DIR
-      ?? appCandidates.find((candidate) => existsSync(resolve(candidate, 'app.js')))
-      ?? appCandidates[0];
+      ?? appCandidates.find((candidate) =>
+        existsSync(resolve(candidate, 'index.html')) && existsSync(resolve(candidate, 'assets')))
+      ?? resolve(moduleDir, '__messenger_web_not_built__');
 
     http = createServer((req, res) => {
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       let serving: Promise<void>;
-      if (pathname === '/mcp') {
+      if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         res.end('Not found');
         return;
