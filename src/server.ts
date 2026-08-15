@@ -71,6 +71,32 @@ function appNotFound(res: ServerResponse): void {
   res.end(body);
 }
 
+async function redirectStaleEntryAsset(
+  req: IncomingMessage,
+  res: ServerResponse,
+  appDir: string,
+  pathname: string,
+): Promise<boolean> {
+  const staleEntry = /^\/assets\/index-[A-Za-z0-9_-]+\.(js|css)$/.exec(pathname);
+  if (!staleEntry) return false;
+
+  try {
+    const index = (await readContainedFile(appDir, resolve(appDir, 'index.html'))).toString('utf8');
+    const extension = staleEntry[1];
+    const currentEntry = new RegExp(
+      `(?:src|href)=["'](\\/assets\\/index-[A-Za-z0-9_-]+\\.${extension})["']`,
+    ).exec(index)?.[1];
+    if (!currentEntry || currentEntry === pathname) return false;
+
+    const headers = appHeaders('text/plain; charset=utf-8', 'no-cache', 0);
+    res.writeHead(307, { ...headers, location: currentEntry });
+    res.end(req.method === 'HEAD' ? undefined : '');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function readContainedFile(root: string, path: string): Promise<Buffer> {
   const [canonicalRoot, canonicalPath] = await Promise.all([realpath(root), realpath(path)]);
   const fromRoot = relative(canonicalRoot, canonicalPath);
@@ -145,6 +171,11 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
     res.end(req.method === 'HEAD' ? undefined : body);
   } catch (error) {
     if (asset !== resolve(appDir, 'index.html')) {
+      // A service-worker update can replace a cached SPA shell while an already
+      // open page still references the previous release's hashed entry bundle.
+      // Keep that narrow upgrade path alive without turning arbitrary missing
+      // assets into HTML or aliases with immutable cache semantics.
+      if (await redirectStaleEntryAsset(req, res, appDir, decodedPathname)) return;
       appNotFound(res);
       return;
     }

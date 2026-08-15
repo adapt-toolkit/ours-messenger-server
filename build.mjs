@@ -15,7 +15,7 @@
 
 import { build } from 'esbuild';
 import { build as viteBuild } from 'vite';
-import { copyFile, cp, mkdir, rm } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -108,3 +108,11 @@ await Promise.all([
 ]);
 
 await viteBuild({ configFile: resolve(root, 'vite.config.ts') });
+
+const serviceWorkerPath = resolve(dist, 'web', 'sw.js');
+const serviceWorkerPlaceholder = '__MESSENGER_BUILD_SHA__';
+const serviceWorker = await readFile(serviceWorkerPath, 'utf8');
+if (serviceWorker.split(serviceWorkerPlaceholder).length !== 2) {
+  throw new Error('service worker must contain exactly one build SHA placeholder');
+}
+await writeFile(serviceWorkerPath, serviceWorker.replace(serviceWorkerPlaceholder, sha));

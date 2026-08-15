@@ -8,6 +8,7 @@ assert.equal(manifest.display, 'standalone');
 assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'));
 
 const sw = readFileSync(new URL('../web/public/sw.js', import.meta.url), 'utf8');
+assert.match(sw, /ours-messenger-shell-__MESSENGER_BUILD_SHA__/, 'source cache is build-versioned');
 assert.match(sw, /url\.pathname\.startsWith\('\/api\/'\)/, 'service worker bypasses every API/SSE request');
 assert.doesNotMatch(sw, /caches\.put\([^\n]*api/i, 'service worker never writes API responses to Cache Storage');
 assert.match(sw, /addEventListener\('push'/);

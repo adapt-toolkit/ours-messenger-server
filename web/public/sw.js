@@ -1,4 +1,8 @@
-const SHELL_CACHE = 'ours-messenger-shell-v2';
+// Replaced with the immutable release SHA by build.mjs. Keeping the cache name
+// build-scoped ensures a newly deployed client cannot keep executing an older
+// entry bundle merely because the service-worker source otherwise stayed the
+// same between releases.
+const SHELL_CACHE = 'ours-messenger-shell-__MESSENGER_BUILD_SHA__';
 const SHELL = ['/', '/chats', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 const FOREGROUND_HEARTBEAT_FRESH_MS = 30_000;
 let lastVisibility = null;

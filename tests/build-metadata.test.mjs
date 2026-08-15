@@ -37,6 +37,9 @@ walk(join(root, 'dist'));
 const artifact = jsFiles.map((path) => readFileSync(path, 'utf8')).join('\n');
 assert.ok(artifact.includes(sha), 'artifact embeds the full source commit');
 assert.doesNotMatch(artifact, /rev-parse|git status|\.git\/HEAD/, 'artifact never consults git at runtime');
+const builtWorker = readFileSync(join(root, 'dist', 'web', 'sw.js'), 'utf8');
+assert.match(builtWorker, new RegExp(`ours-messenger-shell-${sha}`), 'service-worker cache is release-scoped');
+assert.doesNotMatch(builtWorker, /__MESSENGER_BUILD_SHA__/);
 
 // The copied artifact has no source tree or .git directory and remains
 // self-describing; bundle-smoke separately executes the exact emitted CLI.
