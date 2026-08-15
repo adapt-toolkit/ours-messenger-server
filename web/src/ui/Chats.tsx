@@ -14,6 +14,7 @@ import { compressImageForSend } from './imageCompression';
 import { isCompressibleImage } from './imageCompressionCore.mjs';
 import { MessageReceipt } from './MessageReceipt';
 import { MessageMarkdown } from './MessageMarkdown';
+import { ApiError } from '../api';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   groupConversationsByIdentity,
@@ -34,6 +35,7 @@ import {
 // text branch on iOS WebKit (kind/filename derivation + inbound bytes presence).
 // Removed once the iOS bug is closed.
 const FILES_DEBUG = false;
+const TEXT_SEND_TIMEOUT_MS = 15_000;
 
 function FileDebugLine({ m, idx }: { m: ChatMessage; idx: number }) {
   const [bytes, setBytes] = useState<string>('…');
@@ -385,7 +387,7 @@ export function Conversation(props: {
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
   onBack: () => void;
-  onSend: (text: string, replyToWireId?: string) => Promise<void>;
+  onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<void>;
   onRemove: () => void;
   onRename?: (alias: string) => void;
   onDraftChange?: (hasText: boolean) => void;
@@ -397,6 +399,12 @@ export function Conversation(props: {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unknownSend, setUnknownSend] = useState<{
+    draft: string;
+    text: string;
+    reply: ReplyDraft | null;
+    wireIds: ReadonlySet<string>;
+  } | null>(null);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   // header: inline rename + the verified-identity popover
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -420,6 +428,7 @@ export function Conversation(props: {
   useEffect(() => {
     setDraft('');
     setError(null);
+    setUnknownSend(null);
     setReplyTo(null);
     setEditingName(null);
     setShowIdCard(false);
@@ -431,6 +440,23 @@ export function Conversation(props: {
     setPreviewRec(null);
     setShowSharedMedia(false);
   }, [contact?.id]);
+
+  useEffect(() => {
+    if (!unknownSend) return;
+    const replyWireId = unknownSend.reply?.wireId;
+    const confirmed = messages.some((message) =>
+      message.kind !== 'file'
+      && message.dir === 'out'
+      && !!message.wireId
+      && !unknownSend.wireIds.has(message.wireId)
+      && message.text === unknownSend.text
+      && (message.replyTo?.wireId ?? undefined) === replyWireId);
+    if (!confirmed) return;
+    setUnknownSend(null);
+    setError(null);
+    setDraft((current) => current === unknownSend.draft ? '' : current);
+    setReplyTo((current) => current === unknownSend.reply ? null : current);
+  }, [messages, unknownSend]);
 
   useLayoutEffect(() => {
     const input = composerInputRef.current;
@@ -609,23 +635,55 @@ export function Conversation(props: {
   const send = async () => {
     const submittedDraft = draft;
     const text = submittedDraft.trim();
-    if (!text || sendingRef.current) return;
+    const repeatsUnknown = !!unknownSend
+      && submittedDraft === unknownSend.draft
+      && (replyTo?.wireId ?? undefined) === unknownSend.reply?.wireId;
+    if (!text || sendingRef.current || repeatsUnknown) return;
+    if (unknownSend) setUnknownSend(null);
     sendingRef.current = true;
     setSending(true);
     setError(null);
     const submittedReply = replyTo;
     const replyWireId = submittedReply?.wireId;
+    const controller = new AbortController();
+    let timedOut = false;
+    let timeout = 0;
     try {
-      await props.onSend(text, replyWireId);
+      await Promise.race([
+        props.onSend(text, replyWireId, controller.signal),
+        new Promise<never>((_, reject) => {
+          timeout = window.setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+            reject(new Error('send timeout'));
+          }, TEXT_SEND_TIMEOUT_MS);
+        }),
+      ]);
+      setUnknownSend(null);
       setDraft((current) => current === submittedDraft ? '' : current);
       setReplyTo((current) => current === submittedReply ? null : current);
     } catch (err) {
-      setError(`Send failed: ${String(err)} — the message was not delivered.`);
+      if (timedOut || !(err instanceof ApiError)) {
+        setUnknownSend({
+          draft: submittedDraft,
+          text,
+          reply: submittedReply,
+          wireIds: new Set(messages.flatMap((message) => message.wireId ? [message.wireId] : [])),
+        });
+        setError(`${timedOut ? 'Send timed out' : 'Send connection was interrupted'} — delivery status is unknown. Check the conversation; edit the draft before sending again.`);
+      } else {
+        setError(`Send failed: ${String(err)} — the message was not delivered.`);
+      }
     } finally {
+      window.clearTimeout(timeout);
       sendingRef.current = false;
       setSending(false);
     }
   };
+
+  const unknownDuplicate = !!unknownSend
+    && draft === unknownSend.draft
+    && (replyTo?.wireId ?? undefined) === unknownSend.reply?.wireId;
 
   // A message can only be replied to once it has a wire id (pre-1.4 entries
   // restored from an old backup have none).
@@ -903,7 +961,7 @@ export function Conversation(props: {
         </div>
       </div>
       {error && (
-        <div className="banner error">
+        <div className="banner error" role="alert">
           {error}
           {error.startsWith('Send failed:') && (
             <span className="banner-actions">
@@ -996,7 +1054,8 @@ export function Conversation(props: {
               if (e.button === 0 && document.activeElement === composerInputRef.current) e.preventDefault();
             }}
             onClick={() => void send()}
-            disabled={sending || !draft.trim()}
+            disabled={sending || unknownDuplicate || !draft.trim()}
+            title={unknownDuplicate ? 'Delivery status unknown — edit before sending again' : undefined}
           >
             <Icon name="send" size={16} />
             Send

@@ -67,9 +67,10 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
       ),
     markRead: (cid: string) =>
       request<{ contact: string; marked: number }>(`/api/conversations/${encodeURIComponent(cid)}/read`, { method: 'POST' }),
-    send: (contact: string, text: string, replyTo?: string) =>
+    send: (contact: string, text: string, replyTo?: string, signal?: AbortSignal) =>
       request<unknown>('/api/messages/send', {
         method: 'POST',
+        signal,
         body: JSON.stringify({ contact, text, ...(replyTo ? { reply_to_wire_id: replyTo } : {}) }),
       }),
     sendFile: async (contact: string, file: Blob, filename: string, mime: string, replyTo?: string) =>

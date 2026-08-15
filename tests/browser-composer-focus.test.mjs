@@ -35,6 +35,11 @@ const browser = await chromium.launch({ headless: true });
 
 try {
   const sends = [];
+  let stallConversationRefresh = false;
+  let sendBehavior = 'resolved';
+  const conversationMessages = [
+    { dir: 'in', text: 'reply target', date: '2026-08-15T00:00:00.000Z', read: true, wire_id: 'WIRE-1', receipt: null },
+  ];
   const context = await browser.newContext({
     hasTouch: true,
     isMobile: true,
@@ -58,16 +63,32 @@ try {
     if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
     if (url.pathname === '/api/build-info') return json({ name: '@ours.network/messenger-server', version: '0.1.0', sha: 'fixture' });
     if (url.pathname === '/api/contacts') return json({ contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [] });
-    if (url.pathname === '/api/conversations/PEER/page') return json({
-      contact: 'PEER',
-      messages: [{ dir: 'in', text: 'reply target', date: '2026-08-15T00:00:00.000Z', read: true, wire_id: 'WIRE-1', receipt: null }],
-      total: 1, unread: 0, hasMore: false, nextBefore: null,
-    });
+    if (url.pathname === '/api/conversations/PEER/page') {
+      if (stallConversationRefresh) return new Promise(() => {});
+      return json({
+        contact: 'PEER',
+        messages: conversationMessages,
+        total: conversationMessages.length, unread: 0, hasMore: false, nextBefore: null,
+      });
+    }
     if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
     if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
     if (url.pathname === '/api/messages/send') {
       const body = request.postDataJSON();
       sends.push(body);
+      if (sendBehavior === 'lost-with-history') {
+        conversationMessages.push({
+          dir: 'out', text: body.text, date: '2026-08-15T00:00:01.000Z', read: true,
+          wire_id: `HISTORY-${sends.length}`, receipt: null,
+          ...(body.reply_to_wire_id ? { reply_to: { wire_id: body.reply_to_wire_id } } : {}),
+        });
+        await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+        return route.abort('connectionreset');
+      }
+      if (sendBehavior === 'lost') {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+        return route.abort('connectionreset');
+      }
       await new Promise((resolveWait) => setTimeout(resolveWait, 80));
       return body.text === 'fixture failure'
         ? json({ error: { message: 'fixture rejected' } }, 500)
@@ -82,6 +103,17 @@ try {
   const composer = page.locator('.composer textarea');
   const sendButton = page.locator('.composer').getByRole('button', { name: 'Send' });
   await composer.waitFor();
+
+  stallConversationRefresh = true;
+  await composer.fill('delivered before refresh stalls');
+  const deliveredResponse = page.waitForResponse((response) => response.url().endsWith('/api/messages/send'));
+  await sendButton.tap();
+  await deliveredResponse;
+  await page.waitForTimeout(100);
+  assert.equal(await composer.getAttribute('aria-busy'), 'false',
+    'a resolved send transaction settles the composer without waiting for a later REST/SSE reconciliation');
+  stallConversationRefresh = false;
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
 
   await composer.fill('successful async send');
   await page.evaluate(() => { globalThis.__blockAsyncComposerFocus = true; });
@@ -103,6 +135,48 @@ try {
   await editedDraftResponse;
   assert.equal(await composer.inputValue(), 'newer draft ',
     'successful send preserves an exact newer draft edited while the request is pending');
+
+  await page.clock.install();
+  sendBehavior = 'lost-with-history';
+  await composer.fill('history reconciles lost response');
+  await sendButton.tap();
+  await composer.fill('new draft survives reconciliation');
+  await page.clock.fastForward(15_001);
+  await page.getByText('history reconciles lost response', { exact: true }).last().waitFor();
+  assert.equal(await composer.getAttribute('aria-busy'), 'false',
+    'lost delivery completion reaches a bounded non-busy state');
+  assert.equal(await composer.inputValue(), 'new draft survives reconciliation',
+    'later canonical history does not clear a newer draft');
+  assert.equal(await composer.evaluate((node) => document.activeElement === node), true,
+    'later canonical history does not steal mobile composer focus');
+
+  sendBehavior = 'lost';
+  await composer.fill('unknown delivery');
+  await sendButton.tap();
+  await page.clock.fastForward(15_001);
+  await page.getByText(/delivery status is unknown/i).waitFor();
+  assert.equal(await composer.getAttribute('aria-busy'), 'false',
+    'outcome-unknown timeout releases visible busy state');
+  assert.equal(await composer.inputValue(), 'unknown delivery',
+    'outcome-unknown timeout preserves the draft');
+  assert.equal(await sendButton.isDisabled(), true,
+    'the exact outcome-unknown payload is guarded against a blind retry');
+  const unknownCount = sends.filter((body) => body.text === 'unknown delivery').length;
+  const sendBox = await sendButton.boundingBox();
+  assert.ok(sendBox);
+  await page.touchscreen.tap(sendBox.x + sendBox.width / 2, sendBox.y + sendBox.height / 2);
+  await page.touchscreen.tap(sendBox.x + sendBox.width / 2, sendBox.y + sendBox.height / 2);
+  await page.waitForTimeout(100);
+  assert.equal(sends.filter((body) => body.text === 'unknown delivery').length, unknownCount,
+    'repeated physical taps do not duplicate an outcome-unknown delivery');
+  sendBehavior = 'resolved';
+  await composer.fill('edited after unknown');
+  const editedAfterUnknownResponse = page.waitForResponse((response) => response.url().endsWith('/api/messages/send'));
+  await sendButton.tap();
+  await editedAfterUnknownResponse;
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
+  assert.equal(sends.filter((body) => body.text === 'edited after unknown').length, 1,
+    'editing creates one explicit new transaction after an outcome-unknown send');
 
   await page.evaluate(() => { globalThis.__blockAsyncComposerFocus = false; });
   await composer.fill('fixture failure');
@@ -165,7 +239,7 @@ try {
     'async completion does not reopen or refocus a composer after navigation');
 
   await context.close();
-  console.log('browser-composer-focus OK — mobile async success/failure/reply/rapid-send focus semantics');
+  console.log('browser-composer-focus OK — mobile focus, settlement, timeout, reconciliation, and duplicate safety');
 } finally {
   await browser.close();
   if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));
