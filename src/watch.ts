@@ -22,7 +22,9 @@
 // once, and none of them are news by then.
 
 import type { OursClient } from '@ours.network/sdk';
+import { MessengerEventBus, normalizeNotification } from './events.js';
 import type { PushEvent, PushStore } from './push.js';
+import { reportFailure } from './security.js';
 
 /** Events that mean "something arrived for the human". Anything else is not a push. */
 const PUSHABLE: Record<string, PushEvent['kind']> = {
@@ -42,6 +44,28 @@ export interface WatcherHandle {
   readonly stats: { pushes: number; events: number; reconnects: number };
 }
 
+export interface WatcherOptions {
+  /** Test seam; production uses the SDK generator. */
+  readonly watch?: (identity: string, signal: AbortSignal) => AsyncIterable<Record<string, unknown>>;
+  /** Test seam for deterministic reconnect/backoff checks. */
+  readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** A successful probe defines "reattached" before the sync broadcast. */
+  readonly probe?: () => Promise<unknown>;
+}
+
+function abortableWait(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
 /**
  * Watch `identity` forever, pushing on each arrival, until `stop()`.
  *
@@ -56,18 +80,35 @@ export function startWatcher(
   identity: string,
   push: PushStore,
   log: WatcherLog,
+  events: MessengerEventBus,
+  options: WatcherOptions = {},
 ): WatcherHandle {
   const controller = new AbortController();
   const stats = { pushes: 0, events: 0, reconnects: 0 };
   let backoffMs = 500;
+  let reconnecting = false;
+  const watch = options.watch ?? ((name, signal) => client.watchNotifications(name, { signal }));
+  const wait = options.wait ?? abortableWait;
+  const probe = options.probe ?? (() => client.version());
 
   const loop = (async () => {
     while (!controller.signal.aborted) {
       try {
-        for await (const record of client.watchNotifications(identity, { signal: controller.signal })) {
+        if (reconnecting) {
+          await probe();
+          if (controller.signal.aborted) break;
+          events.publish({ type: 'sync_required', reason: 'daemon_reconnected' });
+          reconnecting = false;
+        }
+        const upstream = watch(identity, controller.signal);
+        for await (const record of upstream) {
           if (controller.signal.aborted) break;
           stats.events++;
           backoffMs = 500; // a delivered event proves the link; forget the last failure
+
+          // Publish a closed, metadata-only shape. The bridge never applies the
+          // event to history; browsers recover truth from REST.
+          events.publish(normalizeNotification(record));
 
           const name = typeof record.event === 'string' ? record.event : '';
           const kind = PUSHABLE[name];
@@ -79,21 +120,23 @@ export function startWatcher(
             stats.pushes += result.sent;
             if (result.pruned) log.info(`push: pruned ${result.pruned} dead subscription(s)`);
             if (result.failed) {
-              log.warn(`push: ${result.failed} subscription(s) failed (kept for retry): ${result.errors.join('; ')}`);
+              log.warn(`push: ${result.failed} subscription(s) failed (kept for retry)`);
             }
           } catch (e) {
             // A PUSH FAILURE MUST NOT KILL THE WATCH. The message is already in the
             // packet and readable over REST; losing the notification is a degraded
             // UX, losing the watcher is a broken one.
-            log.warn(`push: send threw: ${(e as Error).message}`);
+            reportFailure(log.warn, 'push send', e);
           }
         }
-        // A clean return means the signal fired; the while condition ends it.
+        if (!controller.signal.aborted) throw new Error('notification stream ended');
       } catch (e) {
         if (controller.signal.aborted) break;
         stats.reconnects++;
-        log.warn(`watch: stream ended (${(e as Error).message}); reconnecting in ${backoffMs}ms`);
-        await new Promise((r) => setTimeout(r, backoffMs));
+        reconnecting = true;
+        events.publish({ type: 'sync_required', reason: 'daemon_unavailable' });
+        reportFailure(log.warn, `watch stream; reconnecting in ${backoffMs}ms`, e);
+        await wait(backoffMs, controller.signal);
         backoffMs = Math.min(backoffMs * 2, 30_000);
       }
     }

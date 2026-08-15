@@ -19,7 +19,8 @@
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { statSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { counter } from './harness.mjs';
 
 const t = counter();
@@ -30,19 +31,30 @@ statSync(BUNDLE); // throws with a clear ENOENT if nobody built — better than 
 
 function run(args, env = {}) {
   return new Promise((res) => {
+    // Some managed sandboxes allow the child to run but discard its piped
+    // stdout/stderr. File-backed capture still exercises the exact shipped
+    // process and makes truncation/empty-output failures observable.
+    const captureDir = mkdtempSync(join(tmpdir(), 'messenger-cli-capture-'));
+    const outPath = join(captureDir, 'stdout');
+    const errPath = join(captureDir, 'stderr');
+    const outFd = openSync(outPath, 'w');
+    const errFd = openSync(errPath, 'w');
     const c = spawn(process.execPath, [BUNDLE, ...args], {
       // A DELIBERATELY BARE ENVIRONMENT. `--help` must work on a box where none of
       // the OURS_MESSENGER_* variables are set — that is the state of the user who
       // is running --help to find out what to set. Inheriting this shell's env
       // would hide exactly that failure.
       env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', outFd, errFd],
     });
-    let out = '';
-    let err = '';
-    c.stdout.on('data', (d) => (out += d));
-    c.stderr.on('data', (d) => (err += d));
-    c.on('exit', (code) => res({ code, out, err }));
+    closeSync(outFd);
+    closeSync(errFd);
+    c.on('exit', (code) => {
+      const out = readFileSync(outPath, 'utf8');
+      const err = readFileSync(errPath, 'utf8');
+      rmSync(captureDir, { recursive: true, force: true });
+      res({ code, out, err });
+    });
   });
 }
 
@@ -52,8 +64,9 @@ t.ok(
   `the bundle PARSES AND LOADS (no SyntaxError / missing module)${help.err ? `\n    stderr: ${help.err.slice(0, 300)}` : ''}`,
 );
 t.eq(help.code, 0, '`--help` exits 0');
-t.ok(help.out.includes('ours-messenger-server serve'), '`--help` prints usage on stdout');
+t.ok(help.out.includes('ours-messenger-server <command>'), '`--help` prints usage on stdout');
 t.ok(help.out.includes('OURS_MESSENGER_IDENTITY'), 'and the usage names the one required variable');
+t.ok(help.out.includes('init --name') && help.out.includes('migrate --source'), 'and documents both offline lifecycle commands');
 
 // A missing identity must be a clean, named error — not a stack trace, and not a
 // silent default. This is the second most common first-run experience after --help.
@@ -67,6 +80,26 @@ t.ok(
   !noIdentity.err.includes('    at '),
   'with no stack trace — the message is the whole answer for a config error',
 );
+
+const invalidInitState = join(ROOT, '.tmp-invalid-init-state');
+const invalidInit = await run(
+  ['init', '--name', '', '--bio', 'public bio', '--yes'],
+  { OURS_MESSENGER_STATE_DIR: invalidInitState },
+);
+t.eq(invalidInit.code, 1, '`init` rejects an empty Human name');
+t.ok(invalidInit.err.includes('--name requires a non-empty value'), 'and names the invalid field');
+t.ok(!existsSync(invalidInitState), 'invalid init performs no filesystem mutation');
+
+const emptyServeState = join(ROOT, '.tmp-empty-serve-state');
+rmSync(emptyServeState, { recursive: true, force: true });
+const emptyServe = await run(['serve'], {
+  OURS_MESSENGER_STATE_DIR: emptyServeState,
+  OURS_MESSENGER_IDENTITY: 'Human',
+  OURS_MESSENGER_PUBLIC_ORIGIN: 'http://127.0.0.1:8420',
+});
+t.eq(emptyServe.code, 1, '`serve` rejects a genuinely empty isolated state');
+t.ok(emptyServe.err.includes('INITIALIZATION_REQUIRED'), 'with the stable typed lifecycle code');
+t.ok(!existsSync(emptyServeState), 'before creating any state directory or runtime artifact');
 
 console.log(`\nbundle-smoke OK (${t.count} checks)`);
 process.exit(0);

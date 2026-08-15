@@ -1,26 +1,20 @@
 // Configuration for the messenger server.
 //
-// TWO SEPARATE SELECTIONS LIVE HERE AND THEY MUST NOT BE CONFLATED:
-//
-//   1. WHICH DAEMON WE ATTACH TO. Not ours to invent — it is handed verbatim to
-//      the SDK's `resolveDaemonConfig`, whose precedence rules mirror the daemon's
-//      own resolver so a shell cannot select one daemon for `ours` and a different
-//      one for us. We add no defaults of our own on top of it; every field below is
-//      `undefined` unless the operator set it, because a default we invent here is
-//      exactly how a token gets sent to the wrong endpoint.
-//
-//   2. WHERE OUR OWN STATE LIVES (push subscriptions, VAPID keys). This is the
-//      SERVER's directory, NOT the daemon's state dir. Writing our files into
-//      `~/.ours` would make an operator's daemon state dir contain something the
-//      daemon does not own.
+// Messenger owns both its public HTTP server and one embedded SDK runtime. The
+// runtime state is always a child of OURS_MESSENGER_STATE_DIR; no global ours
+// config or ~/.ours state is consulted.
 
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { ConfigurationError } from './security.js';
 
 export interface MessengerConfig {
   /** Where the REST API listens. Loopback by default — see README, "There is no auth". */
   readonly host: string;
   readonly port: number;
+
+  /** Exact externally visible origin accepted for every browser mutation. */
+  readonly publicOrigin: string;
 
   /** The ours identity this server acts as. */
   readonly identity: string;
@@ -32,7 +26,7 @@ export interface MessengerConfig {
    */
   readonly force: boolean;
 
-  /** Our own state directory. Never the daemon's. */
+  /** Our state root. Push state and the owned runtime use separate children. */
   readonly stateDir: string;
 
   /**
@@ -46,23 +40,54 @@ export interface MessengerConfig {
    */
   readonly keepHistory: boolean;
 
-  /** Verbatim daemon-selection inputs for the SDK's resolver. */
-  readonly daemon: {
-    readonly endpoint?: string;
-    readonly port?: number;
-    readonly stateDir?: string;
-    readonly token?: string;
-    readonly configPath?: string;
+  /** Configuration for the runtime this messenger process owns. */
+  readonly runtime: {
+    readonly brokerUrl: string;
   };
 }
 
 export const DEFAULT_HTTP_PORT = 8420;
+export const DEFAULT_BROKER_URL = 'wss://broker1.ours.network';
+
+export function validatePublicOrigin(raw: string | undefined): string {
+  if (!raw) throw new ConfigurationError('OURS_MESSENGER_PUBLIC_ORIGIN is required');
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigurationError('OURS_MESSENGER_PUBLIC_ORIGIN must be an exact http(s) origin');
+  }
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
+    raw !== url.origin
+  ) {
+    throw new ConfigurationError('OURS_MESSENGER_PUBLIC_ORIGIN must be an exact http(s) origin without path, credentials, query, or fragment');
+  }
+  return raw;
+}
+
+export function validateBrokerUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigurationError('OURS_MESSENGER_BROKER_URL must be a valid ws/wss URL');
+  }
+  if ((url.protocol !== 'ws:' && url.protocol !== 'wss:') || url.username || url.password || url.search || url.hash) {
+    throw new ConfigurationError(
+      'OURS_MESSENGER_BROKER_URL must be a ws/wss URL without credentials, query, or fragment; ' +
+      'the SDK logs its broker endpoint at startup.',
+    );
+  }
+  return url.toString();
+}
 
 function intOrUndefined(raw: string | undefined, name: string): number | undefined {
   if (raw === undefined || raw === '') return undefined;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0 || n > 65535) {
-    throw new Error(`${name} must be an integer port, got ${JSON.stringify(raw)}`);
+    throw new ConfigurationError(`${name} must be an integer port`);
   }
   return n;
 }
@@ -76,7 +101,7 @@ function boolOrUndefined(raw: string | undefined, name: string): boolean | undef
   if (raw === undefined || raw === '') return undefined;
   if (raw === 'true' || raw === '1') return true;
   if (raw === 'false' || raw === '0') return false;
-  throw new Error(`${name} must be true/false (or 1/0), got ${JSON.stringify(raw)}`);
+  throw new ConfigurationError(`${name} must be true/false (or 1/0)`);
 }
 
 /**
@@ -95,7 +120,7 @@ export function resolveOwnStateDir(env: NodeJS.ProcessEnv = process.env): string
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfig {
   const identity = env.OURS_MESSENGER_IDENTITY;
   if (!identity) {
-    throw new Error(
+    throw new ConfigurationError(
       'OURS_MESSENGER_IDENTITY is required: this server acts AS one ours identity and will not guess which.',
     );
   }
@@ -103,16 +128,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfi
   return {
     host: env.OURS_MESSENGER_HOST ?? '127.0.0.1',
     port: intOrUndefined(env.OURS_MESSENGER_PORT, 'OURS_MESSENGER_PORT') ?? DEFAULT_HTTP_PORT,
+    publicOrigin: validatePublicOrigin(env.OURS_MESSENGER_PUBLIC_ORIGIN),
     identity,
     force: boolOrUndefined(env.OURS_MESSENGER_FORCE, 'OURS_MESSENGER_FORCE') ?? false,
     stateDir: resolveOwnStateDir(env),
     keepHistory: boolOrUndefined(env.OURS_MESSENGER_KEEP_HISTORY, 'OURS_MESSENGER_KEEP_HISTORY') ?? true,
-    daemon: {
-      endpoint: env.OURS_MESSENGER_DAEMON_URL || undefined,
-      port: intOrUndefined(env.OURS_MESSENGER_DAEMON_PORT, 'OURS_MESSENGER_DAEMON_PORT'),
-      stateDir: env.OURS_MESSENGER_DAEMON_STATE_DIR || undefined,
-      token: env.OURS_MESSENGER_DAEMON_TOKEN || undefined,
-      configPath: env.OURS_MESSENGER_DAEMON_CONFIG || undefined,
+    runtime: {
+      brokerUrl: validateBrokerUrl(env.OURS_MESSENGER_BROKER_URL || DEFAULT_BROKER_URL),
     },
   };
 }

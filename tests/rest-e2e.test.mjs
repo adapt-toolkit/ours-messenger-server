@@ -1,7 +1,7 @@
-// THE WHOLE SERVER, END TO END: a real daemon, the real REST surface, and a real
+// THE WHOLE SERVER, END TO END: its owned SDK runtime, the REST surface, and a real
 // signed WebPush request captured on the wire.
 //
-// It boots src/server.ts against the harness daemon, exercises the routes a
+// It boots src/server.ts and its embedded runtime, exercises the routes a
 // frontend actually calls, and then does the thing the owner named by name —
 // a message lands in the packet on this server and THIS SERVER sends the push.
 // The push is asserted against a local endpoint we control: the request that
@@ -21,7 +21,8 @@ import { createECDH, randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { counter, freePort, memSample, startHarnessDaemon, until } from './harness.mjs';
+import { fileURLToPath } from 'node:url';
+import { counter, memSample, until } from './harness.mjs';
 
 // THE FAKE PUSH SERVICE IS HTTPS, AND IT HAS TO BE. `web-push` calls
 // `https.request` unconditionally (src/web-push-lib.js:369) — there is no http
@@ -38,9 +39,6 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const t = counter();
 memSample('before');
-
-const daemon = await startHarnessDaemon('rest-e2e');
-const { OursClient } = daemon.sdk;
 
 // ---- a push service we own ---------------------------------------------------
 const certDir = mkdtempSync(join(tmpdir(), 'messenger-push-tls-'));
@@ -63,8 +61,9 @@ const pushService = createServer({
     res.writeHead(201).end();
   });
 });
-const pushPort = await freePort();
-await new Promise((r) => pushService.listen(pushPort, '127.0.0.1', r));
+await new Promise((r) => pushService.listen(0, '127.0.0.1', r));
+const pushAddress = pushService.address();
+const pushPort = typeof pushAddress === 'object' && pushAddress ? pushAddress.port : 0;
 
 // A REAL subscription key pair. web-push encrypts to it, so a made-up string
 // would fail inside the library and the test would prove nothing about our code.
@@ -73,51 +72,88 @@ ecdh.generateKeys();
 const p256dh = ecdh.getPublicKey().toString('base64url');
 const auth = randomBytes(16).toString('base64url');
 
-// ---- the peer, and the identity our server will act as ----------------------
-const peer = new OursClient({ url: daemon.url, leaseToken: 'peer-lease' });
-const setup = new OursClient({ url: daemon.url, leaseToken: 'setup-lease' });
-await setup.createIdentity({ name: 'Me', bio: 'the human', exposeLocal: false, localAutoAccept: true });
+// ---- boot the real server and the runtime IT owns ----------------------------
+const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-state-'));
+const publicOrigin = 'http://messenger.test';
+execFileSync(process.execPath, [
+  '--import', 'tsx', fileURLToPath(new URL('./fixtures/owned-runtime-child.mjs', import.meta.url)),
+], {
+  env: {
+    ...process.env,
+    TEST_MODE: 'init',
+    TEST_RESULT_PATH: join(certDir, 'init-result.json'),
+    TEST_INIT_NAME: 'Me',
+    OURS_MESSENGER_STATE_DIR: ownStateDir,
+  },
+  stdio: 'ignore',
+});
+const { start } = await import('../src/server.ts');
+const server = await start(
+  {
+    host: '127.0.0.1',
+    port: 0,
+    publicOrigin,
+    identity: 'Me',
+    force: false,
+    stateDir: ownStateDir,
+    keepHistory: true,
+    runtime: { brokerUrl: 'wss://invalid.local/none' },
+  },
+  {
+    name: '@ours.network/messenger-server', version: '0.1.0',
+    sha: '3fb10cc41af69e1a15cb99eab1c1b408ec245de0', dirty: false,
+  },
+);
+
+// ---- a second session in the same owned runtime -----------------------------
+const { OursClient } = await import('@ours.network/sdk');
+const runtimeToken = readFileSync(join(server.runtime.stateDir, 'daemon-token'), 'utf8').trim();
+const peer = new OursClient({
+  url: `http://127.0.0.1:${server.runtime.port}`,
+  leaseToken: 'peer-lease',
+  apiToken: runtimeToken,
+});
 await peer.createIdentity({ name: 'Peer', bio: 'the other end', exposeLocal: false, localAutoAccept: true });
-await setup.setConversationPolicy({ keep_history: true });
 await peer.setConversationPolicy({ keep_history: true });
-await setup.readvertiseOnUpgrade();
 await peer.readvertiseOnUpgrade();
-const invite = await setup.generateInvite({});
+const invite = await server.runtime.client.generateInvite({});
 await peer.addContact({ invite: invite.blob });
 await until('the contact link', async () => {
   const v = await peer.listContacts();
   return v.contacts.some((c) => c.name === 'Me') ? v : undefined;
 });
-// Hand the identity back so the server can bind it: the lease IS the session, and
-// two sessions must not hold one identity.
-await setup.releaseLease();
-
-// ---- boot the real server ----------------------------------------------------
-const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-state-'));
-const { start } = await import('../src/server.ts');
-const httpPort = await freePort();
-const server = await start(
-  {
-    host: '127.0.0.1',
-    port: httpPort,
-    identity: 'Me',
-    force: false,
-    stateDir: ownStateDir,
-    keepHistory: true,
-    daemon: { endpoint: daemon.url, stateDir: daemon.stateDir },
-  },
-  { name: '@ours.network/messenger-server', version: '0.1.0' },
-);
 const base = `http://127.0.0.1:${server.port}`;
 const api = async (method, path, body) => {
+  const mutating = method !== 'GET' && method !== 'HEAD';
   const res = await fetch(base + path, {
     method,
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    headers: mutating ? {
+      'content-type': 'application/json',
+      origin: publicOrigin,
+      'x-ours-messenger-csrf': '1',
+    } : {},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
   return { status: res.status, json: text ? JSON.parse(text) : null };
 };
+
+// ---- the focused same-origin client ----------------------------------------
+const shellResponse = await fetch(base + '/');
+const shellHtml = await shellResponse.text();
+t.eq(shellResponse.status, 200, 'GET / serves the focused messenger client');
+t.ok(shellHtml.includes('id="app"') && shellHtml.includes('/app.js'), 'and its same-origin application entry');
+const appResponse = await fetch(base + '/app.js');
+t.eq(appResponse.status, 200, 'GET /app.js serves the built client bundle');
+t.ok((await appResponse.text()).includes('/api/events'), 'whose live path is the same-origin SSE endpoint');
+const clientRoute = await fetch(base + '/chats/peer');
+t.ok((await clientRoute.text()).includes('id="app"'), 'non-API client routes fall back to the app shell');
+const unknownApi = await api('GET', '/api/not-a-route');
+t.eq(unknownApi.status, 404, 'unknown /api routes remain JSON 404s and never fall through to HTML');
+const publicMcp = await fetch(base + '/mcp');
+t.eq(publicMcp.status, 404, 'GET /mcp is 404 on the messenger surface');
+const runtimeMcp = await fetch(`http://127.0.0.1:${server.runtime.port}/mcp`);
+t.eq(runtimeMcp.status, 404, 'GET /mcp is 404 on the embedded runtime (no MCP integration injected)');
 
 // ---- identity, state, build info --------------------------------------------
 const who = await api('GET', '/api/identity');
@@ -125,25 +161,21 @@ t.eq(who.status, 200, 'GET /api/identity responds 200');
 t.eq(who.json.name, 'Me', 'and reports the bound identity — this is the old getProfileName');
 
 const state = await api('GET', '/api/state');
-t.eq(state.json.daemon.stateDir, daemon.stateDir, '/api/state reports the daemon we attached to');
+t.eq(state.json.runtime.ownership, 'embedded-sdk', '/api/state reports messenger-owned runtime provenance');
 t.eq(state.json.keepHistory, true, 'and the retention policy in force');
-// PROVENANCE, NOT VALUE. `describeDaemonConfig` is documented to report where the
-// token came from and never the token itself, and /api/state is unauthenticated,
-// so this matters.
-//
-// LIMIT OF THIS CHECK, stated rather than glossed: the harness daemon runs with
-// OURS_API_VISIBILITY=open and no token, so `tokenSource` here is "none" and there
-// is no secret on this box for the assertion to fail to find. It reads the SHAPE —
-// provenance reported, no `token` value key — and it does NOT prove redaction of a
-// real token. That case is listed as not covered in the README and the PR.
-t.ok('tokenSource' in state.json.selection, '/api/state reports token PROVENANCE (tokenSource)');
 t.ok(
-  !('token' in state.json.selection) && !('apiToken' in state.json.selection),
-  'and carries no token value key — shape only; a real token is NOT exercised here (harness is open/no-token)',
+  !JSON.stringify(state.json).includes(runtimeToken) &&
+    !JSON.stringify(state.json).includes(ownStateDir) &&
+    state.json.runtime.port === undefined && state.json.runtime.brokerUrl === undefined,
+  'and owner token, state path, internal port, and broker are absent from the state response',
 );
 
 const build = await api('GET', '/api/build-info');
 t.eq(build.json.name, '@ours.network/messenger-server', 'GET /api/build-info identifies the server');
+t.eq(build.json.sha, '3fb10cc41af69e1a15cb99eab1c1b408ec245de0', 'and reports its build-time full commit');
+const health = await api('GET', '/api/healthz');
+t.eq(health.status, 200, 'GET /api/healthz proves the owned runtime is ready');
+t.eq(health.json.identityCid, who.json.cid, 'and matches the startup-bound identity CID');
 
 // ---- contacts and invites ----------------------------------------------------
 const contacts = await api('GET', '/api/contacts');
@@ -166,6 +198,7 @@ const sub = await api('POST', '/api/push/subscribe', {
 });
 t.eq(sub.status, 200, 'POST /api/push/subscribe accepts a subscription');
 t.ok(sub.json.keys === undefined, 'and does not echo the subscription keys back');
+t.ok(sub.json.endpoint === undefined, 'and does not echo the push endpoint back');
 
 // Idempotent on endpoint: a device re-subscribing must not double-push.
 await api('POST', '/api/push/subscribe', { endpoint: `https://127.0.0.1:${pushPort}/push/device-1`, keys: { p256dh, auth } });
@@ -234,14 +267,13 @@ t.ok(bad.json.error.message.includes('text'), 'naming the field that was missing
 const engineErr = await api('POST', '/api/messages/send', { contact: 'NoSuchContact', text: 'x' });
 t.eq(engineErr.status, 400, 'an engine error is a 400');
 t.ok(typeof engineErr.json.error.code === 'string' && engineErr.json.error.code.length > 0,
-     `and keeps the engine's own code (${engineErr.json.error.code}) rather than being flattened to INTERNAL`);
+     `and returns a fixed public code (${engineErr.json.error.code}) rather than raw engine text`);
 
 const badCursor = await api('GET', '/api/conversations/Peer/page?before=NOPE');
 t.eq(badCursor.status, 400, 'an unresolvable page cursor is a 400, not a silent reset to the newest page');
 
 await server.close();
 await new Promise((r) => pushService.close(r));
-await daemon.close();
 rmSync(ownStateDir, { recursive: true, force: true });
 rmSync(certDir, { recursive: true, force: true });
 memSample('after');
