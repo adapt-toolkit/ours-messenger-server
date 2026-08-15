@@ -123,4 +123,13 @@ export interface DialogFiles {
   files: MediaRecord[];
 }
 
-export type PushState = 'unsupported' | 'idle' | 'blocked' | 'subscribed' | 'busy' | 'error';
+export type PushState = 'unsupported' | 'off' | 'needs-permission' | 'repairing' | 'on' | 'error';
+export type PushPreviewMode = 'full' | 'private';
+export interface PushView {
+  status: PushState;
+  bindingId?: string;
+  fingerprint?: string;
+  configEpoch?: number;
+  preview: PushPreviewMode;
+  blocked?: boolean;
+}
