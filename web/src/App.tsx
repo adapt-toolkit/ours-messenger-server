@@ -18,6 +18,7 @@ import { timeMs as timeMsJs } from './ui/timelineCore.mjs';
 import { Icon } from './ui/icons.js';
 import MessageToasts, { useMessageToasts } from './ui/MessageToast.js';
 import { InviteModal, SettingsModal } from './ui/MessengerModals.js';
+import { forceRecover, startUpdateCheck } from './updateCheck.js';
 
 const convergenceDelays = [0, 100, 400, 1_000] as const;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -168,6 +169,13 @@ export function AppShell() {
       return result.files;
     } catch (error) { if (surface) showError(error); return null; }
   }, [showError]);
+
+  useEffect(() => startUpdateCheck({
+    onUpdateAvailable: () => setWorker((current) => ({ ...current, updateAvailable: true })),
+    // Messenger state is server-owned, so the control-plane recovery can run
+    // automatically without risking local identity or message data.
+    onStuck: (remoteSha) => { void forceRecover(remoteSha); },
+  }), []);
   const refreshContacts = useCallback(async () => {
     const contacts = await api.contacts();
     dispatch({ type: 'contacts', contacts: { ...contacts, pending: contacts.pending ?? [] } });

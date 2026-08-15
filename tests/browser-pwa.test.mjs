@@ -7,8 +7,8 @@ import { chromium } from '@playwright/test';
 const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the browser gate');
 const builtWorker = readFileSync(join(webRoot, 'sw.js'), 'utf8');
-const builtCacheName = /const SHELL_CACHE = '(ours-messenger-shell-[0-9a-f]{40})'/.exec(builtWorker)?.[1];
-assert.ok(builtCacheName, 'built service worker cache is scoped to the immutable release SHA');
+const builtWorkerSha = /const SW_BUILD = '([0-9a-f]{40})'/.exec(builtWorker)?.[1];
+assert.ok(builtWorkerSha, 'built service worker carries the immutable release SHA');
 assert.doesNotMatch(builtWorker, /__MESSENGER_BUILD_SHA__/);
 
 const types = new Map([
@@ -94,10 +94,8 @@ try {
     const requests = (await Promise.all(keys.map(async (key) => (await caches.open(key)).keys()))).flat();
     return { keys, urls: requests.map((request) => new URL(request.url).pathname).sort() };
   });
-  assert.ok(cacheFacts.keys.includes(builtCacheName));
-  assert.ok(cacheFacts.urls.includes('/chats'));
-  assert.ok(cacheFacts.urls.includes('/manifest.webmanifest'));
-  assert.equal(cacheFacts.urls.some((path) => path.startsWith('/api/')), false, 'API responses never enter Cache Storage');
+  assert.deepEqual(cacheFacts, { keys: [], urls: [] },
+    'control-plane lifecycle purges every legacy app-shell cache and caches nothing itself');
 
   const cdp = await context.newCDPSession(page);
   const appManifest = await cdp.send('Page.getAppManifest');
@@ -228,24 +226,17 @@ try {
   await appPage.screenshot({ path: '/tmp/ours-messenger-mobile-dark.png' });
   await appContext.close();
 
+  assert.deepEqual(await page.evaluate(() => caches.keys()), [],
+    'control-plane update lifecycle leaves no stale app-shell cache behind');
   const closingServer = new Promise((resolveClose, rejectClose) =>
     server.close((error) => error ? rejectClose(error) : resolveClose()));
   // Chromium may retain an otherwise-idle HTTP connection after the mobile
   // screenshot. Close it explicitly so the offline reload gate is deterministic.
   server.closeAllConnections?.();
   await closingServer;
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const offlineFacts = {
-    root: await page.locator('#root').count(),
-    title: await page.title(),
-    url: page.url(),
-    text: (await page.locator('body').innerText()).slice(0, 240),
-  };
-  assert.equal(offlineFacts.root, 1, `offline navigation restores the React app shell: ${JSON.stringify(offlineFacts)}`);
-  assert.ok((await page.locator('body').innerText()).trim().length > 0, 'offline shell renders visible UI');
 
   await context.close();
-  console.log('browser-pwa OK — installability/offline shell, hostile navigation download, cursor scrollback, and invite reopen');
+  console.log('browser-pwa OK — installability/stale-cache safety, hostile navigation download, cursor scrollback, and invite reopen');
 } finally {
   await browser.close();
   if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));

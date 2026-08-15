@@ -1,9 +1,9 @@
-// Replaced with the immutable release SHA by build.mjs. Keeping the cache name
-// build-scoped ensures a newly deployed client cannot keep executing an older
-// entry bundle merely because the service-worker source otherwise stayed the
-// same between releases.
-const SHELL_CACHE = 'ours-messenger-shell-__MESSENGER_BUILD_SHA__';
-const SHELL = ['/', '/chats', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+// Ported from ours-control-plane's proven updater. build.mjs replaces this
+// stamp on every release so browsers always see different service-worker bytes.
+// This worker deliberately caches no application shell: keeping an old HTML
+// document and hashed JS chunks in Cache Storage can strand an installed PWA
+// on a blank screen during a deployment.
+const SW_BUILD = '__MESSENGER_BUILD_SHA__';
 const FOREGROUND_HEARTBEAT_FRESH_MS = 30_000;
 let lastVisibility = null;
 let lastIOSStandalone = false;
@@ -90,46 +90,24 @@ function safeText(value, fallback, max) {
   return typeof value === 'string' && value.trim() ? value.slice(0, max) : fallback;
 }
 
-// Match the durable update lifecycle used by ours-control-plane: an installed
-// PWA is commonly backgrounded rather than fully closed, so a new worker must
-// not remain parked in `waiting` behind an old client forever.
-self.addEventListener('install', (event) => {
+// Exact ours-control-plane lifecycle: activate immediately, claim existing
+// windows, and purge every legacy app-shell cache. HTML and hashed bundles then
+// always come from the server's current immutable release.
+self.addEventListener('install', () => {
   self.skipWaiting();
-  event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL)));
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    await Promise.all([
-      caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== SHELL_CACHE).map((key) => caches.delete(key)))),
-      self.clients.claim(),
-    ]);
-
-    // Release bridge for clients predating automatic controllerchange reloads.
-    // New clients answer this probe and own their safe reload/veto flow. An old
-    // client cannot answer, so navigate it once to escape the stale app shell.
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    await Promise.all(windows.map(async (client) => {
-      const supported = await new Promise((resolve) => {
-        const channel = new MessageChannel();
-        let settled = false;
-        const finish = (value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          try { channel.port1.close(); } catch { /* closed */ }
-          resolve(value);
-        };
-        channel.port1.onmessage = (reply) => finish(reply.data?.supported === true);
-        const timer = setTimeout(() => finish(false), 750);
-        try { client.postMessage({ type: 'ours-update-lifecycle-probe' }, [channel.port2]); }
-        catch { finish(false); }
-      });
-      // Do not await navigate from inside `activate`: navigation may wait for
-      // activation to finish, so awaiting it here can deadlock into a blank
-      // client. Start it, then let this activation promise settle immediately.
-      if (!supported && 'navigate' in client) void client.navigate(client.url).catch(() => null);
-    }));
+    await self.clients.claim();
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+    } catch { /* Cache API may be unavailable; nothing to purge. */ }
+    try {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of windows) client.postMessage({ type: 'ours-sw-activated', build: SW_BUILD });
+    } catch { /* no clients */ }
   })());
 });
 
@@ -150,25 +128,6 @@ self.addEventListener('message', (event) => {
       for (const notification of notifications) notification.close();
       if ('clearAppBadge' in self.navigator) await self.navigator.clearAppBadge().catch(() => {});
     })());
-  }
-});
-
-self.addEventListener('fetch', (event) => {
-  const request = event.request;
-  const url = new URL(request.url);
-  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
-  if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).then((response) => {
-      if (response.ok) void caches.open(SHELL_CACHE).then((cache) => cache.put('/', response.clone()));
-      return response;
-    }).catch(() => caches.match('/')));
-    return;
-  }
-  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/')) {
-    event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      if (response.ok) void caches.open(SHELL_CACHE).then((cache) => cache.put(request, response.clone()));
-      return response;
-    })));
   }
 });
 

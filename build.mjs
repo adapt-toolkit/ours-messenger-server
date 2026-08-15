@@ -107,7 +107,10 @@ await Promise.all([
   cp(resolve(adaptDist, 'mufl_files'), adaptMuflFiles, { recursive: true }),
 ]);
 
-await viteBuild({ configFile: resolve(root, 'vite.config.ts') });
+await viteBuild({
+  configFile: resolve(root, 'vite.config.ts'),
+  define: { __MESSENGER_WEB_BUILD_SHA__: JSON.stringify(sha) },
+});
 
 const serviceWorkerPath = resolve(dist, 'web', 'sw.js');
 const serviceWorkerPlaceholder = '__MESSENGER_BUILD_SHA__';
@@ -116,3 +119,7 @@ if (serviceWorker.split(serviceWorkerPlaceholder).length !== 2) {
   throw new Error('service worker must contain exactly one build SHA placeholder');
 }
 await writeFile(serviceWorkerPath, serviceWorker.replace(serviceWorkerPlaceholder, sha));
+await writeFile(
+  resolve(dist, 'web', 'version.json'),
+  JSON.stringify({ sha, time: new Date().toISOString() }) + '\n',
+);

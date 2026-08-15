@@ -78,10 +78,6 @@ export async function registerMessengerWorker(
     if (document.visibilityState === 'visible') void registration?.update().catch(() => {});
   };
   const workerMessage = (event: MessageEvent) => {
-    if (event.data?.type === 'ours-update-lifecycle-probe') {
-      event.ports[0]?.postMessage({ supported: true });
-      return;
-    }
     if (event.data?.type === 'ours-push-repair-required') {
       window.dispatchEvent(new Event('ours-push-repair-required'));
     }

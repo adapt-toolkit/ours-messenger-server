@@ -8,16 +8,15 @@ assert.equal(manifest.display, 'standalone');
 assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'));
 
 const sw = readFileSync(new URL('../web/public/sw.js', import.meta.url), 'utf8');
-assert.match(sw, /ours-messenger-shell-__MESSENGER_BUILD_SHA__/, 'source cache is build-versioned');
+assert.match(sw, /const SW_BUILD = '__MESSENGER_BUILD_SHA__'/, 'service-worker bytes carry the immutable release stamp');
 assert.match(sw, /self\.skipWaiting\(\)/, 'new workers activate without waiting for installed-PWA windows to close');
-assert.match(sw, /ours-update-lifecycle-probe/, 'a release bridge refreshes clients predating automatic controllerchange reload');
-assert.match(sw, /client\.navigate\(client\.url\)/, 'legacy stale clients are navigated onto the current shell once');
-assert.doesNotMatch(sw, /await client\.navigate\(/, 'activation never waits on a navigation that may itself wait for activation');
-assert.match(sw, /url\.pathname\.startsWith\('\/api\/'\)/, 'service worker bypasses every API/SSE request');
-assert.doesNotMatch(sw, /caches\.put\([^\n]*api/i, 'service worker never writes API responses to Cache Storage');
+assert.match(sw, /self\.clients\.claim\(\)/, 'new workers immediately control existing installed-PWA windows');
+assert.match(sw, /keys\.map\(\(key\) => caches\.delete\(key\)\)/, 'activation purges every legacy app-shell cache');
+assert.doesNotMatch(sw, /addEventListener\('fetch'/, 'control-plane updater never caches HTML or hashed application assets');
+assert.doesNotMatch(sw, /client\.navigate/, 'activation never navigates a client from inside its own lifecycle promise');
 assert.match(sw, /addEventListener\('push'/);
 assert.match(sw, /showNotification/);
 assert.match(sw, /notificationclick/);
 assert.match(sw, /openWindow\(url\)/);
 
-console.log('pwa-contract OK — install manifest, offline shell boundary, push display, and dialog click-through');
+console.log('pwa-contract OK — install manifest, control-plane update lifecycle, push display, and dialog click-through');

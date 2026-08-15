@@ -10,6 +10,9 @@ import './onboarding.css';
 import './redesign.css';
 import './dark-v3.css';
 import './layout-v4.css';
+import { stripRecoveryParam } from './updateCheck.js';
+
+stripRecoveryParam();
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');
