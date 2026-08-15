@@ -191,18 +191,49 @@ t.ok(Array.isArray(invites.json), 'GET /api/invites returns a list — the old l
 const vapid = await api('GET', '/api/push/vapid-public-key');
 t.ok(typeof vapid.json.publicKey === 'string' && vapid.json.publicKey.length > 20,
      'GET /api/push/vapid-public-key serves a key for the browser to subscribe with');
+t.ok(typeof vapid.json.fingerprint === 'string' && vapid.json.configEpoch === 1,
+     'the public key response identifies the current non-secret VAPID generation');
 
-const sub = await api('POST', '/api/push/subscribe', {
+const rawPushMutation = async (path, body, headers = {}) => {
+  const response = await fetch(base + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  return { status: response.status, json: text ? JSON.parse(text) : null };
+};
+const crossOriginPush = await rawPushMutation('/api/push/subscriptions/ensure', {}, {
+  origin: 'https://attacker.example', 'x-ours-messenger-csrf': '1',
+});
+t.eq(crossOriginPush.status, 403, 'cross-origin push mutation is rejected before body validation');
+const missingCsrfPush = await rawPushMutation('/api/push/subscriptions/ensure', {}, { origin: publicOrigin });
+t.eq(missingCsrfPush.status, 403, 'missing push CSRF intent is rejected');
+const malformedPush = await api('POST', '/api/push/subscriptions/ensure', {
+  endpoint: 'http://push.example/not-https', keys: { p256dh, auth },
+});
+t.eq(malformedPush.status, 400, 'malformed/non-HTTPS subscription capability is rejected');
+t.ok(!JSON.stringify(malformedPush.json).includes('not-https'), 'invalid capability values are not reflected');
+const oversizedPush = await rawPushMutation('/api/push/subscriptions/ensure', {
+  endpoint: 'https://push.example/device', keys: { p256dh, auth }, label: 'x'.repeat(17_000),
+}, { origin: publicOrigin, 'x-ours-messenger-csrf': '1' });
+t.eq(oversizedPush.status, 413, 'push mutations have a small route-specific body cap');
+
+const sub = await api('POST', '/api/push/subscriptions/ensure', {
   endpoint: `https://127.0.0.1:${pushPort}/push/device-1`,
   keys: { p256dh, auth },
-  label: 'test device',
+  label: 'test device', preview: 'full',
 });
-t.eq(sub.status, 200, 'POST /api/push/subscribe accepts a subscription');
+t.eq(sub.status, 200, 'POST push ensure accepts and acknowledges a bounded subscription');
+t.ok(typeof sub.json.binding_id === 'string' && sub.json.status === 'on', 'ack returns only an opaque binding id and On state');
 t.ok(sub.json.keys === undefined, 'and does not echo the subscription keys back');
 t.ok(sub.json.endpoint === undefined, 'and does not echo the push endpoint back');
 
 // Idempotent on endpoint: a device re-subscribing must not double-push.
-await api('POST', '/api/push/subscribe', { endpoint: `https://127.0.0.1:${pushPort}/push/device-1`, keys: { p256dh, auth } });
+const ensuredAgain = await api('POST', '/api/push/subscriptions/ensure', {
+  endpoint: `https://127.0.0.1:${pushPort}/push/device-1`, keys: { p256dh, auth }, preview: 'full',
+});
+t.eq(ensuredAgain.json.binding_id, sub.json.binding_id, 'same endpoint ensure preserves the opaque binding id');
 t.eq((await api('GET', '/api/state')).json.pushSubscriptions, 1,
      're-subscribing the same endpoint replaces it rather than duplicating — one device, one push');
 
@@ -352,6 +383,13 @@ t.ok(typeof engineErr.json.error.code === 'string' && engineErr.json.error.code.
 
 const badCursor = await api('GET', '/api/conversations/Peer/page?before=NOPE');
 t.eq(badCursor.status, 400, 'an unresolvable page cursor is a 400, not a silent reset to the newest page');
+
+let rateLimited = false;
+for (let attempt = 0; attempt < 35; attempt++) {
+  const response = await api('POST', '/api/push/subscriptions/delete', { binding_id: `unknown-${attempt}` });
+  if (response.status === 429) { rateLimited = true; break; }
+}
+t.ok(rateLimited, 'push subscription mutations enforce a bounded per-client rate');
 
 await server.close();
 await new Promise((r) => pushService.close(r));

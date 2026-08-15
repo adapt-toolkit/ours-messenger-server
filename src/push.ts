@@ -1,73 +1,30 @@
-// WEBPUSH, SERVER-SIDE, WITH NO MUFL IN IT.
-//
-// This is the plain WebPush application-server role and nothing more. The browser
-// subscribes, POSTs its `{endpoint, keys:{p256dh, auth}}` here, and when a message
-// lands in the packet ON THIS SERVER, THIS SERVER signs with VAPID and POSTs to
-// that endpoint. There is no notification service in the path: the user self-hosts
-// this, so the thing that learns about the message is the thing that sends the push.
-//
-// The old `a2a_notifications` surface — handout ledger, token issue/rotate/revoke,
-// five hooks — is deliberately absent. It existed because a browser node had to
-// hand tokens to a third party. A server does not.
-//
-// WHAT GOES IN A PUSH PAYLOAD: the explicitly opted-in owner's full notification
-// text plus the stable dialog/wire identifiers used for click-through. RFC 8291
-// encrypts the payload to the browser subscription, but endpoint/timing/size
-// metadata remains visible to the push service and the decrypted notification can
-// be written to the device lock screen. The UI and README state this boundary
-// before permission is requested; this is not advertised as ours E2E transport.
+// Web Push state belongs to this messenger server. It is identity-scoped,
+// owner-only, and never exposed through REST: endpoints and subscription keys are
+// bearer capabilities even though Web Push encrypts each payload for the browser.
 
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import webpush from 'web-push';
 
+export type PushPreviewMode = 'full' | 'private';
+export type PushKind = 'message' | 'file' | 'photo' | 'voice';
+
 export interface PushSubscriptionRecord {
+  readonly bindingId: string;
   readonly endpoint: string;
   readonly keys: { readonly p256dh: string; readonly auth: string };
   readonly createdAt: string;
-  /** Free-form label from the client, e.g. a device name. Never used for routing. */
+  readonly updatedAt: string;
+  readonly vapidFingerprint: string;
+  readonly configEpoch: number;
+  readonly preview: PushPreviewMode;
   readonly label?: string;
-}
-
-interface VapidKeys {
-  readonly publicKey: string;
-  readonly privateKey: string;
-  readonly subject: string;
-}
-
-interface PushState {
-  vapid: VapidKeys;
-  subscriptions: PushSubscriptionRecord[];
-}
-
-function nonEmpty(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
-function validState(value: unknown): value is PushState {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const state = value as Partial<PushState>;
-  if (!state.vapid || typeof state.vapid !== 'object') return false;
-  if (!nonEmpty(state.vapid.publicKey) || !nonEmpty(state.vapid.privateKey) || !nonEmpty(state.vapid.subject)) return false;
-  return Array.isArray(state.subscriptions) && state.subscriptions.every((subscription) =>
-    !!subscription && typeof subscription === 'object'
-      && nonEmpty(subscription.endpoint)
-      && !!subscription.keys && typeof subscription.keys === 'object'
-      && nonEmpty(subscription.keys.p256dh) && nonEmpty(subscription.keys.auth)
-      && nonEmpty(subscription.createdAt)
-      && (subscription.label === undefined || typeof subscription.label === 'string'));
-}
-
-function preservedStateError(file: string, reason: string): Error {
-  return new Error(
-    `Existing push state ${file} is ${reason}; it was left unchanged. `
-      + 'Restore valid push.json contents, or move the file aside explicitly before restarting to initialize new VAPID keys.',
-  );
 }
 
 export interface PushEvent {
   readonly v: 1;
-  readonly kind: 'message' | 'file' | 'photo' | 'voice';
+  readonly kind: PushKind;
   readonly title: string;
   readonly body: string;
   readonly contact_id: string;
@@ -75,167 +32,494 @@ export interface PushEvent {
   readonly url: string;
 }
 
+export interface PushJob {
+  readonly id: string;
+  readonly identityCid: string;
+  readonly wireId: string;
+  readonly kind: PushKind;
+  readonly contactId: string;
+  readonly senderName?: string;
+  readonly createdAt: number;
+  readonly expiresAt: number;
+  readonly attempts: number;
+  readonly nextAttemptAt: number;
+  readonly targetBindingIds: string[];
+  readonly deliveredBindingIds: string[];
+  readonly status: 'pending' | 'sent' | 'dropped';
+  readonly sentCount: number;
+  readonly completedAt?: number;
+}
+
+interface VapidKeys {
+  publicKey: string;
+  privateKey: string;
+  subject: string;
+}
+
+interface IdentityPushState {
+  bindings: PushSubscriptionRecord[];
+  jobs: PushJob[];
+}
+
+interface PushStateV2 {
+  version: 2;
+  vapid: VapidKeys;
+  vapidFingerprint: string;
+  configEpoch: number;
+  identities: Record<string, IdentityPushState>;
+}
+
+interface LegacyPushState {
+  vapid: VapidKeys;
+  subscriptions: Array<{
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+    createdAt: string;
+    label?: string;
+  }>;
+}
+
+export interface PushStoreDependencies {
+  readonly sendNotification?: (
+    subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
+    payload: string,
+    options: { vapidDetails: VapidKeys },
+  ) => Promise<unknown>;
+}
+
+const MAX_BINDINGS = 32;
+const MAX_ENDPOINT_LENGTH = 2_048;
+const MAX_LABEL_LENGTH = 160;
+const MAX_JOBS_PER_IDENTITY = 4_096;
+const JOB_EXPIRY_MS = 24 * 60 * 60 * 1_000;
+const TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const MAX_ATTEMPTS = 6;
+
+function nonEmpty(value: unknown, max = Number.MAX_SAFE_INTEGER): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max;
+}
+
+function fingerprint(publicKey: string): string {
+  return createHash('sha256').update(publicKey).digest('base64url');
+}
+
+function base64urlBytes(value: unknown, length: number, field: string): string {
+  if (!nonEmpty(value, 256) || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error(`push subscription ${field} must be canonical base64url`);
+  }
+  const bytes = Buffer.from(value, 'base64url');
+  if (bytes.length !== length || bytes.toString('base64url') !== value) {
+    throw new Error(`push subscription ${field} has an invalid decoded length`);
+  }
+  return value;
+}
+
+function endpointUrl(value: unknown): string {
+  if (!nonEmpty(value, MAX_ENDPOINT_LENGTH)) throw new Error('push subscription endpoint is missing or too long');
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('push subscription endpoint must be a valid HTTPS URL');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) {
+    throw new Error('push subscription endpoint must be credential-free HTTPS without a fragment');
+  }
+  return value;
+}
+
+function previewMode(value: unknown): PushPreviewMode {
+  if (value === undefined) return 'full';
+  if (value !== 'full' && value !== 'private') throw new Error('push subscription preview must be full or private');
+  return value;
+}
+
+function validBinding(value: unknown): value is PushSubscriptionRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushSubscriptionRecord>;
+  try {
+    endpointUrl(row.endpoint);
+    base64urlBytes(row.keys?.p256dh, 65, 'p256dh');
+    base64urlBytes(row.keys?.auth, 16, 'auth');
+    previewMode(row.preview);
+  } catch {
+    return false;
+  }
+  return nonEmpty(row.bindingId, 128) && nonEmpty(row.createdAt, 64) && nonEmpty(row.updatedAt, 64)
+    && nonEmpty(row.vapidFingerprint, 128) && Number.isSafeInteger(row.configEpoch) && row.configEpoch! > 0
+    && (row.label === undefined || nonEmpty(row.label, MAX_LABEL_LENGTH));
+}
+
+function validJob(value: unknown): value is PushJob {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushJob>;
+  return nonEmpty(row.id, 2_048) && nonEmpty(row.identityCid, 512) && nonEmpty(row.wireId, 1_024)
+    && (row.kind === 'message' || row.kind === 'file' || row.kind === 'photo' || row.kind === 'voice')
+    && nonEmpty(row.contactId, 512) && (row.senderName === undefined || nonEmpty(row.senderName, 512))
+    && Number.isFinite(row.createdAt) && Number.isFinite(row.expiresAt) && Number.isSafeInteger(row.attempts)
+    && row.attempts! >= 0 && Number.isFinite(row.nextAttemptAt) && Array.isArray(row.targetBindingIds)
+    && row.targetBindingIds.length <= MAX_BINDINGS
+    && row.targetBindingIds.every((id) => nonEmpty(id, 128)) && Array.isArray(row.deliveredBindingIds)
+    && row.deliveredBindingIds.length <= MAX_BINDINGS
+    && row.deliveredBindingIds.every((id) => nonEmpty(id, 128))
+    && (row.status === 'pending' || row.status === 'sent' || row.status === 'dropped')
+    && Number.isSafeInteger(row.sentCount) && row.sentCount! >= 0
+    && (row.completedAt === undefined || Number.isFinite(row.completedAt));
+}
+
+function validVapid(value: unknown): value is VapidKeys {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const vapid = value as Partial<VapidKeys>;
+  try {
+    base64urlBytes(vapid.publicKey, 65, 'VAPID public key');
+    base64urlBytes(vapid.privateKey, 32, 'VAPID private key');
+    if (!nonEmpty(vapid.subject, 2_048)) return false;
+    const subject = new URL(vapid.subject);
+    return subject.protocol === 'mailto:' || subject.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validV2(value: unknown): value is PushStateV2 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Partial<PushStateV2>;
+  if (state.version !== 2 || !validVapid(state.vapid) || !nonEmpty(state.vapidFingerprint, 128)
+    || !Number.isSafeInteger(state.configEpoch) || state.configEpoch! < 1
+    || !state.identities || typeof state.identities !== 'object' || Array.isArray(state.identities)) return false;
+  return Object.entries(state.identities).every(([cid, identity]) => nonEmpty(cid, 512)
+    && !!identity && typeof identity === 'object'
+    && Array.isArray(identity.bindings) && identity.bindings.length <= MAX_BINDINGS && identity.bindings.every(validBinding)
+    && Array.isArray(identity.jobs) && identity.jobs.length <= MAX_JOBS_PER_IDENTITY
+    && identity.jobs.every((job) => validJob(job) && job.identityCid === cid));
+}
+
+function validLegacy(value: unknown): value is LegacyPushState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Partial<LegacyPushState>;
+  return validVapid(state.vapid) && Array.isArray(state.subscriptions) && state.subscriptions.length <= MAX_BINDINGS
+    && state.subscriptions.every((row) => {
+      try {
+        endpointUrl(row?.endpoint);
+        base64urlBytes(row?.keys?.p256dh, 65, 'p256dh');
+        base64urlBytes(row?.keys?.auth, 16, 'auth');
+      } catch {
+        return false;
+      }
+      return nonEmpty(row.createdAt, 64) && (row.label === undefined || nonEmpty(row.label, MAX_LABEL_LENGTH));
+    });
+}
+
+function preservedStateError(file: string, reason: string): Error {
+  return new Error(
+    `Existing push state ${file} is ${reason}; it was left unchanged. `
+      + 'Restore valid push.json contents, or move the file aside explicitly before restarting.',
+  );
+}
+
+function identityState(state: PushStateV2, cid: string): IdentityPushState {
+  return state.identities[cid] ??= { bindings: [], jobs: [] };
+}
+
+function privateEvent(event: PushEvent): PushEvent {
+  const body = event.kind === 'message' ? 'New message'
+    : event.kind === 'voice' ? 'New voice message'
+      : event.kind === 'photo' ? 'New photo' : 'New file';
+  return { ...event, title: 'ours messenger', body };
+}
+
 export class PushStore {
   private readonly file: string;
-  private state: PushState;
+  private readonly identityCid: string;
+  private readonly sendNotification: NonNullable<PushStoreDependencies['sendNotification']>;
+  private state: PushStateV2;
 
-  private constructor(file: string, state: PushState) {
+  private constructor(file: string, identityCid: string, state: PushStateV2, dependencies: PushStoreDependencies) {
     this.file = file;
+    this.identityCid = identityCid;
     this.state = state;
+    this.sendNotification = dependencies.sendNotification ?? ((subscription, payload, options) =>
+      webpush.sendNotification(subscription, payload, options));
   }
 
-  /**
-   * Load, or create on first run.
-   *
-   * THE VAPID PRIVATE KEY IS A CREDENTIAL and this file is written 0600. A
-   * self-hosted operator gets working push without generating anything by hand;
-   * one who wants to pin a key pair (so a reinstall does not invalidate every
-   * existing browser subscription) supplies it through the environment instead.
-   */
-  static open(stateDir: string, env: NodeJS.ProcessEnv = process.env): PushStore {
+  static open(
+    stateDir: string,
+    identityCidOrEnv: string | NodeJS.ProcessEnv = process.env,
+    envOrDependencies: NodeJS.ProcessEnv | PushStoreDependencies = process.env,
+    dependencies: PushStoreDependencies = {},
+  ): PushStore {
+    const identityCid = typeof identityCidOrEnv === 'string' ? identityCidOrEnv : 'legacy-default';
+    const env = typeof identityCidOrEnv === 'string' ? envOrDependencies as NodeJS.ProcessEnv : identityCidOrEnv;
+    const deps = typeof identityCidOrEnv === 'string' ? dependencies : envOrDependencies as PushStoreDependencies;
+    if (!nonEmpty(identityCid, 512)) throw new Error('push identity CID must be a non-empty bounded string');
+
     const file = join(stateDir, 'push.json');
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-
-    let state: PushState | undefined;
+    let parsed: PushStateV2 | LegacyPushState | undefined;
     try {
       const stat = lstatSync(file);
       if (!stat.isFile() || stat.isSymbolicLink()) throw preservedStateError(file, 'not a safe regular file');
-      let parsed: unknown;
+      let value: unknown;
       try {
-        parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+        value = JSON.parse(readFileSync(file, 'utf8')) as unknown;
       } catch (error) {
         throw preservedStateError(file, `corrupt or unreadable (${error instanceof Error ? error.message : String(error)})`);
       }
-      if (!validState(parsed)) throw preservedStateError(file, 'schema-invalid');
-      state = parsed;
+      if (validV2(value) || validLegacy(value)) parsed = value;
+      else throw preservedStateError(file, 'schema-invalid');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
-    const subject = env.OURS_MESSENGER_VAPID_SUBJECT ?? 'mailto:admin@localhost';
+    const subject = env.OURS_MESSENGER_VAPID_SUBJECT ?? parsed?.vapid.subject ?? 'mailto:admin@localhost';
     const envPublic = env.OURS_MESSENGER_VAPID_PUBLIC_KEY;
     const envPrivate = env.OURS_MESSENGER_VAPID_PRIVATE_KEY;
-
-    // A HALF-SUPPLIED PAIR IS AN ERROR, NOT A FALLBACK. Silently generating a
-    // fresh key because only one half was set would invalidate every subscription
-    // an operator was trying to preserve, and the symptom — pushes that vanish
-    // after a restart — names neither the cause nor this file.
     if ((envPublic === undefined) !== (envPrivate === undefined)) {
-      throw new Error(
-        'OURS_MESSENGER_VAPID_PUBLIC_KEY and OURS_MESSENGER_VAPID_PRIVATE_KEY must be set together or not at all.',
-      );
+      throw new Error('OURS_MESSENGER_VAPID_PUBLIC_KEY and OURS_MESSENGER_VAPID_PRIVATE_KEY must be set together or not at all.');
     }
+    const selected = envPublic && envPrivate
+      ? { publicKey: envPublic, privateKey: envPrivate, subject }
+      : parsed?.vapid
+        ? { ...parsed.vapid, subject }
+        : { ...webpush.generateVAPIDKeys(), subject };
+    if (!validVapid(selected)) {
+      throw new Error('Web Push VAPID keys or subject are invalid; use a canonical P-256 key pair and an HTTPS or mailto subject.');
+    }
+    const selectedFingerprint = fingerprint(selected.publicKey);
 
-    if (envPublic && envPrivate) {
-      state = { vapid: { publicKey: envPublic, privateKey: envPrivate, subject }, subscriptions: state?.subscriptions ?? [] };
-    } else if (!state?.vapid?.publicKey || !state?.vapid?.privateKey) {
-      const generated = webpush.generateVAPIDKeys();
-      state = { vapid: { ...generated, subject }, subscriptions: state?.subscriptions ?? [] };
+    let state: PushStateV2;
+    if (parsed && validV2(parsed)) {
+      const rotated = parsed.vapidFingerprint !== selectedFingerprint;
+      state = {
+        ...parsed,
+        vapid: selected,
+        vapidFingerprint: selectedFingerprint,
+        configEpoch: rotated ? parsed.configEpoch + 1 : parsed.configEpoch,
+      };
     } else {
-      state = { vapid: { ...state.vapid, subject }, subscriptions: state.subscriptions ?? [] };
+      const oldFingerprint = parsed ? fingerprint(parsed.vapid.publicKey) : selectedFingerprint;
+      const now = new Date().toISOString();
+      state = {
+        version: 2,
+        vapid: selected,
+        vapidFingerprint: selectedFingerprint,
+        configEpoch: 1,
+        identities: {
+          [identityCid]: {
+            bindings: (parsed?.subscriptions ?? []).map((row) => ({
+              bindingId: randomUUID(), endpoint: row.endpoint, keys: row.keys,
+              createdAt: row.createdAt, updatedAt: now, label: row.label,
+              vapidFingerprint: oldFingerprint, configEpoch: 1, preview: 'full',
+            })),
+            jobs: [],
+          },
+        },
+      };
     }
 
-    const store = new PushStore(file, state);
+    const store = new PushStore(file, identityCid, state, deps);
+    store.pruneTerminal(Date.now());
     store.persist();
     return store;
   }
 
   private persist(): void {
-    // Write-then-rename: a crash mid-write must not leave a truncated key pair
-    // behind, because the recovery from that is "every device re-subscribes".
     const tmp = `${this.file}.tmp`;
     writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
     chmodSync(tmp, 0o600);
     renameSync(tmp, this.file);
+    chmodSync(this.file, 0o600);
   }
 
-  /** The only half of the pair a browser is allowed to see. */
-  get publicKey(): string {
-    return this.state.vapid.publicKey;
+  get publicKey(): string { return this.state.vapid.publicKey; }
+  get publicConfig(): { publicKey: string; fingerprint: string; configEpoch: number } {
+    return { publicKey: this.publicKey, fingerprint: this.state.vapidFingerprint, configEpoch: this.state.configEpoch };
   }
+  get bindingCount(): number { return this.list().length; }
 
   list(): readonly PushSubscriptionRecord[] {
-    return this.state.subscriptions;
+    return identityState(this.state, this.identityCid).bindings.filter((row) =>
+      row.vapidFingerprint === this.state.vapidFingerprint && row.configEpoch === this.state.configEpoch);
   }
 
-  /** Idempotent on `endpoint`: re-subscribing a device replaces it, never duplicates it. */
-  subscribe(rec: Omit<PushSubscriptionRecord, 'createdAt'>): PushSubscriptionRecord {
-    const full: PushSubscriptionRecord = { ...rec, createdAt: new Date().toISOString() };
-    this.state.subscriptions = [...this.state.subscriptions.filter((s) => s.endpoint !== rec.endpoint), full];
+  hasBindings(): boolean { return this.bindingCount > 0; }
+
+  ensure(input: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+    label?: string;
+    preview?: PushPreviewMode;
+    bindingId?: string;
+  }): { bindingId: string; createdAt: string; fingerprint: string; configEpoch: number; preview: PushPreviewMode } {
+    const endpoint = endpointUrl(input.endpoint);
+    const p256dh = base64urlBytes(input.keys?.p256dh, 65, 'p256dh');
+    const auth = base64urlBytes(input.keys?.auth, 16, 'auth');
+    if (input.label !== undefined && (!nonEmpty(input.label, MAX_LABEL_LENGTH) || /[\u0000-\u001f\u007f]/.test(input.label))) {
+      throw new Error(`push subscription label must be at most ${MAX_LABEL_LENGTH} safe characters`);
+    }
+    const owner = identityState(this.state, this.identityCid);
+    const previous = owner.bindings.find((row) => row.endpoint === endpoint)
+      ?? (input.bindingId ? owner.bindings.find((row) => row.bindingId === input.bindingId) : undefined);
+    const preview = input.preview === undefined ? previous?.preview ?? 'full' : previewMode(input.preview);
+    if (!previous && owner.bindings.length >= MAX_BINDINGS) throw new Error(`push subscription limit is ${MAX_BINDINGS}`);
+    const createdAt = previous?.createdAt ?? new Date().toISOString();
+    const bindingId = previous?.bindingId ?? randomUUID();
+    const record: PushSubscriptionRecord = {
+      bindingId, endpoint, keys: { p256dh, auth }, label: input.label,
+      createdAt, updatedAt: new Date().toISOString(), preview,
+      vapidFingerprint: this.state.vapidFingerprint, configEpoch: this.state.configEpoch,
+    };
+    owner.bindings = owner.bindings.filter((row) => row.bindingId !== bindingId && row.endpoint !== endpoint);
+    owner.bindings.push(record);
     this.persist();
-    return full;
+    return { bindingId, createdAt, fingerprint: record.vapidFingerprint, configEpoch: record.configEpoch, preview };
   }
 
-  /** Returns whether anything was actually removed, so the route can answer honestly. */
-  unsubscribe(endpoint: string): boolean {
-    const before = this.state.subscriptions.length;
-    this.state.subscriptions = this.state.subscriptions.filter((s) => s.endpoint !== endpoint);
-    const removed = this.state.subscriptions.length !== before;
+  delete(bindingId: string): boolean {
+    if (!nonEmpty(bindingId, 128)) return false;
+    const owner = identityState(this.state, this.identityCid);
+    const before = owner.bindings.length;
+    owner.bindings = owner.bindings.filter((row) => row.bindingId !== bindingId);
+    const removed = owner.bindings.length !== before;
     if (removed) this.persist();
     return removed;
   }
 
-  /**
-   * Send one event to every subscription.
-   *
-   * 404 AND 410 PRUNE THE SUBSCRIPTION. That is the push service telling us the
-   * endpoint is permanently gone — the user cleared site data, or the browser
-   * rotated it. Retrying those forever is how a self-hosted server ends up
-   * spending every wake-up POSTing to dead endpoints, and it is the one failure
-   * mode of this role that gets worse rather than louder over time.
-   *
-   * Every other failure is left in place and reported: a 500 from a push service,
-   * or a network blip, must not cost a real device its subscription.
-   */
-  async send(event: PushEvent): Promise<{ sent: number; pruned: number; failed: number; errors: string[] }> {
-    const payload = JSON.stringify(event);
-    const vapidDetails = {
-      subject: this.state.vapid.subject,
-      publicKey: this.state.vapid.publicKey,
-      privateKey: this.state.vapid.privateKey,
-    };
+  /** Compatibility for old callers; new REST deletes only by opaque binding id. */
+  unsubscribe(endpoint: string): boolean {
+    const owner = identityState(this.state, this.identityCid);
+    const before = owner.bindings.length;
+    owner.bindings = owner.bindings.filter((row) => row.endpoint !== endpoint);
+    const removed = owner.bindings.length !== before;
+    if (removed) this.persist();
+    return removed;
+  }
 
+  enqueueJob(input: { wireId: string; kind: PushKind; contactId: string; senderName?: string }, now = Date.now()): boolean {
+    if (!nonEmpty(input.wireId, 1_024) || !nonEmpty(input.contactId, 512)
+      || (input.senderName !== undefined && !nonEmpty(input.senderName, 512))) {
+      throw new Error('push job correlation metadata is invalid or too long');
+    }
+    const targets = this.list().map((row) => row.bindingId);
+    if (targets.length === 0) return false;
+    const id = `${this.identityCid}:${input.wireId}:${input.kind}`;
+    const owner = identityState(this.state, this.identityCid);
+    this.pruneTerminal(now);
+    if (owner.jobs.some((job) => job.id === id)) return false;
+    if (owner.jobs.length >= MAX_JOBS_PER_IDENTITY) return false;
+    owner.jobs.push({
+      id, identityCid: this.identityCid, wireId: input.wireId, kind: input.kind,
+      contactId: input.contactId, senderName: input.senderName,
+      createdAt: now, expiresAt: now + JOB_EXPIRY_MS, attempts: 0, nextAttemptAt: now,
+      targetBindingIds: targets, deliveredBindingIds: [], status: 'pending', sentCount: 0,
+    });
+    this.persist();
+    return true;
+  }
+
+  dueJobs(now = Date.now()): PushJob[] {
+    return identityState(this.state, this.identityCid).jobs
+      .filter((job) => job.status === 'pending' && job.nextAttemptAt <= now)
+      .map((job) => ({ ...job, targetBindingIds: [...job.targetBindingIds], deliveredBindingIds: [...job.deliveredBindingIds] }));
+  }
+
+  nextJobDelay(now = Date.now()): number | null {
+    const pending = identityState(this.state, this.identityCid).jobs.filter((job) => job.status === 'pending');
+    if (pending.length === 0) return null;
+    return Math.max(0, Math.min(...pending.map((job) => job.nextAttemptAt)) - now);
+  }
+
+  retryJob(jobId: string, now = Date.now(), random: () => number = Math.random): boolean {
+    const job = identityState(this.state, this.identityCid).jobs.find((row) => row.id === jobId);
+    if (!job || job.status !== 'pending') return false;
+    const attempts = job.attempts + 1;
+    if (attempts >= MAX_ATTEMPTS || now >= job.expiresAt) {
+      Object.assign(job, { attempts, status: 'dropped', completedAt: now });
+      this.persist();
+      return false;
+    }
+    const base = Math.min(60_000, 1_000 * (2 ** (attempts - 1)));
+    const jitter = Math.floor(base * 0.25 * Math.max(0, Math.min(1, random())));
+    Object.assign(job, { attempts, nextAttemptAt: Math.min(job.expiresAt, now + base + jitter) });
+    this.persist();
+    return true;
+  }
+
+  async dispatchJob(jobId: string, event: PushEvent, now = Date.now(), random: () => number = Math.random): Promise<{
+    sent: number; pruned: number; retried: number; dropped: number;
+  }> {
+    const owner = identityState(this.state, this.identityCid);
+    const job = owner.jobs.find((row) => row.id === jobId);
+    if (!job || job.status !== 'pending') return { sent: 0, pruned: 0, retried: 0, dropped: 0 };
+    const completed = new Set(job.deliveredBindingIds);
+    const targets = job.targetBindingIds
+      .map((id) => owner.bindings.find((binding) => binding.bindingId === id))
+      .filter((binding): binding is PushSubscriptionRecord => !!binding && !completed.has(binding.bindingId)
+        && binding.vapidFingerprint === this.state.vapidFingerprint && binding.configEpoch === this.state.configEpoch);
     let sent = 0;
-    let failed = 0;
-    const dead: string[] = [];
-    // THE REASON, NOT JUST THE COUNT. An earlier version returned `failed: 1` and
-    // nothing else; the first time a push failed in a test the only evidence was
-    // "1 subscription(s) failed (kept for retry)", which names neither the status
-    // nor the endpoint nor the library's message. A counter without a cause turns
-    // a five-second diagnosis into a bisect.
-    const errors: string[] = [];
-
-    await Promise.all(
-      this.list().map(async (sub) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } },
-            payload,
-            { vapidDetails },
-          );
-          sent++;
-        } catch (e) {
-          const status = (e as { statusCode?: number }).statusCode;
-          if (status === 404 || status === 410) {
-            dead.push(sub.endpoint);
-          } else {
-            failed++;
-            // The endpoint's ORIGIN only. A full push endpoint is a capability —
-            // anyone holding it can send that device notifications — and this
-            // string goes to a log file.
-            let origin = 'unparseable-endpoint';
-            try {
-              origin = new URL(sub.endpoint).origin;
-            } catch {
-              /* keep the placeholder */
-            }
-            errors.push(`${origin}: ${status ?? 'no status'}: ${(e as Error).message}`);
-          }
+    let pruned = 0;
+    let dropped = 0;
+    let transient = 0;
+    const dead = new Set<string>();
+    await Promise.all(targets.map(async (binding) => {
+      try {
+        const payload = JSON.stringify(binding.preview === 'private' ? privateEvent(event) : event);
+        await this.sendNotification(
+          { endpoint: binding.endpoint, keys: binding.keys }, payload,
+          { vapidDetails: { ...this.state.vapid } },
+        );
+        completed.add(binding.bindingId);
+        sent++;
+      } catch (error) {
+        const status = (error as { statusCode?: number }).statusCode;
+        if (status === 404 || status === 410) {
+          completed.add(binding.bindingId);
+          dead.add(binding.bindingId);
+          pruned++;
+        } else if (status === undefined || status === 429 || status >= 500) {
+          transient++;
+        } else {
+          completed.add(binding.bindingId);
+          dropped++;
         }
-      }),
-    );
+      }
+    }));
+    if (dead.size) owner.bindings = owner.bindings.filter((binding) => !dead.has(binding.bindingId));
+    Object.assign(job, { deliveredBindingIds: [...completed], sentCount: job.sentCount + sent });
+    const outstanding = job.targetBindingIds.some((id) => !completed.has(id) && owner.bindings.some((binding) => binding.bindingId === id));
+    if (outstanding && transient) {
+      this.persist();
+      const retried = this.retryJob(job.id, now, random) ? transient : 0;
+      return { sent, pruned, retried, dropped: dropped + (retried ? 0 : transient) };
+    }
+    Object.assign(job, { status: job.sentCount > 0 ? 'sent' : 'dropped', completedAt: now });
+    this.persist();
+    return { sent, pruned, retried: 0, dropped };
+  }
 
-    for (const endpoint of dead) this.unsubscribe(endpoint);
-    return { sent, pruned: dead.length, failed, errors };
+  queueStats(): { pending: number; sent: number; dropped: number; depth: number } {
+    const jobs = identityState(this.state, this.identityCid).jobs;
+    return {
+      pending: jobs.filter((job) => job.status === 'pending').length,
+      sent: jobs.filter((job) => job.status === 'sent').length,
+      dropped: jobs.filter((job) => job.status === 'dropped').length,
+      depth: jobs.length,
+    };
+  }
+
+  private pruneTerminal(now: number): void {
+    for (const identity of Object.values(this.state.identities)) {
+      identity.jobs = identity.jobs.filter((job) => job.status === 'pending'
+        || job.completedAt === undefined || now - job.completedAt <= TERMINAL_RETENTION_MS);
+    }
+  }
+
+  /** Compatibility for tests/old callers; durable production delivery uses jobs. */
+  async send(event: PushEvent): Promise<{ sent: number; pruned: number; failed: number; errors: string[] }> {
+    const wire = `compat-${randomUUID()}`;
+    this.enqueueJob({ wireId: wire, kind: event.kind, contactId: event.contact_id });
+    const id = `${this.identityCid}:${wire}:${event.kind}`;
+    const result = await this.dispatchJob(id, event);
+    return { sent: result.sent, pruned: result.pruned, failed: result.retried + result.dropped, errors: [] };
   }
 }

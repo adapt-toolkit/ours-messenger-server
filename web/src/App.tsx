@@ -4,8 +4,11 @@ import { connectEvents } from './events.js';
 import { canMarkRead, ReadCoordinator } from './readGate.js';
 import { chatPath, parseRoute, type AppRoute } from './router.js';
 import { appReducer, initialState, pageFor, selectedContactCid, type AppAction, type AppState } from './store.js';
-import type { BuildInfoView, InviteView, MediaRecord, PushState, ServerEvent } from './types.js';
-import { currentPushState, disablePush, enablePush, registerMessengerWorker, type WorkerState } from './pwa.js';
+import type { BuildInfoView, InviteView, MediaRecord, PushPreviewMode, PushView, ServerEvent } from './types.js';
+import {
+  activateWorkerUpdate, clearPushNotifications, currentPushState, disablePush, enablePush,
+  registerMessengerWorker, repairPush, startForegroundHeartbeat, type WorkerState,
+} from './pwa.js';
 import { ChatList, Conversation } from './ui/Chats.js';
 import type { ChatMessage } from './ui/chatTypes.js';
 import { clearMediaRecords, configureMediaProvider, filePreviewLabel, registerMediaRecords } from './ui/fileStore.js';
@@ -120,7 +123,7 @@ export function AppShell() {
   const [dark, setDark] = useState(() => localStorage.getItem(DARK_KEY) !== '0');
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [worker, setWorker] = useState<WorkerState>({ supported: false, offline: !navigator.onLine, updateAvailable: false, registration: null });
-  const [push, setPush] = useState<PushState>('unsupported');
+  const [push, setPush] = useState<PushView>({ status: 'unsupported', preview: 'full' });
   const [pushBusy, setPushBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const { toasts, push: pushToast, dismiss: dismissToast, clear: clearToasts } = useMessageToasts();
@@ -238,18 +241,37 @@ export function AppShell() {
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
-    void registerMessengerWorker((next) => { setWorker(next); void currentPushState(next.registration).then(setPush); })
+    void registerMessengerWorker((next) => {
+      setWorker(next);
+      void currentPushState(next.registration).then(setPush).catch(() =>
+        setPush((current) => ({ ...current, status: 'error' })));
+    })
       .then((stop) => { cleanup = stop; }).catch(showError);
     const prompt = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
     window.addEventListener('beforeinstallprompt', prompt);
     return () => { cleanup?.(); window.removeEventListener('beforeinstallprompt', prompt); };
   }, [showError]);
 
+  useEffect(() => startForegroundHeartbeat(), []);
+
+  useEffect(() => {
+    const repairRequired = () => setPush((current) => ({ ...current, status: 'error' }));
+    window.addEventListener('ours-push-repair-required', repairRequired);
+    return () => window.removeEventListener('ours-push-repair-required', repairRequired);
+  }, []);
+
   useEffect(() => {
     if (window.location.pathname === '/') window.history.replaceState(null, '', chatPath());
     desktop.current = window.matchMedia('(min-width: 861px)');
     const onRoute = () => dispatch({ type: 'route', route: parseRoute(window.location.pathname) });
-    const onVisible = () => { const cid = selectedContactCid(stateRef.current); if (cid) void markVisibleRead(cid); };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const cid = selectedContactCid(stateRef.current);
+      if (cid) void markVisibleRead(cid);
+      void clearPushNotifications();
+      if (worker.registration) void currentPushState(worker.registration).then(setPush).catch(() =>
+        setPush((current) => ({ ...current, status: 'error' })));
+    };
     window.addEventListener('popstate', onRoute);
     document.addEventListener('visibilitychange', onVisible);
     const disconnect = connectEvents((event: ServerEvent) => {
@@ -277,7 +299,7 @@ export function AppShell() {
     }, (connection) => dispatch({ type: 'connection', connection }));
     void refreshSnapshot().then((cid) => { if (cid) void markVisibleRead(cid); });
     return () => { disconnect(); window.removeEventListener('popstate', onRoute); document.removeEventListener('visibilitychange', onVisible); };
-  }, [converge, convergeFile, dispatch, markVisibleRead, pushToast, refreshContacts, refreshSnapshot, showError]);
+  }, [converge, convergeFile, dispatch, markVisibleRead, pushToast, refreshContacts, refreshSnapshot, showError, worker.registration]);
 
   const go = (route: AppRoute, path: string, mobileDetailOpen?: boolean) => {
     window.history.pushState(null, '', path);
@@ -306,11 +328,15 @@ export function AppShell() {
   const selectedView = viewContacts.find((item) => item.id === selectedCid) ?? null;
   const messages = selectedCid ? timeline(pageFor(state, selectedCid), files[selectedCid] ?? []) : [];
   const identity = state.identity;
-  const togglePush = async (enable: boolean) => {
+  const updatePush = async (action: 'enable' | 'disable' | 'repair', preview: PushPreviewMode = push.preview) => {
     if (!worker.registration) return;
-    setPushBusy(true); setPush('busy');
-    try { setPush(await (enable ? enablePush(worker.registration) : disablePush(worker.registration))); }
-    catch (error) { setPush('error'); showError(error); }
+    setPushBusy(true); setPush((current) => ({ ...current, status: 'repairing', preview }));
+    try {
+      setPush(await (action === 'enable' ? enablePush(worker.registration, { preview })
+        : action === 'repair' ? repairPush(worker.registration, preview)
+          : disablePush(worker.registration, push)));
+    }
+    catch (error) { setPush((current) => ({ ...current, status: 'error' })); showError(error); }
     finally { setPushBusy(false); }
   };
   const openInvites = () => {
@@ -355,13 +381,13 @@ export function AppShell() {
       <div className="app-banners">
         {worker.offline && <div className="banner warn">Offline — reconnecting to the network…</div>}
         {state.connection !== 'live' && <div className="banner warn">{state.connection === 'retrying' ? 'Live updates interrupted — reconnecting…' : 'Connecting to live updates…'}</div>}
-        {worker.updateAvailable && <div className="banner info">A new version is available.<span className="banner-actions"><button className="linkbtn" onClick={() => { worker.registration?.waiting?.postMessage({ type: 'SKIP_WAITING' }); location.reload(); }}>Restart now</button></span></div>}
+        {worker.updateAvailable && <div className="banner info">A new version is available.<span className="banner-actions"><button className="linkbtn" onClick={() => { if (worker.registration) void activateWorkerUpdate(worker.registration); }}>Restart now</button></span></div>}
         {state.contacts.pending.map((pending) => <div className="banner info" key={pending.container_id}>Introduction from {pending.name} · {pending.queued} queued<span className="banner-actions"><button className="linkbtn" onClick={() => void api.respondToIntroduction(pending.container_id, 'approve').then(refreshSnapshot).catch(showError)}>Approve</button><button className="linkbtn quiet" onClick={() => void api.respondToIntroduction(pending.container_id, 'reject').then(refreshSnapshot).catch(showError)}>Reject</button></span></div>)}
         <MessageToasts items={toasts} onDismiss={dismissToast} onOpen={(cid) => void selectContact(cid)} />
       </div>
       {menuOpen && <><div className="pop-backdrop" onClick={() => setMenuOpen(false)} /><div className="menu command-menu"><div className="menu-head"><div className="avatar accent lg">{initials(identity.name)}</div><div><strong>{identity.name}</strong><div className="faint mono">@{shortCid(identity.cid)}</div></div></div><button className="menu-item" onClick={() => { setMenuOpen(false); openInvites(); }}><Icon name="plus" />Invite a contact</button><button className="menu-item" onClick={() => { setMenuOpen(false); setModal('settings'); }}><Icon name="settings" />Settings</button></div></>}
       {modal === 'invite' && <InviteModal identity={identity} invites={invites} onRefresh={async () => setInvites(await api.invites())} onCreate={async (mode, name) => { const result = await api.createInvite(mode, name); return result.blob; }} onAccept={async (invite, name) => { await api.addContact(invite, name); await refreshSnapshot(); }} onRevoke={async (id) => { await api.revokeInvite(id); }} onClose={() => { setModal(null); void refreshSnapshot(); }} />}
-      {modal === 'settings' && <SettingsModal identity={identity} push={push} workerSupported={worker.supported} busy={pushBusy} offline={worker.offline} updateAvailable={worker.updateAvailable} build={build} dark={dark} onToggleDark={() => setDark((value) => { localStorage.setItem(DARK_KEY, value ? '0' : '1'); return !value; })} onSaveBio={async (bio) => { await api.setBio(bio); await refreshSnapshot(); }} onTogglePush={togglePush} onReloadUpdate={() => { worker.registration?.waiting?.postMessage({ type: 'SKIP_WAITING' }); location.reload(); }} onClose={() => { modalRef.current = null; setModal(null); if (selectedCid) void markVisibleRead(selectedCid); }} />}
+      {modal === 'settings' && <SettingsModal identity={identity} push={push} workerSupported={worker.supported} busy={pushBusy} offline={worker.offline} updateAvailable={worker.updateAvailable} build={build} dark={dark} onToggleDark={() => setDark((value) => { localStorage.setItem(DARK_KEY, value ? '0' : '1'); return !value; })} onSaveBio={async (bio) => { await api.setBio(bio); await refreshSnapshot(); }} onPushAction={updatePush} onReloadUpdate={() => { if (worker.registration) void activateWorkerUpdate(worker.registration); }} onClose={() => { modalRef.current = null; setModal(null); if (selectedCid) void markVisibleRead(selectedCid); }} />}
       {state.error && <div className="banner error">{state.error}<button className="linkbtn" onClick={() => dispatch({ type: 'error', message: null })}>dismiss</button></div>}
     </div>
   </div>;

@@ -148,16 +148,48 @@ never injected into the main application DOM.
 
 ## Web Push privacy boundary
 
-Push is an explicit browser opt-in. A notification contains the canonical full
-message text or file/photo/voice label plus a dialog click-through path. Standard
-Web Push content encryption protects the payload to the subscribed browser, and
-VAPID authenticates this server to the push service.
+Push is an explicit browser opt-in. Full preview (the default) contains the
+canonical sender and message text or file/photo/voice label; private preview
+contains generic content. Both include only a validated same-origin dialog path.
+Standard Web Push content encryption protects the payload to the subscribed
+browser, and VAPID authenticates this server to the push service.
 
 This is not the ours end-to-end peer channel. The push provider observes routing
 and delivery metadata, while the browser/device can reveal decrypted text on its
 lock screen. Settings states this before subscription. Push failure never stops
 the upstream watcher, and generating a notification never consumes or marks a
 message read.
+
+`push.json` is a versioned, atomic, owner-only (`0600`) messenger store. VAPID
+keys and browser bindings are scoped by the startup-bound identity CID. Public
+routes expose only the VAPID public key, fingerprint/config epoch, and opaque
+binding acknowledgements; endpoints and subscription keys never round-trip in
+responses or logs. Subscription mutations require the normal exact Origin and
+CSRF intent checks, plus a 16 KiB body cap, strict HTTPS/base64url/key-size
+validation, per-identity binding limits, and per-client rate limiting. VAPID
+rotation advances the configuration epoch so stale devices enter Repair rather
+than appearing active.
+
+The watcher creates a durable deduplicated job keyed by identity CID, wire ID,
+and kind, containing correlation metadata but no content. Delivery re-projects
+canonical SDK state on every attempt. Jobs resume after restart, expire after a
+bounded retry window, and use exponential backoff with jitter. A 404/410 prunes
+the dead binding; 429, 5xx, and network failures retry. A job with no current
+binding is not created. Identity separation applies to bindings and jobs.
+
+The service worker performs a bounded live-client query before deciding whether
+to show a notification: a visible non-iOS client suppresses it, while an
+installed iOS client always shows it because background liveness is unreliable.
+Malformed payloads degrade to generic text. Click URLs reject protocol-relative
+and cross-origin targets, then focus/navigate a matching window or open a new
+one. Badge state is cleared when the app becomes visible. Subscription repair is
+requested on worker rotation and `pushsubscriptionchange`.
+
+The application owns subscription validation, Origin/CSRF enforcement, safe
+URLs, identity isolation, and secret redaction. Public-user authentication is a
+separate deployment responsibility; loopback is the default and non-loopback
+exposure requires an authenticated reverse proxy and the exact configured
+origin.
 
 ## PWA cache boundary
 

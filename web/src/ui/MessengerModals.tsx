@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BuildInfoView, IdentityView, InviteView, PushState } from '../types.js';
+import type { BuildInfoView, IdentityView, InviteView, PushPreviewMode, PushView } from '../types.js';
+import { pushGuidance } from '../pwa.js';
 import DialogShell from './DialogShell.js';
 import { Icon } from './icons.js';
 import { QRDisplay } from './QRDisplay.js';
@@ -94,7 +95,7 @@ export function InviteModal(props: {
 
 export function SettingsModal(props: {
   identity: IdentityView;
-  push: PushState;
+  push: PushView;
   workerSupported: boolean;
   busy: boolean;
   offline: boolean;
@@ -103,23 +104,42 @@ export function SettingsModal(props: {
   dark: boolean;
   onToggleDark(): void;
   onSaveBio(bio: string): Promise<void>;
-  onTogglePush(enable: boolean): Promise<void>;
+  onPushAction(action: 'enable' | 'disable' | 'repair', preview?: PushPreviewMode): Promise<void>;
   onReloadUpdate(): void;
   onClose(): void;
 }) {
   const [bio, setBio] = useState(props.identity.bio ?? '');
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pushCopy = !props.workerSupported || props.push === 'unsupported' ? 'Unavailable — requires a secure browser with service-worker support.'
-    : props.push === 'blocked' ? 'Blocked in browser settings. Allow notifications there, then return.'
-      : props.push === 'subscribed' ? 'On — this browser is subscribed.'
-        : props.push === 'error' ? 'Could not update notifications. Try again.' : 'Off — enable for this browser.';
+  const [preview, setPreview] = useState<PushPreviewMode>(props.push.preview);
+  const guidance = pushGuidance();
+  const pushCopy = !props.workerSupported || props.push.status === 'unsupported' ? guidance ?? 'Unavailable — requires a secure browser with service-worker support.'
+    : props.push.status === 'needs-permission' ? guidance ?? 'Needs permission — allow notifications, then choose Enable or Repair.'
+      : props.push.status === 'on' ? 'On — this browser and the server agree on the current Web Push configuration.'
+        : props.push.status === 'repairing' ? 'Repairing — checking the browser subscription and server acknowledgement…'
+          : props.push.status === 'error' ? 'Repair needed — the browser and server could not confirm the same subscription.'
+            : 'Off — enable notifications for this browser.';
   return <DialogShell title="Settings" onClose={props.onClose} wide>
     <div><span className="lbl">Display name</span><input className="field" readOnly value={props.identity.name} /></div>
     <div><span className="lbl">Your address</span><input className="field mono" readOnly value={props.identity.cid} onFocus={(event) => event.currentTarget.select()} /><p className="muted">Your public address on ours. Share an invite to connect more easily.</p></div>
     <div><span className="lbl">Public bio</span><textarea className="field" rows={3} value={bio} onChange={(event) => { setBio(event.target.value); setSaved(false); setError(null); }} /><button className="btn sm" onClick={() => { setError(null); void props.onSaveBio(bio).then(() => setSaved(true)).catch((reason) => setError(String(reason))); }}>{saved ? 'Saved' : 'Save bio'}</button>{error && <p className="onb-error">{error}</p>}</div>
     <label style={{ display: 'flex', gap: 9 }}><input type="checkbox" checked={props.dark} onChange={props.onToggleDark} /> Dark mode</label>
-    <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}><h4>Notifications</h4><p className={props.push === 'blocked' || props.push === 'error' ? 'onb-error' : 'muted'}>{pushCopy}</p><button className={props.push === 'subscribed' ? 'btn' : 'btn primary'} disabled={props.busy || !props.workerSupported || props.push === 'blocked' || props.push === 'unsupported'} onClick={() => void props.onTogglePush(props.push !== 'subscribed')}>{props.busy ? 'Updating…' : props.push === 'subscribed' ? 'Disable notifications' : 'Enable notifications'}</button></div>
+    <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+      <h4>Notifications</h4>
+      <p className={props.push.status === 'needs-permission' || props.push.status === 'error' ? 'onb-error' : 'muted'}>{pushCopy}</p>
+      {guidance && guidance !== pushCopy && <p className="muted" data-testid="push-platform-guidance">{guidance}</p>}
+      <fieldset style={{ border: 0, padding: 0, margin: '12px 0' }}>
+        <legend className="lbl">Lock-screen preview</legend>
+        <label style={{ display: 'block', marginTop: 7 }}><input type="radio" name="push-preview" checked={preview === 'full'} onChange={() => setPreview('full')} /> Full — sender and message text or filename</label>
+        <label style={{ display: 'block', marginTop: 7 }}><input type="radio" name="push-preview" checked={preview === 'private'} onChange={() => setPreview('private')} /> Private — generic content only</label>
+      </fieldset>
+      <p className="muted">Full previews can expose sender names, message text, and filenames on the lock screen. The push provider still sees delivery endpoint, timing, and payload size metadata in either mode.</p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {props.push.status === 'on'
+          ? <><button className="btn" disabled={props.busy} onClick={() => void props.onPushAction('disable', preview)}>Disable notifications</button><button className="btn" disabled={props.busy} onClick={() => void props.onPushAction('repair', preview)}>Repair</button>{preview !== props.push.preview && <button className="btn primary" disabled={props.busy} onClick={() => void props.onPushAction('enable', preview)}>Save preview</button>}</>
+          : <button className="btn primary" disabled={props.busy || !props.workerSupported || props.push.status === 'unsupported'} onClick={() => void props.onPushAction(props.push.status === 'error' || props.push.blocked ? 'repair' : 'enable', preview)}>{props.busy ? 'Repairing…' : props.push.status === 'error' || props.push.blocked ? 'Repair' : 'Enable notifications'}</button>}
+      </div>
+    </div>
     <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}><h4>App status</h4><p className="muted">{props.offline ? 'Offline shell active. Message and identity data are never cached.' : 'Online.'}</p>{props.updateAvailable && <button className="btn primary" onClick={props.onReloadUpdate}>Reload to update</button>}</div>
     <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}><h4>Build</h4><input className="field mono" readOnly value={props.build ? `${props.build.version} · ${props.build.sha}` : 'Loading…'} /></div>
   </DialogShell>;

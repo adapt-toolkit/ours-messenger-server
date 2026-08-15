@@ -35,6 +35,7 @@ import { publicEngineError, publicInternalError } from './security.js';
 export const API_PREFIX = '/api/';
 export const MAX_HTTP_BODY_BYTES = 32 * 1024 * 1024;
 export const MAX_INLINE_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_PUSH_BODY_BYTES = 16 * 1024;
 
 export interface ApiDeps {
   readonly runtime: Runtime;
@@ -111,7 +112,7 @@ function outcomeWireId(value: unknown): string | undefined {
   return typeof wireId === 'string' && wireId ? wireId : undefined;
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(req: IncomingMessage, maxBytes = MAX_HTTP_BODY_BYTES): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const c of req) {
@@ -119,7 +120,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
     // A cap, because this process has no auth in front of it and an unbounded
     // body is the cheapest way to take a self-hosted box down. sendFile's
     // base64 path is the largest legitimate body, hence 32 MiB rather than 1.
-    if (bytes > MAX_HTTP_BODY_BYTES) throw new HttpError(413, 'request body too large (32 MiB cap)');
+    if (bytes > maxBytes) throw new HttpError(413, `request body too large (${maxBytes} byte cap)`);
     chunks.push(c as Buffer);
   }
   if (bytes === 0) return {};
@@ -133,6 +134,25 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
     throw bad('body must be a JSON object');
   }
   return parsed as Record<string, unknown>;
+}
+
+const pushMutationWindows = new WeakMap<PushStore, Map<string, { startedAt: number; count: number }>>();
+const MAX_PUSH_RATE_CLIENTS = 1_024;
+function requirePushMutationRate(store: PushStore, req: IncomingMessage, now = Date.now()): void {
+  const key = req.socket.remoteAddress ?? 'unknown';
+  const windows = pushMutationWindows.get(store) ?? new Map<string, { startedAt: number; count: number }>();
+  pushMutationWindows.set(store, windows);
+  if (!windows.has(key) && windows.size >= MAX_PUSH_RATE_CLIENTS) {
+    for (const [address, window] of windows) {
+      if (now - window.startedAt >= 60_000) windows.delete(address);
+    }
+    if (windows.size >= MAX_PUSH_RATE_CLIENTS) throw new HttpError(429, 'push mutation rate limit exceeded');
+  }
+  const existing = windows.get(key);
+  const current = !existing || now - existing.startedAt >= 60_000 ? { startedAt: now, count: 0 } : existing;
+  current.count++;
+  windows.set(key, current);
+  if (current.count > 30) throw new HttpError(429, 'push mutation rate limit exceeded');
 }
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
@@ -555,9 +575,10 @@ const ROUTES: Record<string, Handler> = {
   },
 
   // ---- push: the one endpoint that is genuinely new ------------------------
-  'GET /api/push/vapid-public-key': async ({ deps }) => ({ publicKey: deps.push.publicKey }),
+  'GET /api/push/vapid-public-key': async ({ deps }) => ({ ...deps.push.publicConfig }),
 
-  'POST /api/push/subscribe': async ({ deps, body }) => {
+  'POST /api/push/subscriptions/ensure': async ({ deps, body, req }) => {
+    requirePushMutationRate(deps.push, req);
     const keys = body.keys;
     if (keys === null || typeof keys !== 'object' || Array.isArray(keys)) {
       throw bad('keys must be an object with p256dh and auth');
@@ -566,18 +587,30 @@ const ROUTES: Record<string, Handler> = {
     if (typeof k.p256dh !== 'string' || typeof k.auth !== 'string') {
       throw bad('keys.p256dh and keys.auth must be strings');
     }
-    const saved = deps.push.subscribe({
-      endpoint: str(body, 'endpoint'),
-      keys: { p256dh: k.p256dh, auth: k.auth },
-      label: optStr(body, 'label'),
-    });
-    // Endpoint and keys are both capabilities; neither belongs in a response.
-    return { subscribed: true, createdAt: saved.createdAt };
+    let saved: ReturnType<PushStore['ensure']>;
+    try {
+      saved = deps.push.ensure({
+        endpoint: str(body, 'endpoint'),
+        keys: { p256dh: k.p256dh, auth: k.auth },
+        label: optStr(body, 'label'),
+        preview: body.preview === undefined ? undefined : str(body, 'preview') as 'full' | 'private',
+        bindingId: optStr(body, 'binding_id'),
+      });
+    } catch {
+      throw bad('push subscription is malformed or exceeds configured limits');
+    }
+    // Endpoint and keys are capabilities; only the opaque server identifier and
+    // public VAPID generation metadata may cross back into the browser.
+    return {
+      status: 'on', binding_id: saved.bindingId, createdAt: saved.createdAt,
+      fingerprint: saved.fingerprint, configEpoch: saved.configEpoch, preview: saved.preview,
+    };
   },
 
-  'POST /api/push/unsubscribe': async ({ deps, body }) => ({
-    removed: deps.push.unsubscribe(str(body, 'endpoint')),
-  }),
+  'POST /api/push/subscriptions/delete': async ({ deps, body, req }) => {
+    requirePushMutationRate(deps.push, req);
+    return { removed: deps.push.delete(str(body, 'binding_id')) };
+  },
 
   // ---- state & build info --------------------------------------------------
   'GET /api/state': async ({ deps, client }) => {
@@ -587,7 +620,8 @@ const ROUTES: Record<string, Handler> = {
       keepHistory: deps.config.keepHistory,
       runtime: { ownership: 'embedded-sdk', mcp: false },
       watcher: deps.watcherStats(),
-      pushSubscriptions: deps.push.list().length,
+      pushSubscriptions: deps.push.bindingCount,
+      pushQueue: deps.push.queueStats(),
     };
   },
 
@@ -650,7 +684,10 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       sendJson(res, 404, { error: { code: 'NO_SUCH_ROUTE', message: 'No such route' } });
       return;
     }
-    const body = method === 'GET' || method === 'HEAD' ? {} : await readJsonBody(req);
+    const body = method === 'GET' || method === 'HEAD' ? {} : await readJsonBody(
+      req,
+      url.pathname.startsWith('/api/push/') ? MAX_PUSH_BODY_BYTES : MAX_HTTP_BODY_BYTES,
+    );
     const out = await ROUTES[hit.key]({
       deps,
       client: deps.runtime.client,
@@ -671,6 +708,7 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       const code = e.status === 403 ? 'FORBIDDEN'
         : e.status === 415 ? 'UNSUPPORTED_MEDIA_TYPE'
           : e.status === 413 ? 'PAYLOAD_TOO_LARGE'
+            : e.status === 429 ? 'RATE_LIMITED'
             : 'BAD_REQUEST';
       sendJson(res, e.status, { error: { code, message: e.message } });
     } else if (e instanceof ConversationPageError) {

@@ -1,5 +1,6 @@
 import type {
   BuildInfoView, ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
+  PushPreviewMode,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -108,12 +109,16 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
       request<unknown>('/api/contacts/introductions', {
         method: 'POST', body: JSON.stringify({ contact, action }),
       }),
-    vapidPublicKey: () => request<{ publicKey: string }>('/api/push/vapid-public-key'),
-    subscribePush: (subscription: PushSubscriptionJSON, label?: string) => request<unknown>('/api/push/subscribe', {
-      method: 'POST', body: JSON.stringify({ ...subscription, ...(label ? { label } : {}) }),
+    vapidPublicKey: () => request<{ publicKey: string; fingerprint: string; configEpoch: number }>('/api/push/vapid-public-key'),
+    ensurePush: (subscription: PushSubscriptionJSON & {
+      label?: string; preview?: PushPreviewMode; binding_id?: string;
+    }) => request<{
+      status: 'on'; binding_id: string; fingerprint: string; configEpoch: number; preview: PushPreviewMode;
+    }>('/api/push/subscriptions/ensure', {
+      method: 'POST', body: JSON.stringify(subscription),
     }),
-    unsubscribePush: (endpoint: string) => request<{ removed: boolean }>('/api/push/unsubscribe', {
-      method: 'POST', body: JSON.stringify({ endpoint }),
+    deletePush: (bindingId: string) => request<{ removed: boolean }>('/api/push/subscriptions/delete', {
+      method: 'POST', body: JSON.stringify({ binding_id: bindingId }),
     }),
   };
 }

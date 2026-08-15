@@ -121,6 +121,9 @@ OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger
 OURS_MESSENGER_BROKER_URL        default wss://broker1.ours.network
 OURS_MESSENGER_KEEP_HISTORY      default true
 OURS_MESSENGER_FORCE             default false
+OURS_MESSENGER_VAPID_PUBLIC_KEY  optional; must be paired with the private key
+OURS_MESSENGER_VAPID_PRIVATE_KEY optional secret; never expose to the browser
+OURS_MESSENGER_VAPID_SUBJECT     default mailto:admin@localhost
 ```
 
 The production build is an installable React 18 + TypeScript PWA emitted by Vite under
@@ -178,19 +181,46 @@ and unknown formats are opaque attachments with `nosniff` and a sandboxing CSP.
 
 ## WebPush
 
-Web Push is an explicit per-browser opt-in in Settings. The server sends a full
-notification label/body and dialog click-through URL, encrypted to the browser
-with the standard Web Push content-encoding contract and signed with VAPID. The
-upstream watcher and SSE stream remain non-consuming and metadata-only, so push
-delivery cannot mark a message read. Web Push is separate from the ours
-end-to-end channel: the push provider observes delivery metadata, and the device
-may display decrypted notification text on its lock screen. The UI states this
-before subscription.
+Web Push is an explicit per-browser opt-in in Settings. The default `Full`
+preview sends the canonical sender and message text or filename; `Private`
+sends only a generic message/file/photo/voice label. The payload and safe
+same-origin dialog path are encrypted to the browser with the standard Web Push
+content-encoding contract and signed with VAPID. The upstream watcher and SSE
+stream remain non-consuming and metadata-only, so push delivery cannot mark a
+message read. Web Push is separate from the ours end-to-end channel: the push
+provider observes endpoint, timing, and payload-size metadata, and the device
+may display the decrypted preview on its lock screen. The UI states this before
+permission is requested.
+
+The browser state is server-acknowledged: `Off`, `Needs permission`,
+`Repairing`, or `On`. A browser is not shown as On until its current
+subscription and VAPID generation have been acknowledged by the server. VAPID
+rotation makes old bindings repair-required; Repair performs one controlled
+unsubscribe/resubscribe. Disable converges both the server binding and browser
+subscription. On iOS, install the site to the Home Screen before enabling push.
+
+Delivery jobs are durable, identity-scoped metadata keyed by authenticated
+sender CID, wire ID, and event kind. They never persist message text or file
+contents. Each attempt re-reads the canonical SDK projection; restart resumes
+pending work, duplicate watcher events converge to one job, 404/410 responses
+prune dead bindings, and transient network/429/5xx responses use bounded
+backoff with jitter and expiry. Push failures do not stop the watcher.
 
 An absent `push.json` is initialized on first run. An existing file that is
-unreadable, malformed, or schema-invalid aborts startup without rewriting keys
-or subscriptions; the error identifies the preserved path and requires the
+unreadable, malformed, or schema-invalid aborts startup without rewriting keys,
+bindings, or jobs; the error identifies the preserved path and requires the
 operator to restore it or explicitly move it aside before a new state is made.
+The file is written atomically with mode `0600`. Back up the stable state root;
+losing or rotating its VAPID private key requires every browser to repair its
+subscription.
+
+Production prerequisites are an accurate system clock, outbound HTTPS access to
+browser push services, a stable writable owner-only state directory, an exact
+`OURS_MESSENGER_PUBLIC_ORIGIN`, and HTTPS at the public browser origin (localhost
+is the development exception). This application enforces same-origin, CSRF,
+input bounds, identity isolation, and secret redaction. It does not authenticate
+public users: any non-loopback deployment still requires an authenticated
+reverse proxy. No nginx or other proxy-specific configuration is assumed.
 
 ## REST surface
 

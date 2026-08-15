@@ -90,7 +90,7 @@ try {
     const requests = (await Promise.all(keys.map(async (key) => (await caches.open(key)).keys()))).flat();
     return { keys, urls: requests.map((request) => new URL(request.url).pathname).sort() };
   });
-  assert.ok(cacheFacts.keys.includes('ours-messenger-shell-v1'));
+  assert.ok(cacheFacts.keys.includes('ours-messenger-shell-v2'));
   assert.ok(cacheFacts.urls.includes('/chats'));
   assert.ok(cacheFacts.urls.includes('/manifest.webmanifest'));
   assert.equal(cacheFacts.urls.some((path) => path.startsWith('/api/')), false, 'API responses never enter Cache Storage');
@@ -216,9 +216,11 @@ try {
   await appPage.setViewportSize({ width: 390, height: 844 });
   await appPage.locator('.detail-back').click();
   await appPage.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
-  await appPage.getByRole('heading', { name: 'Notifications' }).waitFor();
-  assert.equal(await appPage.getByText(/requires a secure browser/i).isVisible(), true,
-    'mobile reaches Settings → notifications and clearly explains unsupported push');
+  const notificationsHeading = appPage.getByRole('heading', { name: 'Notifications' });
+  await notificationsHeading.waitFor();
+  const notificationsCopy = await notificationsHeading.locator('..').innerText();
+  assert.match(notificationsCopy, /requires a current secure browser|requires a secure browser|allow notifications.*choose Repair/is,
+    'mobile reaches Settings → notifications and clearly explains why push is unavailable');
   await appPage.screenshot({ path: '/tmp/ours-messenger-mobile-dark.png' });
   await appContext.close();
 
