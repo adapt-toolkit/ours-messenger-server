@@ -202,7 +202,12 @@ try {
   await appPage.screenshot({ path: '/tmp/ours-messenger-mobile-dark.png' });
   await appContext.close();
 
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  const closingServer = new Promise((resolveClose, rejectClose) =>
+    server.close((error) => error ? rejectClose(error) : resolveClose()));
+  // Chromium may retain an otherwise-idle HTTP connection after the mobile
+  // screenshot. Close it explicitly so the offline reload gate is deterministic.
+  server.closeAllConnections?.();
+  await closingServer;
   await page.reload({ waitUntil: 'domcontentloaded' });
   const offlineFacts = {
     root: await page.locator('#root').count(),

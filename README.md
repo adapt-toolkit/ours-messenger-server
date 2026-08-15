@@ -40,12 +40,21 @@ throws the typed `INITIALIZATION_REQUIRED` error before creating a directory,
 lock, token, registrar, or listener. Once identities exist, a misspelled
 configured name remains a hard non-mutating SDK error.
 
-Startup is transactional after `startDaemon()` returns: binding, push-store,
-watcher or public-listen failure closes the public server if present, stops the
-watcher, releases the lease, and closes the runtime. Normal `close()` is
-idempotent and uses the same ordered path. Tests require both loopback ports,
-listening server handles, and advisory ownership to be released afterward; OS signal
-listener ownership is enforced by the SDK lifecycle gate described below.
+After that preflight, a lightweight worker owns the public port while the
+potentially CPU-bound persisted-identity restore runs on the main event loop.
+During this startup gate only `/api/build-info` returns 200;
+`/api/healthz` returns an explicit `status=starting` 503, and every other API
+request returns 503 before body parsing or SDK access. Once runtime restore,
+identity binding, retention policy, push/media stores, and the watcher are
+ready, the worker closes and the full server takes over the same port before
+startup completes.
+
+Startup remains transactional: any runtime, binding, store, watcher, or listener
+failure closes the public server if present, stops the watcher, releases the
+lease, and closes the runtime. Normal `close()` is idempotent and uses the same
+ordered path. Tests require both loopback ports, listening server handles, and
+advisory ownership to be released afterward; OS signal listener ownership is
+enforced by the SDK lifecycle gate described below.
 
 ## Running
 
@@ -189,9 +198,11 @@ Routes live under `/api/`; `src/api.ts` is the executable route list. Principal
 routes include identity/contact/invite operations, conversation snapshots,
 explicit read, text/file mutations, per-dialog media inventory and explicit
 incoming fetch, owner-only media download, WebPush routes, `/api/state`,
-`/api/healthz`, `/api/build-info`, and `/api/events`. Health returns 200 only when
-the owned runtime responds before its deadline with the startup-bound identity
-CID; failures use one fixed 503 shape. State excludes runtime paths, broker,
+`/api/healthz`, `/api/build-info`, and `/api/events`. During startup, build
+metadata is available while health returns a fixed `status=starting` 503. After
+the readiness transition, health returns 200 only when the owned runtime responds
+before its deadline with the startup-bound identity CID; failures use one fixed
+503 shape. State excludes runtime paths, broker,
 internal port and token provenance. Build metadata is injected by `build.mjs` as
 the full Git SHA plus clean/dirty provenance; `OURS_MESSENGER_RELEASE_BUILD=1`
 refuses dirty tracked or untracked source. Unknown `/api/*` routes remain JSON

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { serveApi, type ApiDeps } from './api.js';
 import { bindIdentity, startRuntime, type Runtime } from './daemon.js';
 import { MessengerEventBus } from './events.js';
@@ -21,6 +22,12 @@ export interface ServerHandle {
   readonly runtime: Runtime;
   close(): Promise<void>;
 }
+
+export interface StartDependencies {
+  readonly startRuntime: typeof startRuntime;
+}
+
+const DEFAULT_START_DEPENDENCIES: StartDependencies = { startRuntime };
 
 const log = {
   info: (message: string) => console.log(`[messenger] ${message}`),
@@ -133,23 +140,168 @@ async function closeHttp(http: Server | undefined): Promise<void> {
   await new Promise<void>((resolveClose) => http.close(() => resolveClose()));
 }
 
+interface StartupProbe {
+  readonly port: number;
+  close(): Promise<void>;
+}
+
+// The SDK's persisted-packet restore can occupy the main event loop for tens of
+// seconds. A server created on that loop owns a socket but cannot answer HTTP,
+// so the bounded startup contract lives in a worker until the full API is ready.
+const STARTUP_PROBE_SOURCE = String.raw`
+const { createServer } = require('node:http');
+const { parentPort, workerData } = require('node:worker_threads');
+
+const sendJson = (req, res, status, value) => {
+  const body = Buffer.from(JSON.stringify(value));
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'content-length': String(body.length),
+    'cache-control': 'no-store',
+    connection: 'close',
+  });
+  res.end(req.method === 'HEAD' ? undefined : body);
+};
+
+const server = createServer((req, res) => {
+  const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+  const method = req.method || 'GET';
+  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', connection: 'close' });
+    res.end('Not found');
+    return;
+  }
+  if ((method === 'GET' || method === 'HEAD') && pathname === '/api/build-info') {
+    sendJson(req, res, 200, workerData.buildInfo);
+    return;
+  }
+  if ((method === 'GET' || method === 'HEAD') && pathname === '/api/healthz') {
+    sendJson(req, res, 503, {
+      status: 'starting',
+      message: 'Service unavailable',
+      version: workerData.buildInfo.version,
+      sha: workerData.buildInfo.sha,
+    });
+    return;
+  }
+  sendJson(req, res, 503, {
+    error: { code: 'SERVICE_UNAVAILABLE', message: 'Service unavailable' },
+  });
+});
+
+server.listen(workerData.port, workerData.host, () => {
+  const address = server.address();
+  parentPort.postMessage({
+    type: 'listening',
+    port: address && typeof address === 'object' ? address.port : workerData.port,
+  });
+});
+
+parentPort.on('message', (message) => {
+  if (message !== 'close') return;
+  server.close(() => {
+    parentPort.postMessage({ type: 'closed' });
+    parentPort.close();
+  });
+  server.closeAllConnections?.();
+});
+`;
+
+async function startStartupProbe(
+  cfg: MessengerConfig,
+  buildInfo: BuildInfo,
+): Promise<StartupProbe> {
+  const worker = new Worker(STARTUP_PROBE_SOURCE, {
+    eval: true,
+    workerData: { host: cfg.host, port: cfg.port, buildInfo: { ...buildInfo } },
+  });
+  let alive = true;
+  let closing = false;
+  let failure: Error | undefined;
+  let closePromise: Promise<void> | undefined;
+  worker.on('error', (error) => { failure = error; });
+  worker.on('exit', (code) => {
+    alive = false;
+    if (!closing && !failure) failure = new Error(`startup readiness worker exited early (code ${code})`);
+  });
+
+  const port = await new Promise<number>((resolveReady, rejectReady) => {
+    const onMessage = (message: { type?: string; port?: number }): void => {
+      if (message?.type !== 'listening' || !Number.isInteger(message.port)) return;
+      cleanup();
+      resolveReady(message.port!);
+    };
+    const onError = (error: Error): void => { cleanup(); rejectReady(error); };
+    const onExit = (code: number): void => {
+      cleanup();
+      rejectReady(failure ?? new Error(`startup readiness worker exited before listen (code ${code})`));
+    };
+    const cleanup = (): void => {
+      worker.off('message', onMessage);
+      worker.off('error', onError);
+      worker.off('exit', onExit);
+    };
+    worker.on('message', onMessage);
+    worker.once('error', onError);
+    worker.once('exit', onExit);
+  });
+
+  return {
+    port,
+    close() {
+      if (closePromise) return closePromise;
+      closing = true;
+      closePromise = (async () => {
+        if (!alive) throw failure ?? new Error('startup readiness worker exited before handoff');
+        await new Promise<void>((resolveClose, rejectClose) => {
+          const onMessage = (message: { type?: string }): void => {
+            if (message?.type !== 'closed') return;
+            cleanup();
+            resolveClose();
+          };
+          const onError = (error: Error): void => { cleanup(); rejectClose(error); };
+          const onExit = (code: number): void => {
+            cleanup();
+            rejectClose(failure ?? new Error(`startup readiness worker exited during close (code ${code})`));
+          };
+          const cleanup = (): void => {
+            worker.off('message', onMessage);
+            worker.off('error', onError);
+            worker.off('exit', onExit);
+          };
+          worker.on('message', onMessage);
+          worker.once('error', onError);
+          worker.once('exit', onExit);
+          worker.postMessage('close');
+        });
+        await worker.terminate();
+      })();
+      return closePromise;
+    },
+  };
+}
+
 export async function start(
   cfg: MessengerConfig,
   buildInfo: BuildInfo,
+  dependencies: StartDependencies = DEFAULT_START_DEPENDENCIES,
 ): Promise<ServerHandle> {
   let runtime: Runtime | undefined;
   let watcher: WatcherHandle | undefined;
   let events: MessengerEventBus | undefined;
   let http: Server | undefined;
+  let startupProbe: StartupProbe | undefined;
   let closed = false;
 
   const cleanup = async (): Promise<void> => {
     if (closed) return;
     closed = true;
 
-    // Stop accepting public work first, while the runtime still exists to finish
-    // any request already inside the handler.
+    // Stop accepting public work or startup probes first, while the runtime
+    // still exists to finish any request already inside the full API handler.
     await closeHttp(http).catch((error) => reportFailure(log.warn, 'HTTP close', error));
+    await startupProbe?.close().catch((error) => reportFailure(log.warn, 'startup probe close', error));
+    startupProbe = undefined;
     await watcher?.stop().catch((error) => reportFailure(log.warn, 'watcher stop', error));
     watcher = undefined;
     events?.close();
@@ -169,7 +321,19 @@ export async function start(
     // This read-only gate precedes owned-runtime configuration. An empty serve
     // therefore creates no directory, lock, token, registrar, or listener.
     assertStateInitializedForServe(cfg);
-    runtime = await startRuntime(cfg, buildInfo);
+
+    startupProbe = await startStartupProbe(cfg, buildInfo);
+    const port = startupProbe.port;
+    log.info('public HTTP startup probe ready');
+    if (cfg.host !== '127.0.0.1' && cfg.host !== 'localhost' && cfg.host !== '::1') {
+      log.warn(
+        'BOUND TO A NON-LOOPBACK INTERFACE. This server has NO AUTHENTICATION. ' +
+          'Anyone who can reach this port can read every conversation and send as the configured identity. ' +
+          'Put a reverse proxy with auth in front of it, or bind 127.0.0.1.',
+      );
+    }
+
+    runtime = await dependencies.startRuntime(cfg, buildInfo);
     log.info('owned runtime ready');
 
     const bound = await bindIdentity(runtime, cfg);
@@ -184,7 +348,7 @@ export async function start(
     events = new MessengerEventBus();
     watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media });
 
-    const deps: ApiDeps = {
+    const readyDeps: ApiDeps = {
       runtime,
       push,
       config: cfg,
@@ -215,7 +379,7 @@ export async function start(
         return;
       }
       serving = pathname === '/api' || pathname.startsWith('/api/')
-        ? serveApi(req, res, deps)
+        ? serveApi(req, res, readyDeps)
         : serveApp(req, res, appDir);
       void serving.catch((error: Error) => {
         const publicError = publicInternalError(error, 'unhandled request', log.warn);
@@ -228,24 +392,19 @@ export async function start(
       });
     });
 
+    // The startup worker owns the port while main-thread packet restore is
+    // running. Close it only after every full-API dependency exists, then bind
+    // the production server to the same port before declaring readiness.
+    await startupProbe.close();
+    startupProbe = undefined;
     await new Promise<void>((resolveListen, reject) => {
       http!.once('error', reject);
-      http!.listen(cfg.port, cfg.host, () => {
+      http!.listen(port, cfg.host, () => {
         http!.removeListener('error', reject);
         resolveListen();
       });
     });
-
-    const address = http.address();
-    const port = typeof address === 'object' && address ? address.port : cfg.port;
-    log.info('public HTTP listener ready');
-    if (cfg.host !== '127.0.0.1' && cfg.host !== 'localhost' && cfg.host !== '::1') {
-      log.warn(
-        'BOUND TO A NON-LOOPBACK INTERFACE. This server has NO AUTHENTICATION. ' +
-          'Anyone who can reach this port can read every conversation and send as the configured identity. ' +
-          'Put a reverse proxy with auth in front of it, or bind 127.0.0.1.',
-      );
-    }
+    log.info('service ready');
 
     return { port, runtime, close: cleanup };
   } catch (error) {

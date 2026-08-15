@@ -32,11 +32,17 @@ path.
 ## Ownership and lifecycle
 
 Messenger holds an advisory file lock on its runtime state for the process
-lifetime. Startup is transactional: a bind, push-store, watcher, or listener
-failure closes every completed stage. Ordered shutdown closes the public server,
-watcher/SSE fan-out, identity lease, and embedded daemon. The SDK is started with
-`handleSignals: false`, so the host exclusively owns signal handling and process
-exit.
+lifetime. After a read-only persisted-state preflight, a lightweight worker
+owns the public port so build provenance and negative readiness remain
+observable even while CPU-bound packet restore occupies the main event loop. Its
+startup gate returns 503 for health and every other API route; it has no SDK
+client and cannot touch identity state. After restore, identity bind, stores,
+and watcher are all ready, the full server takes over the same port. Startup is
+transactional: a runtime, bind, push-store, watcher, or listener failure closes
+every completed stage. Ordered shutdown closes the public server, watcher/SSE
+fan-out, identity lease, and embedded daemon. The SDK is started with
+`handleSignals: false`, so the host exclusively owns signal handling and
+process exit.
 
 `serve` never creates identities. Offline `init` creates and verifies exactly one
 Human/root identity and records its stable CID in `initialization.json`. Offline
