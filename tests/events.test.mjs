@@ -96,4 +96,28 @@ await handle.stop();
 watched.close();
 assert.equal(handle.stats.reconnects, 1);
 
+const fileBus = new MessengerEventBus();
+const fileEvents = fileBus.subscribe(2);
+let durableEnqueues = 0;
+const fileHandle = startWatcher(
+  { listIncomingFiles: async () => { throw new Error('canonical projection is temporarily behind'); } },
+  'Me',
+  { send: async () => ({ sent: 0, pruned: 0, failed: 0, errors: [] }) },
+  { info() {}, warn() {} },
+  fileBus,
+  {
+    delivery: { enqueue() { durableEnqueues++; return true; } },
+    media: { reconcileIncoming() { throw new Error('must not reach reconciliation'); } },
+    watch: () => (async function* () {
+      yield { event: 'file_received', sender_id: 'CID-A', wire_id: 'FILE-LAG', date: 'D4' };
+    })(),
+    wait: (_ms, signal) => new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true })),
+  },
+);
+assert.equal((await fileEvents.next()).type, 'file_received');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(durableEnqueues, 1, 'file push work is durable before best-effort media projection can fail');
+await fileHandle.stop();
+fileEvents.close();
+
 console.log('events OK — normalized metadata, redaction, bounded fan-out, reconnect, push coexistence');

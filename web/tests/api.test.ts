@@ -35,19 +35,28 @@ assert.deepEqual(JSON.parse(String(fileMutation.body)), {
 await client.fetchFiles(['FILE-WIRE']);
 assert.deepEqual(JSON.parse(String(calls[3].init?.body)), { wire_ids: ['FILE-WIRE'] });
 
-await client.subscribePush({ endpoint: 'https://push.example/device', keys: { p256dh: 'P', auth: 'A' } }, 'browser');
-assert.equal(calls[4].input, '/api/push/subscribe');
+await client.ensurePush({
+  endpoint: 'https://push.example/device', keys: { p256dh: 'P', auth: 'A' }, label: 'browser', preview: 'private',
+});
+assert.equal(calls[4].input, '/api/push/subscriptions/ensure');
+assert.deepEqual(JSON.parse(String(calls[4].init?.body)), {
+  endpoint: 'https://push.example/device', keys: { p256dh: 'P', auth: 'A' }, label: 'browser', preview: 'private',
+});
+
+await client.deletePush('opaque-binding');
+assert.equal(calls[5].input, '/api/push/subscriptions/delete');
+assert.deepEqual(JSON.parse(String(calls[5].init?.body)), { binding_id: 'opaque-binding' });
 
 await client.renameContact('CONTACT/A', 'Alice');
-assert.equal(calls[5].input, '/api/contacts/rename');
-assert.deepEqual(JSON.parse(String(calls[5].init?.body)), { contact: 'CONTACT/A', name: 'Alice' });
+assert.equal(calls[6].input, '/api/contacts/rename');
+assert.deepEqual(JSON.parse(String(calls[6].init?.body)), { contact: 'CONTACT/A', name: 'Alice' });
 await client.removeContact('CONTACT/A');
-assert.equal(calls[6].input, '/api/contacts/remove');
-assert.deepEqual(JSON.parse(String(calls[6].init?.body)), { contact: 'CONTACT/A' });
+assert.equal(calls[7].input, '/api/contacts/remove');
+assert.deepEqual(JSON.parse(String(calls[7].init?.body)), { contact: 'CONTACT/A' });
 
 await client.conversation('CONTACT/A', 'WIRE/51');
 assert.equal(
-  calls[7].input,
+  calls[8].input,
   '/api/conversations/CONTACT%2FA/page?limit=50&before=WIRE%2F51',
   'older history uses the server cursor and encodes both identifiers',
 );

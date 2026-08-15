@@ -10,6 +10,7 @@ import { serveApi, type ApiDeps } from './api.js';
 import { bindIdentity, startRuntime, type Runtime } from './daemon.js';
 import { MessengerEventBus } from './events.js';
 import { PushStore } from './push.js';
+import { PushDeliveryQueue } from './push-delivery.js';
 import { startWatcher, type WatcherHandle } from './watch.js';
 import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
@@ -309,6 +310,7 @@ export async function start(
 ): Promise<ServerHandle> {
   let runtime: Runtime | undefined;
   let watcher: WatcherHandle | undefined;
+  let delivery: PushDeliveryQueue | undefined;
   let events: MessengerEventBus | undefined;
   let http: Server | undefined;
   let startupProbe: StartupProbe | undefined;
@@ -325,6 +327,8 @@ export async function start(
     startupProbe = undefined;
     await watcher?.stop().catch((error) => reportFailure(log.warn, 'watcher stop', error));
     watcher = undefined;
+    await delivery?.stop().catch((error) => reportFailure(log.warn, 'push delivery stop', error));
+    delivery = undefined;
     events?.close();
 
     if (runtime) {
@@ -360,21 +364,25 @@ export async function start(
     const bound = await bindIdentity(runtime, cfg);
     log.info(`bound identity ready (keep_history=${bound.keepHistory})`);
 
-    const push = PushStore.open(cfg.stateDir);
-    log.info(`push state ready (${push.list().length} subscription(s))`);
+    const push = PushStore.open(cfg.stateDir, bound.cid);
+    log.info(`push state ready (${push.bindingCount} active subscription(s), queue=${push.queueStats().pending})`);
 
     const media = MediaStore.open(cfg.stateDir);
     log.info(`media index ready (${media.list().length} file(s))`);
 
     events = new MessengerEventBus();
-    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media });
+    delivery = new PushDeliveryQueue({ store: push, client: runtime.client, identityCid: bound.cid, log });
+    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media, delivery });
 
     const readyDeps: ApiDeps = {
       runtime,
       push,
       config: cfg,
       buildInfo,
-      watcherStats: () => ({ ...(watcher?.stats ?? { pushes: 0, events: 0, reconnects: 0 }) }),
+      watcherStats: () => ({
+        ...(watcher?.stats ?? { pushes: 0, events: 0, reconnects: 0 }),
+        ...(delivery?.stats ?? { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0 }),
+      }),
       events,
       identityCid: bound.cid,
       media,

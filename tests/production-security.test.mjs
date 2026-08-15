@@ -60,7 +60,13 @@ function makeDeps(client = {}) {
         mcp: false,
       },
     },
-    push: { publicKey: 'public', list: () => [], subscribe: () => ({}), unsubscribe: () => false },
+    push: {
+      publicConfig: { publicKey: 'public', fingerprint: 'public-fingerprint', configEpoch: 1 },
+      bindingCount: 0,
+      queueStats: () => ({ pending: 0, sent: 0, dropped: 0, depth: 0 }),
+      ensure: () => ({}),
+      delete: () => false,
+    },
     config: {
       host: '127.0.0.1', port: 0, identity: 'Me', force: false,
       stateDir: '/tmp/DO-NOT-EXPOSE', keepHistory: true,

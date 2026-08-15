@@ -27,6 +27,7 @@ import { MessengerEventBus, normalizeNotification } from './events.js';
 import type { PushEvent, PushStore } from './push.js';
 import type { MediaStore } from './media.js';
 import { reportFailure } from './security.js';
+import type { PushDeliveryQueue } from './push-delivery.js';
 
 export interface WatcherLog {
   info(msg: string): void;
@@ -47,6 +48,8 @@ export interface WatcherOptions {
   /** A successful probe defines "reattached" before the sync broadcast. */
   readonly probe?: () => Promise<unknown>;
   readonly media?: MediaStore;
+  /** Durable production delivery; direct PushStore.send remains a test seam. */
+  readonly delivery?: Pick<PushDeliveryQueue, 'enqueue'>;
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -155,10 +158,15 @@ export function startWatcher(
           events.publish(normalizeNotification(record));
 
           try {
+            // Persist the correlation job before any best-effort media index
+            // convergence. A temporarily unavailable canonical file projection
+            // must become a durable push retry, not a lost notification.
+            if (options.delivery) options.delivery.enqueue(record);
             if (record.event === 'file_received' && options.media) {
               const incoming = await client.listIncomingFiles();
               options.media.reconcileIncoming(incoming);
             }
+            if (options.delivery) continue;
             const event = await pushEventFor(client, record);
             if (!event) continue;
             const result = await push.send(event);
