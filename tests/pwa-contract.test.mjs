@@ -12,6 +12,7 @@ assert.match(sw, /ours-messenger-shell-__MESSENGER_BUILD_SHA__/, 'source cache i
 assert.match(sw, /self\.skipWaiting\(\)/, 'new workers activate without waiting for installed-PWA windows to close');
 assert.match(sw, /ours-update-lifecycle-probe/, 'a release bridge refreshes clients predating automatic controllerchange reload');
 assert.match(sw, /client\.navigate\(client\.url\)/, 'legacy stale clients are navigated onto the current shell once');
+assert.doesNotMatch(sw, /await client\.navigate\(/, 'activation never waits on a navigation that may itself wait for activation');
 assert.match(sw, /url\.pathname\.startsWith\('\/api\/'\)/, 'service worker bypasses every API/SSE request');
 assert.doesNotMatch(sw, /caches\.put\([^\n]*api/i, 'service worker never writes API responses to Cache Storage');
 assert.match(sw, /addEventListener\('push'/);

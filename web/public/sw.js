@@ -125,7 +125,10 @@ self.addEventListener('activate', (event) => {
         try { client.postMessage({ type: 'ours-update-lifecycle-probe' }, [channel.port2]); }
         catch { finish(false); }
       });
-      if (!supported && 'navigate' in client) await client.navigate(client.url).catch(() => null);
+      // Do not await navigate from inside `activate`: navigation may wait for
+      // activation to finish, so awaiting it here can deadlock into a blank
+      // client. Start it, then let this activation promise settle immediately.
+      if (!supported && 'navigate' in client) void client.navigate(client.url).catch(() => null);
     }));
   })());
 });
