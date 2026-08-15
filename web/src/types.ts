@@ -33,7 +33,7 @@ export interface PendingContactView {
 export interface ContactsResponse {
   contacts: ContactView[];
   pending: PendingContactView[];
-  roots?: Record<string, unknown>;
+  roots?: Record<string, { root_cid: string; root_name: string; role_id: string }>;
 }
 
 export interface ConversationMessage {
@@ -79,6 +79,7 @@ export interface InviteView {
   invite_id: string;
   mode: 'one_time' | 'public';
   assigned?: string;
+  created?: string;
 }
 
 export interface CreatedInvite {
@@ -87,6 +88,8 @@ export interface CreatedInvite {
   inviteId?: string;
   mode?: 'one_time' | 'public';
 }
+
+export interface BuildInfoView { name: string; version: string; sha: string; builtAt?: string }
 
 export interface MediaRecord {
   wire_id: string;

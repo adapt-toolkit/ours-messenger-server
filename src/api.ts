@@ -196,6 +196,7 @@ function publicIdentity(value: unknown): Readonly<Record<string, string>> {
   const out: Record<string, string> = {};
   if (typeof identity.cid === 'string') out.cid = identity.cid;
   if (typeof identity.name === 'string') out.name = identity.name;
+  if (typeof identity.bio === 'string') out.bio = identity.bio;
   return out;
 }
 
@@ -467,7 +468,7 @@ const ROUTES: Record<string, Handler> = {
   // ---- identity / profile --------------------------------------------------
   // The old browser surface called the read half `getProfileName`; the name is a
   // field on this result.
-  'GET /api/identity': async ({ client }) => client.currentIdentity(),
+  'GET /api/identity': async ({ client }) => publicIdentity(await client.currentIdentity()),
 
   'GET /api/identities': async ({ client }) => client.listIdentities(),
 

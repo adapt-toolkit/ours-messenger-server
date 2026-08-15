@@ -1,8 +1,17 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
-import './styles.css';
+import '@fontsource-variable/inter';
+import '@fontsource-variable/fraunces';
+import '@fontsource-variable/jetbrains-mono';
+import './theme.css';
+import './motion.css';
+import './app.css';
+import './onboarding.css';
+import './redesign.css';
+import './dark-v3.css';
+import './layout-v4.css';
 
-const root = document.getElementById('app');
-if (!root) throw new Error('missing #app root');
+const root = document.getElementById('root');
+if (!root) throw new Error('missing #root');
 
 createRoot(root).render(<App />);

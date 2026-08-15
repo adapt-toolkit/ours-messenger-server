@@ -52,6 +52,17 @@ assert.equal(
   'older history uses the server cursor and encodes both identifiers',
 );
 
+await client.setBio('Secure messenger profile');
+assert.equal(calls.at(-1)?.input, '/api/identity/bio');
+assert.deepEqual(JSON.parse(String(calls.at(-1)?.init?.body)), { bio: 'Secure messenger profile' });
+
+await client.createInvite('public', 'Community link');
+assert.equal(calls.at(-1)?.input, '/api/invites');
+assert.deepEqual(JSON.parse(String(calls.at(-1)?.init?.body)), { mode: 'public', name: 'Community link' });
+
+await client.buildInfo();
+assert.equal(calls.at(-1)?.input, '/api/build-info');
+
 const rejected = createApi(async () => new Response(
   JSON.stringify({ error: { code: 'BAD_REQUEST', message: 'text must be a non-empty string' } }),
   { status: 400 },

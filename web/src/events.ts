@@ -27,5 +27,6 @@ export function connectEvents(
   bind('sync_required');
   bind('message_received');
   bind('receipt_received');
+  bind('file_received');
   return () => source.close();
 }

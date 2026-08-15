@@ -1,5 +1,5 @@
 import type {
-  ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
+  BuildInfoView, ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -53,6 +53,10 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
 
   return {
     identity: () => request<IdentityView>('/api/identity'),
+    setBio: (bio: string) => request<unknown>('/api/identity/bio', {
+      method: 'POST', body: JSON.stringify({ bio }),
+    }),
+    buildInfo: () => request<BuildInfoView>('/api/build-info'),
     identities: () => request<IdentityTreeRow[]>('/api/identities'),
     contacts: () => request<ContactsResponse>('/api/contacts'),
     invites: () => request<InviteView[]>('/api/invites'),
@@ -84,8 +88,8 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
       method: 'POST', body: JSON.stringify({ wire_ids: wireIds }),
     }),
     mediaUrl: (wireId: string) => `/api/media/${encodeURIComponent(wireId)}`,
-    createInvite: (mode: 'one_time' | 'public' = 'one_time') =>
-      request<CreatedInvite>('/api/invites', { method: 'POST', body: JSON.stringify({ mode }) }),
+    createInvite: (mode: 'one_time' | 'public' = 'one_time', name?: string) =>
+      request<CreatedInvite>('/api/invites', { method: 'POST', body: JSON.stringify({ mode, ...(name ? { name } : {}) }) }),
     addContact: (invite: string, name?: string) =>
       request<unknown>('/api/contacts/add', {
         method: 'POST', body: JSON.stringify({ invite, ...(name ? { name } : {}) }),

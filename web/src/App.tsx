@@ -1,43 +1,103 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { api } from './api.js';
 import { connectEvents } from './events.js';
 import { canMarkRead, ReadCoordinator } from './readGate.js';
 import { chatPath, parseRoute, type AppRoute } from './router.js';
-import {
-  appReducer,
-  dialogKey,
-  initialState,
-  pageFor,
-  selectedContactCid,
-  selectedDialogKey,
-  type AppAction,
-  type AppState,
-} from './store.js';
-import type { IdentityTreeRow, InviteView, MediaRecord, PendingContactView, PushState, ServerEvent } from './types.js';
-import { ContactList } from './components/ContactList.js';
-import { Conversation } from './components/Conversation.js';
-import { IdentityHeader } from './components/IdentityHeader.js';
-import { InviteDialog } from './components/InviteDialog.js';
-import { SettingsDialog } from './components/SettingsDialog.js';
+import { appReducer, initialState, pageFor, selectedContactCid, type AppAction, type AppState } from './store.js';
+import type { BuildInfoView, InviteView, MediaRecord, PushState, ServerEvent } from './types.js';
 import { currentPushState, disablePush, enablePush, registerMessengerWorker, type WorkerState } from './pwa.js';
+import { ChatList, Conversation } from './ui/Chats.js';
+import type { ChatMessage } from './ui/chatTypes.js';
+import { clearMediaRecords, configureMediaProvider, filePreviewLabel, registerMediaRecords } from './ui/fileStore.js';
+import { fmtWhen, initials, type ContactVM, type RootMetaVM, shortCid } from './ui/viewmodel.js';
+import { Icon } from './ui/icons.js';
+import MessageToasts, { useMessageToasts } from './ui/MessageToast.js';
+import { InviteModal, SettingsModal } from './ui/MessengerModals.js';
 
 const convergenceDelays = [0, 100, 400, 1_000] as const;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const receiptRank = { delivered: 1, read: 2 } as const;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const DARK_KEY = 'ours-dark-v3';
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
-function publicError(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : 'The request could not be completed.';
+const publicError = (error: unknown) => error instanceof Error && error.message ? error.message : 'The request could not be completed.';
+
+function timeline(page: ReturnType<typeof pageFor>, media: readonly MediaRecord[]): ChatMessage[] {
+  const rows = new Map<string, ChatMessage>();
+  const legacy: ChatMessage[] = [];
+  for (const message of page?.messages ?? []) {
+    const normalized: ChatMessage = {
+      dir: message.dir, text: message.text, date: message.date, read: message.read,
+      wireId: message.wire_id, replyTo: message.reply_to ? { wireId: message.reply_to.wire_id } : null,
+      receipt: message.receipt ?? undefined,
+    };
+    if (message.wire_id) rows.set(message.wire_id, normalized); else legacy.push(normalized);
+  }
+  for (const file of media) {
+    const matching = rows.get(file.wire_id);
+    rows.set(file.wire_id, {
+      dir: file.dir,
+      text: '',
+      date: file.date,
+      read: matching?.read ?? file.dir === 'out',
+      wireId: file.wire_id,
+      replyTo: file.reply_to ? { wireId: file.reply_to.wire_id } : matching?.replyTo ?? null,
+      kind: 'file',
+      filename: file.filename,
+      mime: file.mime,
+      receipt: matching?.receipt,
+    });
+  }
+  return [...legacy, ...rows.values()].sort((a, b) => {
+    const delta = new Date(a.date).getTime() - new Date(b.date).getTime();
+    return Number.isNaN(delta) || delta === 0 ? a.wireId.localeCompare(b.wireId) : delta;
+  });
 }
 
-export function App() {
-  return <AppShell />;
+function rootViews(contacts: AppState['contacts']): Record<string, RootMetaVM> {
+  const result: Record<string, RootMetaVM> = {};
+  for (const root of Object.values(contacts.roots ?? {})) {
+    result[root.root_cid] = { label: root.root_name, note: 'Verified identity' };
+  }
+  return result;
 }
+
+function contactViews(state: AppState, media: Record<string, readonly MediaRecord[]>): ContactVM[] {
+  const active = state.contacts.contacts.map((contact) => {
+    const root = state.contacts.roots?.[contact.container_id];
+    const items = timeline(pageFor(state, contact.container_id), media[contact.container_id] ?? []);
+    const last = items.at(-1);
+    const page = pageFor(state, contact.container_id);
+    return {
+      id: contact.container_id,
+      name: contact.name,
+      announcedName: contact.name,
+      initials: initials(contact.name),
+      when: last ? fmtWhen(last.date) : '',
+      activityAt: last?.date ?? '',
+      last: last?.kind === 'file' ? filePreviewLabel(last.filename, last.mime) : last?.text ?? '',
+      unread: page?.unread ?? 0,
+      status: 'active' as const,
+      root: root?.root_cid ?? null,
+      sub: root ? `role “${root.role_id}” of ${root.root_name}` : '',
+      roleId: root?.role_id ?? null,
+      rootName: root?.root_name ?? null,
+      mine: false,
+      kind: root ? 'agent' as const : 'person' as const,
+    };
+  });
+  return [...active, ...state.contacts.pending.map((pending) => ({
+    id: `pending:${pending.container_id}`, name: pending.name, announcedName: pending.name,
+    initials: initials(pending.name), when: '', activityAt: '', last: `${pending.queued} queued · approval required`, unread: 0,
+    status: 'pending' as const, root: null, sub: '', roleId: null, rootName: null, mine: false, kind: 'person' as const,
+  }))];
+}
+
+export function App() { return <AppShell />; }
 
 export function AppShell() {
   const initial = useRef<AppState>(initialState(parseRoute(window.location.pathname))).current;
@@ -45,541 +105,257 @@ export function AppShell() {
   const stateRef = useRef(state);
   const reads = useRef(new ReadCoordinator());
   const desktop = useRef<MediaQueryList | null>(null);
-  const routeGeneration = useRef(0);
   const convergence = useRef(new Map<string, number>());
   const [files, setFiles] = useState<Record<string, readonly MediaRecord[]>>({});
-  const [fileBusy, setFileBusy] = useState<string | null>(null);
-  const [transferLabel, setTransferLabel] = useState<string | null>(null);
-  const [contactBusy, setContactBusy] = useState(false);
+  const filesRef = useRef(files);
   const [historyBusy, setHistoryBusy] = useState<string | null>(null);
   const historyLoads = useRef(new Set<string>());
-  const [identities, setIdentities] = useState<readonly IdentityTreeRow[]>([]);
+  const [modal, setModal] = useState<'invite' | 'settings' | null>(null);
+  const modalRef = useRef(modal);
   const [invites, setInvites] = useState<readonly InviteView[]>([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [build, setBuild] = useState<BuildInfoView | null>(null);
+  const [dark, setDark] = useState(() => localStorage.getItem(DARK_KEY) !== '0');
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [worker, setWorker] = useState<WorkerState>({ supported: false, offline: !navigator.onLine, updateAvailable: false, registration: null });
   const [push, setPush] = useState<PushState>('unsupported');
   const [pushBusy, setPushBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { toasts, push: pushToast, dismiss: dismissToast, clear: clearToasts } = useMessageToasts();
 
   const dispatch = useCallback((action: AppAction) => {
     stateRef.current = appReducer(stateRef.current, action);
     rawDispatch(action);
   }, []);
-
   useEffect(() => { stateRef.current = state; }, [state]);
+  modalRef.current = modal;
+  filesRef.current = files;
+  useMemo(() => { registerMediaRecords(Object.values(files).flat()); return null; }, [files]);
+  useEffect(() => {
+    document.documentElement.classList.toggle('theme-dark', dark);
+    return () => document.documentElement.classList.remove('theme-dark');
+  }, [dark]);
 
-  const showError = useCallback((error: unknown) => {
-    dispatch({ type: 'error', message: publicError(error) });
-  }, [dispatch]);
-
+  const showError = useCallback((error: unknown) => dispatch({ type: 'error', message: publicError(error) }), [dispatch]);
   const gateState = useCallback(() => {
     const current = stateRef.current;
-    const cid = selectedContactCid(current);
     return {
       visibility: document.visibilityState,
       appRoute: current.route.name === 'chats' ? 'chats' as const : 'other' as const,
-      selectedContactCid: cid,
-      desktopLayout: desktop.current?.matches ?? window.innerWidth >= 860,
+      selectedContactCid: selectedContactCid(current),
+      desktopLayout: desktop.current?.matches ?? window.innerWidth >= 861,
       mobileDetailOpen: current.mobileDetailOpen,
-      conversationCoveringDialogOpen: current.coveringDialog,
+      conversationCoveringDialogOpen: modalRef.current !== null,
     };
   }, []);
 
-  const refreshPage = useCallback(async (cid: string, surfaceError = true) => {
-    try {
-      const page = await api.conversation(cid);
-      dispatch({ type: 'page', contactCid: cid, page });
-      return page;
-    } catch (error) {
-      if (surfaceError) showError(error);
-      return null;
-    }
+  const refreshPage = useCallback(async (cid: string, surface = true) => {
+    try { const page = await api.conversation(cid); dispatch({ type: 'page', contactCid: cid, page }); return page; }
+    catch (error) { if (surface) showError(error); return null; }
   }, [dispatch, showError]);
-
+  const refreshFiles = useCallback(async (cid: string, surface = true) => {
+    try {
+      const result = await api.files(cid);
+      registerMediaRecords(result.files);
+      setFiles((current) => ({ ...current, [cid]: result.files }));
+      return result.files;
+    } catch (error) { if (surface) showError(error); return null; }
+  }, [showError]);
   const refreshContacts = useCallback(async () => {
     const contacts = await api.contacts();
     dispatch({ type: 'contacts', contacts: { ...contacts, pending: contacts.pending ?? [] } });
     return contacts;
   }, [dispatch]);
-
-  const refreshFiles = useCallback(async (cid: string, surfaceError = true) => {
+  const refreshSnapshot = useCallback(async () => {
     try {
-      const result = await api.files(cid);
-      setFiles((current) => ({ ...current, [cid]: result.files }));
-      return result.files;
-    } catch (error) {
-      if (surfaceError) showError(error);
-      return null;
-    }
-  }, [showError]);
-
-  const refreshSnapshot = useCallback(async (): Promise<string | null> => {
-    const before = stateRef.current;
-    const selected = selectedContactCid(before);
-    const generation = routeGeneration.current;
-    try {
-      const [identity, contacts, selectedPage] = await Promise.all([
-        api.identity(),
-        api.contacts(),
-        selected ? api.conversation(selected) : Promise.resolve(null),
-      ]);
-      const normalizedContacts = { ...contacts, pending: contacts.pending ?? [] };
-      dispatch({ type: 'snapshot', identity, contacts: normalizedContacts });
-      if (selectedPage && selectedContactCid(stateRef.current) === selected) {
-        dispatch({ type: 'page', contactCid: selected!, page: selectedPage });
+      const [identity, contacts, buildInfo] = await Promise.all([api.identity(), api.contacts(), api.buildInfo()]);
+      const normalized = { ...contacts, pending: contacts.pending ?? [] };
+      if (stateRef.current.identity && stateRef.current.identity.cid !== identity.cid) {
+        clearMediaRecords();
+        filesRef.current = {};
+        setFiles({});
       }
-      await Promise.all(normalizedContacts.contacts.map(async (contact) => {
-        if (contact.container_id === selected && selectedPage) return;
-        await refreshPage(contact.container_id, false);
-      }));
-      if (selected) await refreshFiles(selected, false);
-      const current = stateRef.current;
-      return selected && selectedContactCid(current) === selected && routeGeneration.current === generation
-        ? selected
-        : null;
-    } catch (error) {
-      showError(error);
-      return null;
-    }
+      dispatch({ type: 'snapshot', identity, contacts: normalized });
+      setBuild(buildInfo);
+      await Promise.all(normalized.contacts.flatMap((contact) => [refreshPage(contact.container_id, false), refreshFiles(contact.container_id, false)]));
+      return selectedContactCid(stateRef.current);
+    } catch (error) { showError(error); return null; }
   }, [dispatch, refreshFiles, refreshPage, showError]);
-
   const markVisibleRead = useCallback(async (cid: string) => {
     await reads.current.request(cid, async () => {
       if (!canMarkRead(cid, gateState())) return;
       await api.markRead(cid);
-      const [page, contacts] = await Promise.all([api.conversation(cid), api.contacts()]);
-      dispatch({ type: 'page', contactCid: cid, page });
-      dispatch({ type: 'contacts', contacts: { ...contacts, pending: contacts.pending ?? [] } });
+      await Promise.all([refreshPage(cid), refreshContacts()]);
     }).catch(showError);
-  }, [dispatch, gateState, showError]);
-
-  const refreshVisibleAndRead = useCallback(async () => {
-    const cid = selectedContactCid(stateRef.current);
-    if (!cid || !canMarkRead(cid, gateState())) return;
-    const page = await refreshPage(cid);
-    if (page) await markVisibleRead(cid);
-  }, [gateState, markVisibleRead, refreshPage]);
-
-  const converge = useCallback(async (
-    cid: string,
-    ready: (page: NonNullable<ReturnType<typeof pageFor>>) => boolean,
-  ) => {
-    const generation = (convergence.current.get(cid) ?? 0) + 1;
-    convergence.current.set(cid, generation);
+  }, [gateState, refreshContacts, refreshPage, showError]);
+  const converge = useCallback(async (cid: string, ready: (page: NonNullable<ReturnType<typeof pageFor>>) => boolean) => {
+    const key = `page:${cid}`;
+    const generation = (convergence.current.get(key) ?? 0) + 1;
+    convergence.current.set(key, generation);
     for (const delay of convergenceDelays) {
       if (delay) await sleep(delay);
-      if (convergence.current.get(cid) !== generation || selectedContactCid(stateRef.current) !== cid) return;
+      if (convergence.current.get(key) !== generation) return;
       const page = await refreshPage(cid, false);
       if (page && ready(page)) return;
     }
   }, [refreshPage]);
-
-  const handleServerEvent = useCallback(async (event: ServerEvent) => {
-    if (event.type === 'sync_required') {
-      const cid = await refreshSnapshot();
-      if (cid && canMarkRead(cid, gateState())) await markVisibleRead(cid);
-      return;
+  const convergeFile = useCallback(async (cid: string, wireId: string) => {
+    const key = `file:${cid}`;
+    const generation = (convergence.current.get(key) ?? 0) + 1;
+    convergence.current.set(key, generation);
+    for (const delay of convergenceDelays) {
+      if (delay) await sleep(delay);
+      if (convergence.current.get(key) !== generation) return;
+      const records = await refreshFiles(cid, false);
+      if (records?.some((item) => item.wire_id === wireId)) return;
     }
+  }, [refreshFiles]);
 
-    const contacts = refreshContacts().catch(showError);
-    if (event.type === 'message_received') {
-      if (selectedContactCid(stateRef.current) === event.contact_id) {
-        await Promise.all([
-          contacts,
-          converge(event.contact_id, (page) => page.messages.some((message) => message.wire_id === event.wire_id)),
-        ]);
-        if (canMarkRead(event.contact_id, gateState())) await markVisibleRead(event.contact_id);
-      } else {
-        await Promise.all([contacts, refreshPage(event.contact_id, false)]);
-      }
-      return;
-    }
-
-    if (event.type === 'file_received') {
-      await Promise.all([contacts, refreshFiles(event.contact_id, false)]);
-      return;
-    }
-
-    if (selectedContactCid(stateRef.current) === event.contact_id) {
-      await Promise.all([
-        contacts,
-        converge(event.contact_id, (page) => event.wire_ids.every((wireId) => {
-          const row = page.messages.find((message) => message.wire_id === wireId);
-          return !!row?.receipt && receiptRank[row.receipt] >= receiptRank[event.kind];
-        })),
-      ]);
-    } else {
-      await contacts;
-    }
-  }, [converge, gateState, markVisibleRead, refreshContacts, refreshFiles, refreshPage, refreshSnapshot, showError]);
-
-  const handleEventRef = useRef(handleServerEvent);
-  useEffect(() => { handleEventRef.current = handleServerEvent; }, [handleServerEvent]);
+  useMemo(() => {
+    configureMediaProvider({
+      url: (wireId) => {
+        const record = Object.values(filesRef.current).flat().find((item) => item.wire_id === wireId);
+        return record?.available ? api.mediaUrl(wireId) : null;
+      },
+      bytes: async (wireId) => {
+        const record = Object.values(filesRef.current).flat().find((item) => item.wire_id === wireId);
+        if (!record?.available) return null;
+        const response = await fetch(api.mediaUrl(wireId), { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Media request failed (HTTP ${response.status})`);
+        return new Uint8Array(await response.arrayBuffer());
+      },
+      fetch: async (wireId) => {
+        const record = Object.values(filesRef.current).flat().find((item) => item.wire_id === wireId);
+        if (!record) throw new Error('Media record is unavailable');
+        await api.fetchFiles([wireId]);
+        await refreshFiles(record.contact_id);
+      },
+    });
+    return null;
+  }, [refreshFiles]);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
-    void registerMessengerWorker((next) => {
-      setWorker(next);
-      void currentPushState(next.registration).then(setPush);
-    }).then((stop) => { cleanup = stop; }).catch(showError);
-    const onPrompt = (event: Event) => {
-      event.preventDefault();
-      setInstallPrompt(event as InstallPromptEvent);
-    };
-    window.addEventListener('beforeinstallprompt', onPrompt);
-    return () => {
-      cleanup?.();
-      window.removeEventListener('beforeinstallprompt', onPrompt);
-    };
+    void registerMessengerWorker((next) => { setWorker(next); void currentPushState(next.registration).then(setPush); })
+      .then((stop) => { cleanup = stop; }).catch(showError);
+    const prompt = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
+    window.addEventListener('beforeinstallprompt', prompt);
+    return () => { cleanup?.(); window.removeEventListener('beforeinstallprompt', prompt); };
   }, [showError]);
 
   useEffect(() => {
     if (window.location.pathname === '/') window.history.replaceState(null, '', chatPath());
-    desktop.current = window.matchMedia('(min-width: 860px)');
-    const onRoute = () => {
-      routeGeneration.current++;
-      dispatch({ type: 'route', route: parseRoute(window.location.pathname) });
-      void refreshVisibleAndRead();
-    };
-    const onVisible = () => { if (document.visibilityState === 'visible') void refreshVisibleAndRead(); };
-    const onLayout = () => { if (desktop.current?.matches) void refreshVisibleAndRead(); };
+    desktop.current = window.matchMedia('(min-width: 861px)');
+    const onRoute = () => dispatch({ type: 'route', route: parseRoute(window.location.pathname) });
+    const onVisible = () => { const cid = selectedContactCid(stateRef.current); if (cid) void markVisibleRead(cid); };
     window.addEventListener('popstate', onRoute);
     document.addEventListener('visibilitychange', onVisible);
-    desktop.current.addEventListener('change', onLayout);
-    const disconnect = connectEvents(
-      (event) => void handleEventRef.current(event).catch(showError),
-      (connection) => dispatch({ type: 'connection', connection }),
-    );
-    void refreshSnapshot().then((cid) => {
-      if (cid && canMarkRead(cid, gateState())) return markVisibleRead(cid);
-    });
-    return () => {
-      disconnect();
-      window.removeEventListener('popstate', onRoute);
-      document.removeEventListener('visibilitychange', onVisible);
-      desktop.current?.removeEventListener('change', onLayout);
-    };
-  }, [dispatch, gateState, markVisibleRead, refreshSnapshot, refreshVisibleAndRead, showError]);
+    const disconnect = connectEvents((event: ServerEvent) => {
+      void (async () => {
+        if (event.type === 'sync_required') { await refreshSnapshot(); return; }
+        await refreshContacts();
+        if (event.type === 'file_received') {
+          await convergeFile(event.contact_id, event.wire_id);
+          const contact = stateRef.current.contacts.contacts.find((item) => item.container_id === event.contact_id);
+          if (selectedContactCid(stateRef.current) !== event.contact_id && contact) pushToast(event.contact_id, contact.name, 'New file');
+          return;
+        }
+        if (event.type === 'message_received') {
+          const contact = stateRef.current.contacts.contacts.find((item) => item.container_id === event.contact_id);
+          await converge(event.contact_id, (page) => page.messages.some((item) => item.wire_id === event.wire_id));
+          if (selectedContactCid(stateRef.current) === event.contact_id) await markVisibleRead(event.contact_id);
+          else if (contact) pushToast(event.contact_id, contact.name, 'New message');
+          return;
+        }
+        await converge(event.contact_id, (page) => event.wire_ids.every((wireId) => {
+          const row = page.messages.find((item) => item.wire_id === wireId);
+          return !!row?.receipt && receiptRank[row.receipt] >= receiptRank[event.kind];
+        }));
+      })().catch(showError);
+    }, (connection) => dispatch({ type: 'connection', connection }));
+    void refreshSnapshot().then((cid) => { if (cid) void markVisibleRead(cid); });
+    return () => { disconnect(); window.removeEventListener('popstate', onRoute); document.removeEventListener('visibilitychange', onVisible); };
+  }, [converge, convergeFile, dispatch, markVisibleRead, pushToast, refreshContacts, refreshSnapshot, showError]);
 
-  const goToRoute = (route: AppRoute, path: string, mobileDetailOpen?: boolean) => {
-    routeGeneration.current++;
+  const go = (route: AppRoute, path: string, mobileDetailOpen?: boolean) => {
     window.history.pushState(null, '', path);
     dispatch({ type: 'route', route, mobileDetailOpen });
   };
-
   const selectContact = async (cid: string) => {
-    for (const [otherCid, generation] of convergence.current) {
-      if (otherCid !== cid) convergence.current.set(otherCid, generation + 1);
-    }
-    goToRoute({ name: 'chats', contactCid: cid }, chatPath(cid), true);
-    const [page] = await Promise.all([refreshPage(cid), refreshFiles(cid, false)]);
-    if (page) await markVisibleRead(cid);
+    go({ name: 'chats', contactCid: cid }, chatPath(cid), true);
+    clearToasts(cid);
+    await Promise.all([refreshPage(cid), refreshFiles(cid, false)]);
+    await markVisibleRead(cid);
   };
-
-  const loadOlder = async (cid: string): Promise<boolean> => {
+  const loadOlder = async (cid: string) => {
     const current = pageFor(stateRef.current, cid);
-    const cursor = current?.nextBefore;
-    if (!cursor || historyLoads.current.has(cid)) return false;
-    const identityCid = stateRef.current.identity?.cid;
-    historyLoads.current.add(cid);
-    setHistoryBusy(cid);
+    if (!current?.nextBefore || historyLoads.current.has(cid)) return;
+    historyLoads.current.add(cid); setHistoryBusy(cid);
     try {
-      const page = await api.conversation(cid, cursor);
-      if (!identityCid || stateRef.current.identity?.cid !== identityCid) return false;
+      const page = await api.conversation(cid, current.nextBefore);
       dispatch({ type: 'older_page', contactCid: cid, page, newer: current.messages });
-      return true;
-    } catch (error) {
-      showError(error);
-      return false;
-    } finally {
-      historyLoads.current.delete(cid);
-      setHistoryBusy((busy) => busy === cid ? null : busy);
-    }
-  };
-
-  const send = async () => {
-    const current = stateRef.current;
-    const cid = selectedContactCid(current);
-    const key = selectedDialogKey(current);
-    if (!cid || !key || current.sendingDialog === key) return;
-    const text = (current.drafts[key] ?? '').trim();
-    if (!text) return;
-    dispatch({ type: 'sending', dialog: key });
-    setTransferLabel('Sending message…');
-    try {
-      await api.send(cid, text, current.replies[key]);
-      dispatch({ type: 'draft', contactCid: cid, value: '' });
-      dispatch({ type: 'reply', contactCid: cid, wireId: null });
-      // The POST never creates a UI row. Only this canonical REST snapshot does.
-      await refreshPage(cid);
-    } catch (error) {
-      showError(error);
-    } finally {
-      setTransferLabel(null);
-      dispatch({ type: 'sending', dialog: null });
-    }
-  };
-
-  const sendFiles = async (selected: Array<{ blob: Blob; filename: string; mime: string }>) => {
-    const current = stateRef.current;
-    const cid = selectedContactCid(current);
-    const key = selectedDialogKey(current);
-    if (!cid || !key || current.sendingDialog === key || selected.length === 0) return;
-    const oversized = selected.find((item) => item.blob.size > MAX_FILE_BYTES);
-    if (oversized) {
-      showError(`${oversized.filename} exceeds the 20 MiB messenger limit.`);
-      return;
-    }
-    dispatch({ type: 'sending', dialog: key });
-    try {
-      for (const [index, item] of selected.entries()) {
-        setTransferLabel(`Uploading ${index + 1} of ${selected.length} · ${item.filename}`);
-        await api.sendFile(cid, item.blob, item.filename, item.mime || 'application/octet-stream', current.replies[key]);
-      }
-      dispatch({ type: 'reply', contactCid: cid, wireId: null });
-      await refreshFiles(cid);
-    } catch (error) {
-      showError(error);
-    } finally {
-      setTransferLabel(null);
-      dispatch({ type: 'sending', dialog: null });
-    }
-  };
-
-  const fetchFile = async (file: MediaRecord) => {
-    setFileBusy(file.wire_id);
-    try {
-      await api.fetchFiles([file.wire_id]);
-      await refreshFiles(file.contact_id);
-    } catch (error) {
-      showError(error);
-    } finally {
-      setFileBusy(null);
-    }
-  };
-
-  const createInvite = async (mode: 'one_time' | 'public') => {
-    dispatch({ type: 'dialog_busy', busy: true });
-    try {
-      const invite = await api.createInvite(mode);
-      dispatch({ type: 'generated_invite', blob: invite.blob });
-      setInvites(await api.invites());
-    } catch (error) {
-      showError(error);
-    } finally {
-      dispatch({ type: 'dialog_busy', busy: false });
-    }
-  };
-
-  const revokeInvite = async (inviteId: string) => {
-    dispatch({ type: 'dialog_busy', busy: true });
-    try {
-      await api.revokeInvite(inviteId);
-      setInvites(await api.invites());
-      dispatch({ type: 'generated_invite', blob: null });
-    } catch (error) {
-      showError(error);
-    } finally {
-      dispatch({ type: 'dialog_busy', busy: false });
-    }
-  };
-
-  const acceptInvite = async (invite: string, name: string) => {
-    if (!invite) {
-      dispatch({ type: 'error', message: 'Paste an invite first.' });
-      return;
-    }
-    dispatch({ type: 'dialog_busy', busy: true });
-    try {
-      await api.addContact(invite, name || undefined);
-      dispatch({ type: 'dialog_busy', busy: false });
-      dispatch({ type: 'dialog', open: false });
-      await refreshSnapshot();
-    } catch (error) {
-      showError(error);
-    } finally {
-      dispatch({ type: 'dialog_busy', busy: false });
-    }
-  };
-
-  const respondToIntroduction = async (contact: PendingContactView, action: 'approve' | 'reject') => {
-    try {
-      await api.respondToIntroduction(contact.container_id, action);
-      await refreshSnapshot();
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const renameContact = async (cid: string, name: string) => {
-    setContactBusy(true);
-    try {
-      await api.renameContact(cid, name);
-      await refreshSnapshot();
-    } catch (error) {
-      showError(error);
-    } finally {
-      setContactBusy(false);
-    }
-  };
-
-  const removeContact = async (cid: string) => {
-    setContactBusy(true);
-    try {
-      await api.removeContact(cid);
-      goToRoute({ name: 'chats', contactCid: null }, chatPath(), false);
-      await refreshSnapshot();
-    } catch (error) {
-      showError(error);
-    } finally {
-      setContactBusy(false);
-    }
-  };
-
-  const openInvite = async () => {
-    setSettingsOpen(false);
-    dispatch({ type: 'dialog', open: true });
-    try { setInvites(await api.invites()); } catch (error) { showError(error); }
-  };
-
-  const openSettings = async () => {
-    setSettingsOpen(true);
-    dispatch({ type: 'dialog', open: true });
-    try { setIdentities(await api.identities()); } catch (error) { showError(error); }
-  };
-
-  const closeDialog = () => {
-    setSettingsOpen(false);
-    dispatch({ type: 'dialog', open: false });
-    void refreshVisibleAndRead();
-  };
-
-  const togglePush = async (enable: boolean) => {
-    if (!worker.registration) return;
-    setPushBusy(true);
-    setPush('busy');
-    try {
-      setPush(await (enable ? enablePush(worker.registration) : disablePush(worker.registration)));
-    } catch (error) {
-      setPush('error');
-      showError(error);
-    } finally {
-      setPushBusy(false);
-    }
-  };
-
-  const install = async () => {
-    if (!installPrompt) return;
-    await installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
+    } catch (error) { showError(error); }
+    finally { historyLoads.current.delete(cid); setHistoryBusy(null); }
   };
 
   const selectedCid = selectedContactCid(state);
-  const contact = state.contacts.contacts.find((item) => item.container_id === selectedCid) ?? null;
-  const key = selectedDialogKey(state);
+  const selected = state.contacts.contacts.find((item) => item.container_id === selectedCid);
+  const viewContacts = useMemo(() => contactViews(state, files), [state, files]);
+  const selectedView = viewContacts.find((item) => item.id === selectedCid) ?? null;
+  const messages = selectedCid ? timeline(pageFor(state, selectedCid), files[selectedCid] ?? []) : [];
+  const identity = state.identity;
+  const togglePush = async (enable: boolean) => {
+    if (!worker.registration) return;
+    setPushBusy(true); setPush('busy');
+    try { setPush(await (enable ? enablePush(worker.registration) : disablePush(worker.registration))); }
+    catch (error) { setPush('error'); showError(error); }
+    finally { setPushBusy(false); }
+  };
+  const openInvites = () => {
+    setInvites([]);
+    setModal('invite');
+    void api.invites().then(setInvites).catch(showError);
+  };
 
-  if (state.route.name === 'not_found') {
-    return (
-      <div className="centered-screen">
-        <h1>Page not found</h1>
-        <p className="muted">This messenger route does not exist.</p>
-        <button type="button" className="primary" onClick={() => goToRoute({ name: 'chats', contactCid: null }, chatPath())}>
-          Open chats
-        </button>
-      </div>
-    );
-  }
+  if (state.route.name === 'not_found') return <div className="centered-screen"><h1>Page not found</h1><button className="btn primary" onClick={() => go({ name: 'chats', contactCid: null }, chatPath())}>Open chats</button></div>;
+  if (!identity) return <div className={dark ? 'theme-dark' : ''} style={{ height: '100%' }}><div className="centered-screen"><p className="muted">Loading…</p></div></div>;
 
-  return (
-    <div className="app-shell">
-      <IdentityHeader
-        identity={state.identity}
-        connection={state.connection}
-        openInvite={() => void openInvite()}
-        openSettings={() => void openSettings()}
-        installable={installPrompt !== null}
-        install={() => void install()}
-      />
-      {worker.offline && <div className="offline-banner" role="status">Offline shell · message and identity data are not cached</div>}
-      {state.connection !== 'live' && (
-        <div className="connection-banner" role="status">
-          {state.connection === 'retrying' ? 'Live updates interrupted. Reconnecting; REST remains authoritative.' : 'Connecting to live updates…'}
+  return <div className={dark ? 'theme-dark' : ''} style={{ height: '100%' }}>
+    <div className="app signal-app">
+      <header className="commandbar">
+        <div className="command-brand" aria-label="ours network"><span>Ours</span></div>
+        <div className="command-copy"><span className="command-kicker">ours / encrypted network</span><strong>Chats</strong></div>
+        <div className="command-actions">
+          {installPrompt && <button className="command-action" onClick={() => void installPrompt.prompt().then(() => setInstallPrompt(null))}>Install app</button>}
+          <button className="command-action" onClick={openInvites}><Icon name="plus" /><span>New chat</span></button>
+          <button className="icon-btn command-settings" title="Settings" aria-label="Settings" onClick={() => setModal('settings')}><Icon name="settings" /></button>
+          <button className="rail-me command-me" title={identity.name} onClick={() => setMenuOpen((value) => !value)}>{initials(identity.name)}<span className={'conn-dot ' + (state.connection === 'live' ? 'on' : 'off')} /></button>
         </div>
-      )}
-      <main className="messenger-main">
-        <ContactList
-          state={state}
-          selected={selectedCid}
-          onQuery={(search) => dispatch({ type: 'search', search })}
-          onSelect={(cid) => void selectContact(cid)}
-          onAdd={() => void openInvite()}
-          onIntroduction={(pending, action) => void respondToIntroduction(pending, action)}
-        />
+      </header>
+      <main className={'section signal-stage' + (state.mobileDetailOpen ? ' show-detail' : '')}>
+        <ChatList contacts={viewContacts} roots={rootViews(state.contacts)} selected={selectedCid} onSelect={(cid) => { if (!cid.startsWith('pending:')) void selectContact(cid); }} onInvite={openInvites} onSettings={() => setModal('settings')} />
         <Conversation
-          contact={contact}
-          page={selectedCid ? pageFor(state, selectedCid) : null}
-          draft={key ? state.drafts[key] ?? '' : ''}
-          replyWire={key ? state.replies[key] ?? null : null}
-          sending={state.sendingDialog === key && key !== null}
-          sendingLabel={transferLabel}
-          files={selectedCid ? files[selectedCid] ?? [] : []}
-          busyWire={fileBusy}
-          contactBusy={contactBusy}
-          loadingOlder={historyBusy === selectedCid}
-          mobileOpen={state.mobileDetailOpen}
-          onBack={() => {
-            goToRoute({ name: 'chats', contactCid: null }, chatPath(), false);
-            queueMicrotask(() => document.querySelector<HTMLButtonElement>('.contact-row.selected')?.focus());
-          }}
-          onLoadOlder={() => selectedCid ? loadOlder(selectedCid) : Promise.resolve(false)}
-          onDraft={(value) => selectedCid && dispatch({ type: 'draft', contactCid: selectedCid, value })}
-          onReply={(wireId) => selectedCid && dispatch({ type: 'reply', contactCid: selectedCid, wireId })}
-          onCancelReply={() => selectedCid && dispatch({ type: 'reply', contactCid: selectedCid, wireId: null })}
-          onSend={() => void send()}
-          onFiles={(selected) => void sendFiles(selected.map((file) => ({ blob: file, filename: file.name, mime: file.type })))}
-          onVoice={(blob, filename, mime) => void sendFiles([{ blob, filename, mime }])}
-          onFetch={(file) => void fetchFile(file)}
-          onRename={(name) => selectedCid && void renameContact(selectedCid, name)}
-          onRemove={() => selectedCid && void removeContact(selectedCid)}
-          onError={(message) => dispatch({ type: 'error', message })}
+          key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages}
+          hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
+          onLoadEarlier={selectedCid && historyBusy !== selectedCid ? () => void loadOlder(selectedCid) : undefined}
+          onBack={() => go({ name: 'chats', contactCid: null }, chatPath(), false)}
+          onSend={async (text, reply) => { if (!selectedCid) return; await api.send(selectedCid, text, reply); await refreshPage(selectedCid); }}
+          onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
+          onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}
+          onRename={(name) => { if (selectedCid) void api.renameContact(selectedCid, name).then(refreshSnapshot).catch(showError); }}
+          onRemove={() => { if (selectedCid && confirm(`Remove “${selected?.name ?? 'contact'}”?`)) void api.removeContact(selectedCid).then(() => { go({ name: 'chats', contactCid: null }, chatPath(), false); return refreshSnapshot(); }).catch(showError); }}
         />
       </main>
-      {state.coveringDialog && !settingsOpen && (
-        <InviteDialog
-          generated={state.generatedInvite}
-          invites={invites}
-          busy={state.dialogBusy}
-          error={state.error}
-          onClose={closeDialog}
-          onCreate={(mode) => void createInvite(mode)}
-          onRevoke={(inviteId) => void revokeInvite(inviteId)}
-          onAccept={(invite, name) => void acceptInvite(invite, name)}
-        />
-      )}
-      {state.coveringDialog && settingsOpen && (
-        <SettingsDialog
-          identity={state.identity}
-          identities={identities}
-          push={push}
-          workerSupported={worker.supported}
-          offline={worker.offline}
-          updateAvailable={worker.updateAvailable}
-          busy={pushBusy}
-          onTogglePush={(enable) => void togglePush(enable)}
-          onReloadUpdate={() => {
-            worker.registration?.waiting?.postMessage({ type: 'SKIP_WAITING' });
-            window.location.reload();
-          }}
-          onClose={closeDialog}
-        />
-      )}
-      {state.error && !state.coveringDialog && (
-        <div className="error-toast" role="alert">
-          <span>{state.error}</span>
-          <button type="button" className="icon-button" aria-label="Dismiss error" onClick={() => dispatch({ type: 'error', message: null })}>×</button>
-        </div>
-      )}
+      <div className="app-banners">
+        {worker.offline && <div className="banner warn">Offline — reconnecting to the network…</div>}
+        {state.connection !== 'live' && <div className="banner warn">{state.connection === 'retrying' ? 'Live updates interrupted — reconnecting…' : 'Connecting to live updates…'}</div>}
+        {worker.updateAvailable && <div className="banner info">A new version is available.<span className="banner-actions"><button className="linkbtn" onClick={() => { worker.registration?.waiting?.postMessage({ type: 'SKIP_WAITING' }); location.reload(); }}>Restart now</button></span></div>}
+        {state.contacts.pending.map((pending) => <div className="banner info" key={pending.container_id}>Introduction from {pending.name} · {pending.queued} queued<span className="banner-actions"><button className="linkbtn" onClick={() => void api.respondToIntroduction(pending.container_id, 'approve').then(refreshSnapshot).catch(showError)}>Approve</button><button className="linkbtn quiet" onClick={() => void api.respondToIntroduction(pending.container_id, 'reject').then(refreshSnapshot).catch(showError)}>Reject</button></span></div>)}
+        <MessageToasts items={toasts} onDismiss={dismissToast} onOpen={(cid) => void selectContact(cid)} />
+      </div>
+      {menuOpen && <><div className="pop-backdrop" onClick={() => setMenuOpen(false)} /><div className="menu command-menu"><div className="menu-head"><div className="avatar accent lg">{initials(identity.name)}</div><div><strong>{identity.name}</strong><div className="faint mono">@{shortCid(identity.cid)}</div></div></div><button className="menu-item" onClick={() => { setMenuOpen(false); openInvites(); }}><Icon name="plus" />Invite a contact</button><button className="menu-item" onClick={() => { setMenuOpen(false); setModal('settings'); }}><Icon name="settings" />Settings</button></div></>}
+      {modal === 'invite' && <InviteModal identity={identity} invites={invites} onRefresh={async () => setInvites(await api.invites())} onCreate={async (mode, name) => { const result = await api.createInvite(mode, name); return result.blob; }} onAccept={async (invite, name) => { await api.addContact(invite, name); await refreshSnapshot(); }} onRevoke={async (id) => { await api.revokeInvite(id); }} onClose={() => { setModal(null); void refreshSnapshot(); }} />}
+      {modal === 'settings' && <SettingsModal identity={identity} push={push} workerSupported={worker.supported} busy={pushBusy} offline={worker.offline} updateAvailable={worker.updateAvailable} build={build} dark={dark} onToggleDark={() => setDark((value) => { localStorage.setItem(DARK_KEY, value ? '0' : '1'); return !value; })} onSaveBio={async (bio) => { await api.setBio(bio); await refreshSnapshot(); }} onTogglePush={togglePush} onReloadUpdate={() => { worker.registration?.waiting?.postMessage({ type: 'SKIP_WAITING' }); location.reload(); }} onClose={() => { modalRef.current = null; setModal(null); if (selectedCid) void markVisibleRead(selectedCid); }} />}
+      {state.error && <div className="banner error">{state.error}<button className="linkbtn" onClick={() => dispatch({ type: 'error', message: null })}>dismiss</button></div>}
     </div>
-  );
+  </div>;
 }

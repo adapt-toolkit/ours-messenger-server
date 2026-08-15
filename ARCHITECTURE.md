@@ -121,7 +121,9 @@ in deterministic order:
 
 The advertised filename also retains the SDK's `voice-message-` fallback prefix.
 If none of those MediaRecorder contracts is available, recording fails closed
-with a user-facing error.
+with a user-facing error. Voice bubbles use the canonical compact player and
+surface the server's transcription status, text, or categorized failure when it
+is present in the media projection.
 
 ## Safe rendering
 
@@ -130,7 +132,7 @@ Only HTTP(S) links are clickable. File previews are rendered from explicitly
 fetched Blob object URLs and revoke those URLs on teardown.
 
 - images use an image element;
-- voice/audio uses native controls;
+- voice messages use the canonical compact player backed by an audio element;
 - Markdown uses the same safe node renderer;
 - HTML uses a sandboxed iframe with no sandbox capabilities and an injected
   deny-by-default CSP (`default-src 'none'; script-src 'none'`).
