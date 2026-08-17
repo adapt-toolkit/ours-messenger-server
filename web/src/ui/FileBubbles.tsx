@@ -20,6 +20,9 @@ import { isMarkdownFilename } from './markdownReviewCore.mjs';
 import { attachmentBlobMime, isHtmlAttachment } from './htmlPreviewCore.mjs';
 import { VOICE_BITRATE, VOICE_CONTAINER_CANDIDATES } from './voiceRecordingCore.mjs';
 import { measureVoiceDuration, parseVoiceDuration, withVoiceDuration } from '../voice.js';
+import {
+  createLiveWaveformScaler, LIVE_WAVEFORM_BARS, peaksFromSamples, WAVEFORM_BARS, waveformBars,
+} from './voiceWaveformCore.mjs';
 
 // The playable mime = the base type (a voice note's mime is
 // `<real container>; x-ours-kind=voice-message` — strip the marker param).
@@ -176,6 +179,12 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
   // and the bubble shows '·:··' rather than inventing 0:00.
   const [dur, setDur] = useState<number | null>(() => parseVoiceDuration(rec.mime));
   const [scrubbing, setScrubbing] = useState(false);
+  // The shape of the recording, decoded once from the bytes already fetched for
+  // playback. Null until it is known — the thin track is the honest fallback for
+  // a note whose bytes are still on the other device, or whose container this
+  // browser cannot decode. Nothing here is invented: every bar is measured off
+  // the actual samples.
+  const [bars, setBars] = useState<number[] | null>(null);
 
   if (loaded && !url) {
     return (
@@ -186,6 +195,30 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
       </div>
     );
   }
+
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false;
+    const Ctx = typeof window === 'undefined'
+      ? undefined
+      : window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    void (async () => {
+      try {
+        const bytes = await fetch(url, { cache: 'force-cache' }).then((response) => response.arrayBuffer());
+        const decoded = await ctx.decodeAudioData(bytes);
+        if (cancelled) return;
+        setBars(waveformBars(peaksFromSamples(decoded.getChannelData(0), WAVEFORM_BARS)));
+      } catch {
+        // Decoding is presentation only. A container this browser cannot read
+        // must still play through the element and must not break the bubble.
+      } finally {
+        void ctx.close().catch(() => {});
+      }
+    })();
+    return () => { cancelled = true; void ctx.close().catch(() => {}); };
+  }, [url]);
 
   const toggle = () => {
     const a = audioRef.current;
@@ -229,7 +262,7 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
         <Icon name={playing ? 'pause' : 'play'} size={14} />
       </button>
       <div
-        className={'voice-track' + (url ? ' seekable' : '') + (scrubbing ? ' scrubbing' : '')}
+        className={'voice-track' + (url ? ' seekable' : '') + (scrubbing ? ' scrubbing' : '') + (bars ? ' has-wave' : '')}
         ref={trackRef}
         onPointerDown={onScrubDown}
         onPointerMove={onScrubMove}
@@ -239,7 +272,19 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
         aria-label={url ? 'Seek' : undefined}
         aria-valuenow={Math.round(progress * 100)}
       >
-        <div className="voice-track-fill" style={{ width: `${progress * 100}%` }} />
+        {bars ? (
+          <div className="voice-wave" aria-hidden>
+            {bars.map((height, index) => (
+              <span
+                key={index}
+                className={'voice-wave-bar' + (index / bars.length < progress ? ' played' : '')}
+                style={{ height: `${Math.round(height * 100)}%` }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="voice-track-fill" style={{ width: `${progress * 100}%` }} />
+        )}
         {url && <span className="voice-track-knob" style={{ left: `${progress * 100}%` }} />}
       </div>
       <span className="voice-dur mono">
@@ -417,7 +462,7 @@ const VOICE_MAX_SECONDS_BY_BYTES = Math.floor(MAX_FILE_BYTES / (VOICE_BITRATE / 
 // 5 min is the PRODUCT cap (a voice note, not a podcast); the byte cap is the
 // transport truth. Take whichever binds first so the two can never disagree.
 const MAX_SECONDS = Math.min(300, VOICE_MAX_SECONDS_BY_BYTES);
-const WAVE_BARS = 44;
+const WAVE_BARS = LIVE_WAVEFORM_BARS;
 
 export function VoiceComposer(props: {
   disabled?: boolean;
@@ -611,6 +656,10 @@ export function VoiceComposer(props: {
       analyser.fftSize = 256;
       src.connect(analyser);
       const data = new Uint8Array(analyser.fftSize);
+      // Speech sits near the bottom of a linear scale, so a linear bar flatlines
+      // however tall the strip is. The scaler tracks a decaying running maximum
+      // and curves the result, which keeps a quiet passage moving.
+      const scaler = createLiveWaveformScaler();
       let last = 0;
       const tick = (ts: number) => {
         rafRef.current = requestAnimationFrame(tick);
@@ -623,7 +672,7 @@ export function VoiceComposer(props: {
           sum += v * v;
         }
         const rms = Math.sqrt(sum / data.length);
-        const level = Math.max(0.06, Math.min(1, rms * 3.2));
+        const level = scaler.push(rms);
         setLevels((prev) => {
           const next = prev.length >= WAVE_BARS ? prev.slice(1) : prev.slice();
           next.push(level);
