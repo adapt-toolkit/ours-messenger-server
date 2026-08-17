@@ -19,6 +19,7 @@ import { MessageReceipt, type MessageReceiptState } from './MessageReceipt';
 import { isMarkdownFilename } from './markdownReviewCore.mjs';
 import { attachmentBlobMime, isHtmlAttachment } from './htmlPreviewCore.mjs';
 import { VOICE_BITRATE, VOICE_CONTAINER_CANDIDATES } from './voiceRecordingCore.mjs';
+import { measureVoiceDuration, parseVoiceDuration, withVoiceDuration } from '../voice.js';
 
 // The playable mime = the base type (a voice note's mime is
 // `<real container>; x-ours-kind=voice-message` — strip the marker param).
@@ -167,7 +168,13 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
   const trackRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0); // 0..1
-  const [dur, setDur] = useState<number | null>(null);
+  // The length the SENDER measured from the finalised blob, carried in the mime.
+  // It is the only source that works for a peer: a streamed container reports no
+  // duration, so an element on this device has nothing to read. Absent for every
+  // voice message sent before that was captured, and for a sender whose browser
+  // could not measure one — permanently, not transitionally. Absent stays null,
+  // and the bubble shows '·:··' rather than inventing 0:00.
+  const [dur, setDur] = useState<number | null>(() => parseVoiceDuration(rec.mime));
   const [scrubbing, setScrubbing] = useState(false);
 
   if (loaded && !url) {
@@ -250,8 +257,11 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
             if (!scrubbing && a.duration > 0 && isFinite(a.duration)) setProgress(a.currentTime / a.duration);
           }}
           onLoadedMetadata={(e) => {
+            // Only when the container actually carries one — a real value here
+            // is at least as good as the sender's, and Infinity is what a
+            // streamed container reports. Never downgrade a carried duration.
             const d = e.currentTarget.duration;
-            if (isFinite(d)) setDur(d);
+            if (isFinite(d) && d > 0) setDur(d);
           }}
         />
       )}
@@ -560,14 +570,18 @@ export function VoiceComposer(props: {
     rec.onstop = () => {
       const discard = discardRef.current;
       if (discard) { afterStop(); return; }
-      void new Blob(chunksRef.current).arrayBuffer().then((buf) => {
+      // TYPED, because the length is measured off this blob through an <audio>
+      // element and an untyped one gives the decoder nothing to go on.
+      const blob = new Blob(chunksRef.current, { type: baseRef.current });
+      void Promise.all([blob.arrayBuffer(), measureVoiceDuration(blob)]).then(([buf, seconds]) => {
         afterStop();
         if (buf.byteLength === 0) return;
         const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
         onReadyRef.current({
-          // the LOCKED Dev-8 marker: real container base + x-ours-kind param
+          // the LOCKED Dev-8 marker: real container base + x-ours-kind param,
+          // now with the length measured from the FINALISED take beside it.
           filename: `${VOICE_FILE_PREFIX}${stamp}.${extRef.current}`,
-          mime: voiceMime(baseRef.current),
+          mime: withVoiceDuration(voiceMime(baseRef.current), seconds),
           bytes: new Uint8Array(buf),
           voice: true,
         });
