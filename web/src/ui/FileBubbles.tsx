@@ -204,9 +204,14 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
       : window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
+    // close() throws synchronously on an already-closed context, and this runs
+    // both at the end of the decode and again on unmount. An exception escaping
+    // a cleanup function unmounts the tree, so neither call may be trusted to
+    // return a promise.
+    const closeContext = () => { try { void ctx.close()?.catch?.(() => {}); } catch { /* already closed */ } };
     void (async () => {
       try {
-        const bytes = await fetch(url, { cache: 'force-cache' }).then((response) => response.arrayBuffer());
+        const bytes = await fetch(url).then((response) => response.arrayBuffer());
         const decoded = await ctx.decodeAudioData(bytes);
         if (cancelled) return;
         setBars(waveformBars(peaksFromSamples(decoded.getChannelData(0), WAVEFORM_BARS)));
@@ -214,10 +219,10 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
         // Decoding is presentation only. A container this browser cannot read
         // must still play through the element and must not break the bubble.
       } finally {
-        void ctx.close().catch(() => {});
+        closeContext();
       }
     })();
-    return () => { cancelled = true; void ctx.close().catch(() => {}); };
+    return () => { cancelled = true; closeContext(); };
   }, [url]);
 
   const toggle = () => {
