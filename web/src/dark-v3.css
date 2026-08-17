@@ -604,6 +604,19 @@
 .message-markdown > :last-child { margin-bottom: 0; }
 .message-markdown p { margin: 0 0 0.65em; white-space: pre-wrap; }
 .message-markdown ul, .message-markdown ol { margin: 0.35em 0 0.7em; padding-left: 1.45em; }
+/* RESTORE THE LIST MARKER. Tailwind's preflight ships `ol,ul,menu{list-style:none}`
+   and it is the ONLY list-style rule in the bundle, so a message list kept the
+   indentation from the padding above and lost its bullet or number entirely —
+   the owner saw indented lines with nothing in front of them.
+   `revert` rather than an explicit `disc`/`decimal`: it rolls the author reset
+   back to the user-agent default, which restores ordered lists and per-depth
+   nesting (disc/circle/square) at the same time instead of freezing one marker
+   at every level. SCOPED TO MESSAGE CONTENT — the conversation list sets
+   `list-style: none` on purpose, so un-resetting globally would fix this bug and
+   ship another one. */
+.message-markdown ul, .message-markdown ol { list-style: revert; }
+/* A GFM task list draws its own checkbox; a marker beside it is a second bullet. */
+.message-markdown li:has(> input[type='checkbox']) { list-style: none; }
 .message-markdown blockquote { margin: 0.55em 0; padding-left: 0.75em; border-left: 3px solid currentColor; opacity: 0.82; }
 .message-markdown a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .message-markdown :not(pre) > code {
