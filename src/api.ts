@@ -112,6 +112,37 @@ function outcomeWireId(value: unknown): string | undefined {
   return typeof wireId === 'string' && wireId ? wireId : undefined;
 }
 
+function outcomeKind(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const kind = (value as Record<string, unknown>).kind;
+  return typeof kind === 'string' ? kind : undefined;
+}
+
+/**
+ * A SEND THAT RODE A CONTACT INTRODUCTION IS NOT A FAILED SEND.
+ *
+ * `sendMessage` to an identity this one has no contact edge with cannot use the
+ * ordinary send transaction — there is no edge to send over. The SDK connects on
+ * the way past and carries the text INSIDE the introduction, and reports
+ * `{ kind: 'introduced' }`. The message arrives. What it does not get is a wire
+ * id, because the introduction carries no slot for one, and everything keyed by a
+ * wire id is therefore permanently unavailable for that one message: it is absent
+ * from the sender's own conversation history, and no delivered or read receipt can
+ * ever name it.
+ *
+ * THIS ROUTE USED TO THROW ON THE MISSING WIRE ID, which answered a successful
+ * send with HTTP 500 and made the client render "the message was not delivered"
+ * over a message the peer had already received — the surface asserting a
+ * falsehood about a delivered message. The outcome is now reported for what it
+ * is: delivered, and untracked. The client keeps the message on screen, does not
+ * wait for a canonical row that will never appear, and does not invent a receipt
+ * it cannot have.
+ *
+ * A missing wire id on any OTHER outcome kind is still a fault and still throws:
+ * those paths promise a tracked send and a silent downgrade would hide it.
+ */
+const INTRODUCED = 'introduced';
+
 async function readJsonBody(req: IncomingMessage, maxBytes = MAX_HTTP_BODY_BYTES): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -365,9 +396,13 @@ const ROUTES: Record<string, Handler> = {
       reply_to_sentence: reply?.sentence,
     });
     const wireId = outcomeWireId(result);
-    if (!wireId) throw new Error('SDK sendMessage returned no wire id');
+    if (!wireId) {
+      if (outcomeKind(result) !== INTRODUCED) throw new Error('SDK sendMessage returned no wire id');
+      // No wire id to record a reply reference against, and none is coming.
+      return { wire_id: null, delivery: INTRODUCED };
+    }
     deps.media?.recordReply(wireId, reply);
-    return { wire_id: wireId };
+    return { wire_id: wireId, delivery: 'tracked' };
   },
 
   'POST /api/messages/send-file': async ({ client, body, deps }) => {

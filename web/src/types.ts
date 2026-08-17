@@ -61,7 +61,19 @@ export interface ConversationPage {
 }
 
 export interface SendMessageResult {
-  wire_id: string;
+  /**
+   * Null for an introduction-carried send: the message was delivered, but it has
+   * no wire id, so it never appears in canonical history and can never acquire a
+   * receipt. Absence of an id is not evidence of failure here — see `delivery`.
+   */
+  wire_id: string | null;
+  /**
+   * 'tracked'    — an ordinary send. It has a wire id, a canonical history row is
+   *                coming, and delivered/read receipts can name it.
+   * 'introduced' — it rode the contact introduction that created this edge. It
+   *                arrived; nothing downstream of a wire id will ever exist for it.
+   */
+  delivery: 'tracked' | 'introduced';
 }
 
 export type ServerEvent =

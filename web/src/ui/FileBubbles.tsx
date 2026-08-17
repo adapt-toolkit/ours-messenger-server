@@ -95,11 +95,13 @@ function VoiceTranscript({ rec }: { rec: FileRecord }) {
 export function FileBubble({
   rec,
   receipt,
+  receiptless,
   onPreview,
   onFetch,
 }: {
   rec: FileRecord;
   receipt?: MessageReceiptState;
+  receiptless?: boolean;
   onPreview?: (rec: FileRecord) => void;
   onFetch?: (wireId: string) => Promise<void>;
 }) {
@@ -109,7 +111,7 @@ export function FileBubble({
   const footer = (
     <div className="bubble-at">
       {bubbleTime(rec.date)}
-      {me && <MessageReceipt receipt={receipt} content={receiptContent} />}
+      {me && <MessageReceipt receipt={receipt} content={receiptContent} receiptless={receiptless} />}
     </div>
   );
   if (rec.mime.startsWith('image/')) return <ImageBubble rec={rec} cls={cls} footer={footer} onFetch={onFetch} />;
