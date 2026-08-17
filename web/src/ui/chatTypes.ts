@@ -12,6 +12,12 @@ export interface ChatMessage {
   filename?: string;
   mime?: string;
   receipt?: Exclude<Receipt, null>;
+  /**
+   * No wire id, so no receipt can ever name this entry: an introduction-carried
+   * send, or a pre-1.4 entry restored from an old backup. Distinct from "no
+   * receipt yet", which is the ordinary case and does resolve.
+   */
+  receiptless?: boolean;
   _dbg?: {
     fnNil: boolean; fnRaw: string; kindNil: boolean; kindRaw: string; mimeNil: boolean;
     dir: string; textHead: string; src: 'field' | 'summary' | 'none';

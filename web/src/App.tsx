@@ -44,6 +44,11 @@ export function timeline(page: ReturnType<typeof pageFor>, media: readonly Media
       dir: message.dir, text: message.text, date: message.date, read: message.read,
       wireId: message.wire_id, replyTo: message.reply_to ? { wireId: message.reply_to.wire_id } : null,
       receipt: message.receipt ?? undefined,
+      // An outbound row with no wire id can never be named by a receipt — an
+      // introduction-carried send, or a pre-1.4 entry restored from an old
+      // backup. Saying "sent" of it is true; leaving the reader to assume a
+      // receipt is merely late is not, since none is coming.
+      receiptless: message.dir === 'out' && !message.wire_id,
     };
     if (message.wire_id) rows.set(message.wire_id, normalized); else legacy.push(normalized);
   }
@@ -446,15 +451,25 @@ export function AppShell() {
               contactCid: cid,
               message: {
                 dir: 'out', text, date: new Date().toISOString(), read: true,
-                wire_id: sent.wire_id, receipt: null,
+                wire_id: sent.wire_id ?? '', receipt: null,
                 reply_to: reply ? { wire_id: reply } : null,
               },
             });
-            void converge(cid, (page) => page.messages.some((message) => message.wire_id === sent.wire_id));
+            if (sent.wire_id) {
+              void converge(cid, (page) => page.messages.some((message) => message.wire_id === sent.wire_id));
+            } else {
+              // An introduction-carried send: converging on its wire id would poll
+              // the full 10.5s schedule for a canonical row that is never written.
+              // The local row IS the record. What did change is the contact list —
+              // the introduction created this edge — so refresh that instead.
+              void refreshContacts().catch(showError);
+            }
             // The composer's own bubble is already on screen; handing back the
             // wire id lets it become the confirmed message in place instead of
-            // being replaced by a second one.
-            return sent.wire_id;
+            // being replaced by a second one. An introduction-carried send has
+            // none to hand over, and the composer retires its copy in favour of
+            // the row this dispatch just put in the store.
+            return sent.wire_id ?? undefined;
           }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
           onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}

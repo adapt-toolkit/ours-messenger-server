@@ -1057,7 +1057,7 @@ export function Conversation(props: {
                       after={replyButton}
                     >
                       <div className={`ours-message ours-message-file ours-message--${m.dir}`}>
-                        <FileBubble rec={rec} receipt={m.receipt} onPreview={setPreviewRec} onFetch={props.onFetchFile} />
+                        <FileBubble rec={rec} receipt={m.receipt} receiptless={m.receiptless} onPreview={setPreviewRec} onFetch={props.onFetchFile} />
                       </div>
                     </SwipeReplyRow>
                   </motion.div>
@@ -1104,7 +1104,7 @@ export function Conversation(props: {
                       <MessageMarkdown text={room ? room.text : m.text} />
                       <div className="bubble-at">
                         {fmtTime(m.date)}
-                        {m.dir === 'out' && <MessageReceipt receipt={m.receipt} />}
+                        {m.dir === 'out' && <MessageReceipt receipt={m.receipt} receiptless={m.receiptless} />}
                       </div>
                     </div>
                   </SwipeReplyRow>
