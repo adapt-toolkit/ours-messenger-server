@@ -58,6 +58,13 @@ export interface ConversationPage {
   unread: number;
   hasMore: boolean;
   nextBefore: string | null;
+  /**
+   * The newest entry as one readable line, for a chat-list row. Server-computed,
+   * because the same body also has to reach a push notification the server
+   * composes — deriving it in two places is how the two surfaces drift.
+   * Absent on a page from a server older than this field.
+   */
+  preview?: string;
 }
 
 export interface SendMessageResult {

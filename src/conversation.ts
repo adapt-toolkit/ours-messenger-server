@@ -19,6 +19,8 @@
 // separation is the whole reason this surface exists — see README, "Two ticks".
 
 import type { ConversationMessage, ReceiptsResult } from '@ours.network/sdk';
+// @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
+import { contactMessagePreview } from '../shared/roomMessageCore.mjs';
 
 export const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 500;
@@ -33,6 +35,16 @@ export interface ConversationPage {
   readonly unread: number;
   /** True when older entries exist before this page. */
   readonly hasMore: boolean;
+  /**
+   * The newest entry as ONE READABLE LINE, for a chat-list row.
+   *
+   * Computed here rather than in the browser because a cowork room relays signed
+   * JSON and the same body also has to reach a push notification, which only the
+   * server can compose. Two places deriving that line means two places to drift;
+   * this is the one source both surfaces read. Empty when the page is empty or
+   * the newest entry is a file, which the frontend labels from its own metadata.
+   */
+  readonly preview: string;
   /**
    * Cursor for the NEXT (older) page: pass it back as `before`. Null when this
    * page reaches the start of the conversation, or when the oldest entry in it is
@@ -74,7 +86,7 @@ export function projectPage(
   contact: string,
   messages: readonly ConversationMessage[],
   receipts: ReceiptsResult,
-  opts: { readonly limit?: number; readonly before?: string } = {},
+  opts: { readonly limit?: number; readonly before?: string; readonly announcedContact?: string } = {},
 ): ConversationPage {
   const limit = opts.limit ?? DEFAULT_PAGE_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) {
@@ -112,5 +124,13 @@ export function projectPage(
     unread: messages.filter((m) => m.dir === 'in' && !m.read).length,
     hasMore: start > 0,
     nextBefore: start > 0 ? cursorFor(page[0]) : null,
+    // The NEWEST entry in the whole conversation, not in this page: a chat-list
+    // row shows the latest line, and paging backwards must not rewrite it.
+    preview: previewOf(opts.announcedContact ?? contact, messages.at(-1)),
   };
+}
+
+function previewOf(announcedContact: string, newest: ConversationMessage | undefined): string {
+  if (!newest) return '';
+  return contactMessagePreview(announcedContact, newest.text) as string;
 }
