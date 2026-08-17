@@ -278,6 +278,9 @@ interface ReplyDraft {
 
 const timelineMessageId = (key: string) => `chat-message-${encodeURIComponent(key)}`;
 
+const reducedMotion = () =>
+  typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 // Swipe-to-reply: drag a bubble toward screen centre (incoming → right,
 // outgoing → left) to reply, Telegram/WhatsApp style. Touch/pen only — a mouse
 // keeps text-selection + the hover reply button (see .msg-reply, @media hover).
@@ -387,7 +390,10 @@ export function Conversation(props: {
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
   onBack: () => void;
-  onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<void>;
+  /** Resolves with the canonical wire id of the delivered message when it has one. */
+  onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<string | void>;
+  /** Canonical state is still catching up: shown inline, never as a screen. */
+  syncing?: 'connecting' | 'updating' | null;
   onRemove: () => void;
   onRename?: (alias: string) => void;
   onDraftChange?: (hasText: boolean) => void;
@@ -398,7 +404,13 @@ export function Conversation(props: {
   const { contact, messages } = props;
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [optimisticSend, setOptimisticSend] = useState<ChatMessage | null>(null);
+  // A submitted message is ONE timeline entry from the moment it is typed: the
+  // locally rendered bubble and the server-confirmed message that replaces it
+  // share a key and are never both on screen. `wireId` is filled in when the
+  // send resolves and is what the confirmation is recognised by.
+  const [optimisticSend, setOptimisticSend] = useState<
+    { key: string; message: ChatMessage; wireId: string | null } | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [unknownSend, setUnknownSend] = useState<{
     draft: string;
@@ -425,6 +437,17 @@ export function Conversation(props: {
   const previousContactRef = useRef<string | null>(null);
   const fileReadGenerationRef = useRef(0);
   const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
+  // wire id -> the key its optimistic bubble already rendered under, so the
+  // confirmation reuses that element instead of mounting a second one.
+  const sentKeysRef = useRef(new Map<string, string>());
+  const sendSeqRef = useRef(0);
+  // Target and last observed position of a scroll WE started, so its own
+  // frames are not mistaken for the reader choosing to leave the newest
+  // message — and so a scroll that moves the other way is recognised as
+  // someone else taking over.
+  const followTargetRef = useRef<number | null>(null);
+  const followTopRef = useRef<number | null>(null);
+  const messageCountRef = useRef(0);
 
   useEffect(() => {
     setDraft('');
@@ -441,6 +464,9 @@ export function Conversation(props: {
     fileReadGenerationRef.current += 1;
     setPreviewRec(null);
     setShowSharedMedia(false);
+    sentKeysRef.current.clear();
+    followTargetRef.current = null;
+    followTopRef.current = null;
   }, [contact?.id]);
 
   useEffect(() => {
@@ -460,10 +486,20 @@ export function Conversation(props: {
     setReplyTo((current) => current === unknownSend.reply ? null : current);
   }, [messages, unknownSend]);
 
+  // The confirmation of a send and its optimistic bubble are the same message.
+  // Rendering both — even for one frame — grows the timeline by a row that then
+  // collapses, which is exactly the jump the reader sees. Dropping the local
+  // copy in the SAME render that the canonical one arrives in keeps the height
+  // constant across the swap.
+  const confirmed = !!optimisticSend?.wireId
+    && messages.some((message) => message.wireId === optimisticSend.wireId);
   const displayMessages = useMemo(
-    () => optimisticSend ? [...messages, optimisticSend] : messages,
-    [messages, optimisticSend],
+    () => optimisticSend && !confirmed ? [...messages, optimisticSend.message] : messages,
+    [messages, optimisticSend, confirmed],
   );
+  useEffect(() => {
+    if (confirmed) setOptimisticSend(null);
+  }, [confirmed]);
 
   useLayoutEffect(() => {
     const input = composerInputRef.current;
@@ -474,6 +510,26 @@ export function Conversation(props: {
     input.style.overflowY = input.scrollHeight > 132 ? 'auto' : 'hidden';
   }, [draft, contact?.id]);
 
+  // Following the newest message is a movement, not a teleport. Assigning
+  // scrollTop drags the whole thread past the reader's eyes in a single frame,
+  // which is what reads as a jerk; an opened thread has nothing to follow yet
+  // and still lands instantly.
+  const followBottom = (smooth: boolean) => {
+    const scroller = messageScrollRef.current;
+    if (!scroller) return;
+    const target = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    if (Math.abs(scroller.scrollTop - target) < 1) {
+      followTargetRef.current = null;
+      followTopRef.current = null;
+      return;
+    }
+    const animate = smooth && !reducedMotion();
+    followTargetRef.current = animate ? target : null;
+    followTopRef.current = animate ? scroller.scrollTop : null;
+    if (animate) scroller.scrollTo({ top: target, behavior: 'smooth' });
+    else scroller.scrollTop = target;
+  };
+
   // The custom timeline owns its scroll behavior. Every opened/switched thread
   // starts at the newest message. Subsequent messages follow only while the
   // reader is already near the bottom, so reading history is never interrupted.
@@ -481,13 +537,23 @@ export function Conversation(props: {
     if (!contact) {
       previousContactRef.current = null;
       pinnedToBottomRef.current = true;
+      messageCountRef.current = 0;
       return;
     }
     const scroller = messageScrollRef.current;
     if (!scroller) return;
     const switched = previousContactRef.current !== contact.id;
+    const grew = displayMessages.length !== messageCountRef.current;
+    messageCountRef.current = displayMessages.length;
+    // When nothing was added the scroller itself is the authority on where the
+    // reader is. Scroll events arrive a frame late, and this component
+    // re-renders on every refresh, so a stale "pinned" left over from before
+    // the reader scrolled away would drag them back to the bottom.
+    if (!switched && !grew && followTargetRef.current === null) {
+      pinnedToBottomRef.current = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 48;
+    }
     if (switched || pinnedToBottomRef.current) {
-      scroller.scrollTop = scroller.scrollHeight;
+      followBottom(grew && !switched && previousContactRef.current !== null);
       pinnedToBottomRef.current = true;
     }
     previousContactRef.current = contact.id;
@@ -526,7 +592,10 @@ export function Conversation(props: {
     const content = scroller.firstElementChild;
     if (!content) return;
     const observer = new ResizeObserver(() => {
-      if (pinnedToBottomRef.current) scroller.scrollTop = scroller.scrollHeight;
+      // Content that grows on its own (an image finishing, a bubble reflowing)
+      // is not a new message: follow it instantly, unless an animated follow is
+      // already running, in which case retarget it instead of cutting it off.
+      if (pinnedToBottomRef.current) followBottom(followTargetRef.current !== null);
     });
     observer.observe(content);
     return () => observer.disconnect();
@@ -669,12 +738,17 @@ export function Conversation(props: {
     // for a deterministic restore if the transaction fails or becomes unknown.
     setDraft('');
     setReplyTo(null);
+    const optimisticKey = `optimistic-${++sendSeqRef.current}`;
     setOptimisticSend({
-      dir: 'out', text, date: new Date().toISOString(), read: true, wireId: '',
-      replyTo: replyWireId ? { wireId: replyWireId } : null,
+      key: optimisticKey,
+      wireId: null,
+      message: {
+        dir: 'out', text, date: new Date().toISOString(), read: true, wireId: '',
+        replyTo: replyWireId ? { wireId: replyWireId } : null,
+      },
     });
     try {
-      await Promise.race([
+      const wireId = await Promise.race([
         props.onSend(text, replyWireId, controller.signal),
         new Promise<never>((_, reject) => {
           timeout = window.setTimeout(() => {
@@ -684,7 +758,16 @@ export function Conversation(props: {
           }, TEXT_SEND_TIMEOUT_MS);
         }),
       ]);
-      setOptimisticSend(null);
+      // Hand the bubble already on screen over to its confirmation: same key,
+      // same element, so the reader never sees the message twice or the row
+      // re-enter. Without a wire id there is nothing to hand over to, and the
+      // local copy simply retires.
+      if (wireId) {
+        sentKeysRef.current.set(wireId, optimisticKey);
+        setOptimisticSend((current) => current?.key === optimisticKey ? { ...current, wireId } : current);
+      } else {
+        setOptimisticSend((current) => current?.key === optimisticKey ? null : current);
+      }
       setUnknownSend(null);
     } catch (err) {
       setOptimisticSend(null);
@@ -757,10 +840,20 @@ export function Conversation(props: {
                 )}
               </div>
             )}
+            {/* Opening the app from a notification lands here before the
+                messages do. An empty thread with no explanation reads as a
+                lost message, so the header says what is happening — inline,
+                never a screen, and driven by state so it cannot stick on. */}
+            {props.syncing && (
+              <div className="conv-sync" role="status" aria-live="polite">
+                <span className="conv-sync-dot" aria-hidden />
+                {props.syncing === 'connecting' ? 'Connecting…' : 'Updating…'}
+              </div>
+            )}
             {/* Delegation + id demoted to a verification badge — tap for the
                 full story. The raw 'role X of Y' subtitle read like a broken
                 name; it is actually the anti-impersonation proof. */}
-            {contact.roleId ? (
+            {!props.syncing && (contact.roleId ? (
               <button className="idchip" onClick={() => setShowIdCard(true)}>
                 <Icon name="shield" size={11} />
                 verified role of {contact.rootName}
@@ -772,7 +865,7 @@ export function Conversation(props: {
                   verified identity
                 </button>
               )
-            )}
+            ))}
           </div>
         </div>
         {showIdCard && (
@@ -813,8 +906,32 @@ export function Conversation(props: {
         ref={messageScrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
-          pinnedToBottomRef.current = el.scrollHeight - el.clientHeight - el.scrollTop <= 48;
+          const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
+          // Frames of our own animated follow are not the reader scrolling
+          // away — reading them as such would strand the thread mid-animation
+          // and stop it following the next message. That follow only ever
+          // moves toward the newest message, so a scroll that goes the other
+          // way is someone else steering and takes the scroller back.
+          if (followTargetRef.current !== null) {
+            const previous = followTopRef.current;
+            if (previous === null || el.scrollTop >= previous - 1) {
+              followTopRef.current = el.scrollTop;
+              if (distance <= 4) {
+                followTargetRef.current = null;
+                followTopRef.current = null;
+              }
+              return;
+            }
+            followTargetRef.current = null;
+            followTopRef.current = null;
+          }
+          pinnedToBottomRef.current = distance <= 48;
         }}
+        // Any deliberate gesture hands scrolling back to the reader, even
+        // mid-animation, so an interrupted follow can never latch.
+        onPointerDown={() => { followTargetRef.current = null; followTopRef.current = null; }}
+        onTouchStart={() => { followTargetRef.current = null; followTopRef.current = null; }}
+        onWheel={() => { followTargetRef.current = null; followTopRef.current = null; }}
         onDragOver={(e) => { if (props.onSendFile) e.preventDefault(); }}
         onDrop={(e) => {
           if (!props.onSendFile) return;
@@ -850,7 +967,18 @@ export function Conversation(props: {
               re-keys (and never re-animates) the ones already on screen. */}
           <AnimatePresence initial={false}>
             {displayMessages.map((m, i) => {
-              const key = m.wireId || `${m.date}-${(props.hiddenEarlier ?? 0) + i}`;
+              // A message the reader has already seen keeps its element for as
+              // long as it is on screen: a confirmed send inherits the key its
+              // own optimistic bubble used, so the swap is a re-render and not
+              // an exit + enter that would briefly double the row.
+              const key = m === optimisticSend?.message
+                ? optimisticSend.key
+                : (m.wireId && sentKeysRef.current.get(m.wireId))
+                  || m.wireId
+                  || `${m.date}-${(props.hiddenEarlier ?? 0) + i}`;
+              // The anchor stays addressable by wire id — that is what push
+              // notification deep links and reply jumps resolve.
+              const domId = timelineMessageId(m.wireId || key);
               const prev = displayMessages[i - 1];
               const next = displayMessages[i + 1];
               const room = roomLineOf(m);
@@ -886,7 +1014,7 @@ export function Conversation(props: {
                   <motion.div
                     className="message-motion"
                     key={key}
-                    id={timelineMessageId(key)}
+                    id={domId}
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
@@ -914,7 +1042,7 @@ export function Conversation(props: {
                   <motion.div
                     className="message-motion"
                     key={key}
-                    id={timelineMessageId(key)}
+                    id={domId}
                     initial={{ opacity: 0, y: 12, scale: 0.985 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.98 }}
@@ -941,7 +1069,7 @@ export function Conversation(props: {
                 <motion.div
                   className="message-motion"
                   key={key}
-                  id={timelineMessageId(key)}
+                  id={domId}
                   initial={{ opacity: 0, y: 12, scale: 0.985 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.98 }}

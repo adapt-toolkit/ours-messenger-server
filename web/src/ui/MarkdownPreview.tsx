@@ -235,7 +235,7 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
 export function MarkdownPreview(props: {
   rec: FileRecord;
   onClose: () => void;
-  onSendText: (text: string, replyToWireId?: string) => Promise<void>;
+  onSendText: (text: string, replyToWireId?: string) => Promise<string | void>;
   onSendFile?: (att: PendingAttachment, replyToWireId?: string) => Promise<void>;
 }) {
   const { rec } = props;

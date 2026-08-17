@@ -187,6 +187,18 @@
 .conv-peer-sub { font-size: 0.76rem; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conv-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 
+/* Sync state, in the line the verification chip normally occupies: the app is
+   working, said quietly, in place, without covering the conversation. */
+.conv-sync { display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--text-2); white-space: nowrap; }
+.conv-sync-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: conv-sync-pulse 1.1s ease-in-out infinite; }
+@keyframes conv-sync-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50% { opacity: 0.9; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conv-sync-dot { animation: none; opacity: 0.6; }
+}
+
 /* rename pencil — appears with the name, quiet until hovered */
 .conv-peer-name { display: flex; align-items: center; gap: 4px; }
 .name-pencil { width: 24px; height: 24px; opacity: 0.45; flex-shrink: 0; }

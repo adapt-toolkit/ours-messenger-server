@@ -25,6 +25,8 @@ const convergenceDelays = [0, 100, 400, 1_000, 3_000, 6_000] as const;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const receiptRank = { delivered: 1, read: 2 } as const;
 const DARK_KEY = 'ours-dark-v3';
+/** Deep link a push notification opens the app with: #chat-message-<wire id>. */
+const ANCHOR_HASH = '#chat-message-';
 const timelineTimeMs = timeMsJs as (date: string) => number;
 
 interface InstallPromptEvent extends Event {
@@ -130,6 +132,9 @@ export function AppShell() {
   const [push, setPush] = useState<PushView>({ status: 'unsupported', preview: 'full' });
   const [pushBusy, setPushBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // A cold open from a push notification asks for one specific message. Until
+  // that message is on screen the app is still catching up, and it says so.
+  const [anchorPending, setAnchorPending] = useState(() => window.location.hash.startsWith(ANCHOR_HASH));
   const { toasts, push: pushToast, dismiss: dismissToast, clear: clearToasts } = useMessageToasts();
 
   const dispatch = useCallback((action: AppAction) => {
@@ -227,6 +232,26 @@ export function AppShell() {
       if (records?.some((item) => item.wire_id === wireId)) return;
     }
   }, [refreshFiles]);
+
+  // Opening the app from a push notification asks for one specific message.
+  // Hold the "updating" state until that message is actually in the loaded
+  // page — or until the bounded convergence gives up, so it always settles.
+  const anchorConverged = useRef(false);
+  useEffect(() => {
+    if (!anchorPending || !state.loaded) return;
+    const wireId = decodeURIComponent(window.location.hash.slice(ANCHOR_HASH.length));
+    const cid = selectedContactCid(stateRef.current);
+    if (!wireId || !cid) { setAnchorPending(false); return; }
+    if (pageFor(stateRef.current, cid)?.messages.some((item) => item.wire_id === wireId)) {
+      setAnchorPending(false);
+      return;
+    }
+    if (anchorConverged.current) return;
+    anchorConverged.current = true;
+    void converge(cid, (page) => page.messages.some((item) => item.wire_id === wireId))
+      .catch(() => undefined)
+      .finally(() => setAnchorPending(false));
+  }, [anchorPending, converge, state.loaded, state.pages]);
 
   useMemo(() => {
     configureMediaProvider({
@@ -361,6 +386,17 @@ export function AppShell() {
   const selectedView = viewContacts.find((item) => item.id === selectedCid) ?? null;
   const messages = selectedCid ? timeline(pageFor(state, selectedCid), files[selectedCid] ?? []) : [];
   const identity = state.identity;
+  // What the conversation header reports while canonical state is behind the
+  // screen. Every branch is derived from state, so it clears by itself.
+  const syncing: 'connecting' | 'updating' | null = !state.loaded
+    ? 'connecting'
+    : selectedCid && !pageFor(state, selectedCid)
+      ? 'updating'
+      : anchorPending
+        ? 'updating'
+        : state.connection !== 'live'
+          ? 'connecting'
+          : null;
   const updatePush = async (action: 'enable' | 'disable' | 'repair', preview: PushPreviewMode = push.preview) => {
     if (!worker.registration) return;
     setPushBusy(true); setPush((current) => ({ ...current, status: 'repairing', preview }));
@@ -396,7 +432,7 @@ export function AppShell() {
       <main className={'section signal-stage' + (state.mobileDetailOpen ? ' show-detail' : '')}>
         <ChatList contacts={viewContacts} roots={rootViews(state.contacts)} selected={selectedCid} onSelect={(cid) => { if (!cid.startsWith('pending:')) void selectContact(cid); }} onInvite={openInvites} onSettings={() => setModal('settings')} />
         <Conversation
-          key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages}
+          key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages} syncing={syncing}
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
           onLoadEarlier={selectedCid && historyBusy !== selectedCid ? () => void loadOlder(selectedCid) : undefined}
           onBack={() => go({ name: 'chats', contactCid: null }, chatPath(), false)}
@@ -415,6 +451,10 @@ export function AppShell() {
               },
             });
             void converge(cid, (page) => page.messages.some((message) => message.wire_id === sent.wire_id));
+            // The composer's own bubble is already on screen; handing back the
+            // wire id lets it become the confirmed message in place instead of
+            // being replaced by a second one.
+            return sent.wire_id;
           }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
           onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}
