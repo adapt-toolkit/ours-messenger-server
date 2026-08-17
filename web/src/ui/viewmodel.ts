@@ -2,7 +2,7 @@
 // bc0183c80e9ee0ea2dd5adecb58460b0564e90d5. Fleet/control models are excluded.
 // @ts-ignore -- canonical pure-JS helper is typed at this seam.
 import { toDate as toDateJs } from './timelineCore.mjs';
-import { roomContactLabel } from './roomMessageCore.mjs';
+import { roomContactLabel } from '../../../shared/roomMessageCore.mjs';
 
 const toDate = toDateJs as (value: string) => Date | null;
 

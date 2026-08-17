@@ -12,7 +12,15 @@
 // Room-voice notices are authored by the room's own identity with role 'room'
 // (src/service.ts ROOM_ROLE); a participant's message carries their seat.
 //
-// TWO RULES THIS FILE EXISTS TO KEEP:
+// THIS MODULE IS SHARED BY THE BROWSER AND THE SERVER, and lives outside web/
+// for that reason. A room payload reaches THREE surfaces — the conversation, the
+// chat-list preview, and the push notification the server composes — and the
+// notification cannot be built in the browser. One parser is the only thing that
+// keeps the three from drifting; a second one written for the server would drift
+// on the first additive kind.
+//
+// TWO RULES THIS FILE EXISTS TO KEEP, and they now bind those three surfaces
+// rather than one:
 //
 // 1. INV-R6 (additive JSON): the kind set grows server-side without a client
 //    release. A kind this build has never seen MUST still render its `text` as
