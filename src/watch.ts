@@ -28,6 +28,8 @@ import type { PushEvent, PushStore } from './push.js';
 import type { MediaStore } from './media.js';
 import { reportFailure } from './security.js';
 import type { PushDeliveryQueue } from './push-delivery.js';
+// @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
+import { contactMessagePreview } from '../shared/roomMessageCore.mjs';
 
 export interface WatcherLog {
   info(msg: string): void;
@@ -70,7 +72,14 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
     }
     if (!message) throw new Error('canonical message was not available for push projection');
     const sender = nonEmpty(record.sender_name) ? record.sender_name : 'New message';
-    return { v: 1, kind: 'message', title: sender, body: message.text, contact_id: contactId, wire_id: wireId, url };
+    // A COWORK ROOM RELAYS SIGNED JSON, and a notification is the one surface a
+    // user cannot scroll past. `contactMessagePreview` is the same recogniser the
+    // conversation renders with, so an unknown-but-additive kind degrades to its
+    // readable text here exactly as it does in the chat (INV-R6), and the author
+    // identity is never read for display (INV-R3). An ordinary contact's text is
+    // returned untouched.
+    const body = contactMessagePreview(sender, message.text) as string;
+    return { v: 1, kind: 'message', title: sender, body, contact_id: contactId, wire_id: wireId, url };
   }
 
   if (record.event === 'file_received') {

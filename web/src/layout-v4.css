@@ -473,7 +473,10 @@
 .markdown-body h3 { font-size: 1.2rem; }
 .markdown-body p, .markdown-body ul, .markdown-body ol, .markdown-body blockquote,
 .markdown-body pre, .markdown-body table { margin: 0 0 1em; }
-.markdown-body ul, .markdown-body ol { padding-left: 1.6em; }
+.markdown-body ul, .markdown-body ol { padding-left: 1.6em; list-style: revert; }
+/* Same Tailwind preflight reset, same restoration — the document preview is the
+   other surface that renders user markdown, and it lost its markers too. */
+.markdown-body li:has(> input[type='checkbox']) { list-style: none; }
 .markdown-body li + li { margin-top: 0.24em; }
 .markdown-body input[type='checkbox'] { margin-right: 0.5em; accent-color: var(--accent); }
 .markdown-body blockquote {

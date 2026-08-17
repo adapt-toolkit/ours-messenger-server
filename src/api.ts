@@ -443,17 +443,24 @@ const ROUTES: Record<string, Handler> = {
     const rawLimit = query.get('limit');
     const limit = rawLimit === null ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
     const before = query.get('before') ?? undefined;
-    const [conversation, receipts, incoming] = await Promise.all([
+    const [conversation, receipts, incoming, contacts] = await Promise.all([
       client.getConversation({ contact }),
       client.getReceipts({ contact }),
       client.listIncomingMessages(),
+      // The SERVER-ANNOUNCED identity, which is what decides whether a body may
+      // be read as a room envelope. The route param may be a container id or a
+      // local alias, and neither is authenticated metadata.
+      client.listContacts(),
     ]);
+    const announcedContact = contacts.contacts.find(
+      (row) => row.container_id === contact || row.name === contact,
+    )?.name ?? contact;
     const incomingReplies = new Map(incoming.map((message) => [message.wire_id, message.reply_to]));
     const withReplies = conversation.messages.map((message) => ({
       ...message,
       reply_to: incomingReplies.get(message.wire_id) ?? deps.media?.replyFor(message.wire_id) ?? null,
     }));
-    return projectPage(contact, withReplies, receipts, { limit, before });
+    return projectPage(contact, withReplies, receipts, { limit, before, announcedContact });
   },
 
   'GET /api/conversations/:contact/receipts': async ({ client, params }) =>

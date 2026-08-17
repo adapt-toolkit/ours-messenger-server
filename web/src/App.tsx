@@ -84,9 +84,9 @@ function rootViews(contacts: AppState['contacts']): Record<string, RootMetaVM> {
 function contactViews(state: AppState, media: Record<string, readonly MediaRecord[]>): ContactVM[] {
   const active = state.contacts.contacts.map((contact) => {
     const root = state.contacts.roots?.[contact.container_id];
-    const items = timeline(pageFor(state, contact.container_id), media[contact.container_id] ?? []);
-    const last = items.at(-1);
     const page = pageFor(state, contact.container_id);
+    const items = timeline(page, media[contact.container_id] ?? []);
+    const last = items.at(-1);
     return {
       id: contact.container_id,
       name: contact.name,
@@ -94,7 +94,13 @@ function contactViews(state: AppState, media: Record<string, readonly MediaRecor
       initials: initials(contact.name),
       when: last ? fmtWhen(last.date) : '',
       activityAt: last?.date ?? '',
-      last: last?.kind === 'file' ? filePreviewLabel(last.filename, last.mime) : last?.text ?? '',
+      // A file row is labelled from its own metadata; everything else takes the
+      // SERVER'S preview, which is the same line the push notification carries.
+      // Falling back to the raw text keeps a page from an older server working,
+      // and is the only path that can still show a room body verbatim.
+      last: last?.kind === 'file'
+        ? filePreviewLabel(last.filename, last.mime)
+        : page?.preview ?? last?.text ?? '',
       unread: page?.unread ?? 0,
       status: 'active' as const,
       root: root?.root_cid ?? null,

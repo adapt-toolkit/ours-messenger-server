@@ -19,6 +19,10 @@ import { MessageReceipt, type MessageReceiptState } from './MessageReceipt';
 import { isMarkdownFilename } from './markdownReviewCore.mjs';
 import { attachmentBlobMime, isHtmlAttachment } from './htmlPreviewCore.mjs';
 import { VOICE_BITRATE, VOICE_CONTAINER_CANDIDATES } from './voiceRecordingCore.mjs';
+import { measureVoiceDuration, parseVoiceDuration, withVoiceDuration } from '../voice.js';
+import {
+  createLiveWaveformScaler, LIVE_WAVEFORM_BARS, peaksFromSamples, WAVEFORM_BARS, waveformBars,
+} from './voiceWaveformCore.mjs';
 
 // The playable mime = the base type (a voice note's mime is
 // `<real container>; x-ours-kind=voice-message` — strip the marker param).
@@ -167,8 +171,52 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
   const trackRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0); // 0..1
-  const [dur, setDur] = useState<number | null>(null);
+  // The length the SENDER measured from the finalised blob, carried in the mime.
+  // It is the only source that works for a peer: a streamed container reports no
+  // duration, so an element on this device has nothing to read. Absent for every
+  // voice message sent before that was captured, and for a sender whose browser
+  // could not measure one — permanently, not transitionally. Absent stays null,
+  // and the bubble shows '·:··' rather than inventing 0:00.
+  const [dur, setDur] = useState<number | null>(() => parseVoiceDuration(rec.mime));
   const [scrubbing, setScrubbing] = useState(false);
+  // The shape of the recording, decoded once from the bytes already fetched for
+  // playback. Null until it is known — the thin track is the honest fallback for
+  // a note whose bytes are still on the other device, or whose container this
+  // browser cannot decode. Nothing here is invented: every bar is measured off
+  // the actual samples.
+  const [bars, setBars] = useState<number[] | null>(null);
+
+  // ABOVE THE OFF-DEVICE EARLY RETURN, deliberately: a hook declared after a
+  // conditional return runs on some renders and not others, and React unmounts
+  // the tree when the count changes. `url` being null is handled inside instead.
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false;
+    const Ctx = typeof window === 'undefined'
+      ? undefined
+      : window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    // close() throws synchronously on an already-closed context, and this runs
+    // both at the end of the decode and again on unmount. An exception escaping
+    // a cleanup function unmounts the tree, so neither call may be trusted to
+    // return a promise.
+    const closeContext = () => { try { void ctx.close()?.catch?.(() => {}); } catch { /* already closed */ } };
+    void (async () => {
+      try {
+        const bytes = await fetch(url).then((response) => response.arrayBuffer());
+        const decoded = await ctx.decodeAudioData(bytes);
+        if (cancelled) return;
+        setBars(waveformBars(peaksFromSamples(decoded.getChannelData(0), WAVEFORM_BARS)));
+      } catch {
+        // Decoding is presentation only. A container this browser cannot read
+        // must still play through the element and must not break the bubble.
+      } finally {
+        closeContext();
+      }
+    })();
+    return () => { cancelled = true; closeContext(); };
+  }, [url]);
 
   if (loaded && !url) {
     return (
@@ -222,7 +270,7 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
         <Icon name={playing ? 'pause' : 'play'} size={14} />
       </button>
       <div
-        className={'voice-track' + (url ? ' seekable' : '') + (scrubbing ? ' scrubbing' : '')}
+        className={'voice-track' + (url ? ' seekable' : '') + (scrubbing ? ' scrubbing' : '') + (bars ? ' has-wave' : '')}
         ref={trackRef}
         onPointerDown={onScrubDown}
         onPointerMove={onScrubMove}
@@ -232,7 +280,19 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
         aria-label={url ? 'Seek' : undefined}
         aria-valuenow={Math.round(progress * 100)}
       >
-        <div className="voice-track-fill" style={{ width: `${progress * 100}%` }} />
+        {bars ? (
+          <div className="voice-wave" aria-hidden>
+            {bars.map((height, index) => (
+              <span
+                key={index}
+                className={'voice-wave-bar' + (index / bars.length < progress ? ' played' : '')}
+                style={{ height: `${Math.round(height * 100)}%` }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="voice-track-fill" style={{ width: `${progress * 100}%` }} />
+        )}
         {url && <span className="voice-track-knob" style={{ left: `${progress * 100}%` }} />}
       </div>
       <span className="voice-dur mono">
@@ -250,8 +310,11 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
             if (!scrubbing && a.duration > 0 && isFinite(a.duration)) setProgress(a.currentTime / a.duration);
           }}
           onLoadedMetadata={(e) => {
+            // Only when the container actually carries one — a real value here
+            // is at least as good as the sender's, and Infinity is what a
+            // streamed container reports. Never downgrade a carried duration.
             const d = e.currentTarget.duration;
-            if (isFinite(d)) setDur(d);
+            if (isFinite(d) && d > 0) setDur(d);
           }}
         />
       )}
@@ -407,7 +470,7 @@ const VOICE_MAX_SECONDS_BY_BYTES = Math.floor(MAX_FILE_BYTES / (VOICE_BITRATE / 
 // 5 min is the PRODUCT cap (a voice note, not a podcast); the byte cap is the
 // transport truth. Take whichever binds first so the two can never disagree.
 const MAX_SECONDS = Math.min(300, VOICE_MAX_SECONDS_BY_BYTES);
-const WAVE_BARS = 44;
+const WAVE_BARS = LIVE_WAVEFORM_BARS;
 
 export function VoiceComposer(props: {
   disabled?: boolean;
@@ -560,14 +623,18 @@ export function VoiceComposer(props: {
     rec.onstop = () => {
       const discard = discardRef.current;
       if (discard) { afterStop(); return; }
-      void new Blob(chunksRef.current).arrayBuffer().then((buf) => {
+      // TYPED, because the length is measured off this blob through an <audio>
+      // element and an untyped one gives the decoder nothing to go on.
+      const blob = new Blob(chunksRef.current, { type: baseRef.current });
+      void Promise.all([blob.arrayBuffer(), measureVoiceDuration(blob)]).then(([buf, seconds]) => {
         afterStop();
         if (buf.byteLength === 0) return;
         const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
         onReadyRef.current({
-          // the LOCKED Dev-8 marker: real container base + x-ours-kind param
+          // the LOCKED Dev-8 marker: real container base + x-ours-kind param,
+          // now with the length measured from the FINALISED take beside it.
           filename: `${VOICE_FILE_PREFIX}${stamp}.${extRef.current}`,
-          mime: voiceMime(baseRef.current),
+          mime: withVoiceDuration(voiceMime(baseRef.current), seconds),
           bytes: new Uint8Array(buf),
           voice: true,
         });
@@ -597,6 +664,10 @@ export function VoiceComposer(props: {
       analyser.fftSize = 256;
       src.connect(analyser);
       const data = new Uint8Array(analyser.fftSize);
+      // Speech sits near the bottom of a linear scale, so a linear bar flatlines
+      // however tall the strip is. The scaler tracks a decaying running maximum
+      // and curves the result, which keeps a quiet passage moving.
+      const scaler = createLiveWaveformScaler();
       let last = 0;
       const tick = (ts: number) => {
         rafRef.current = requestAnimationFrame(tick);
@@ -609,7 +680,7 @@ export function VoiceComposer(props: {
           sum += v * v;
         }
         const rms = Math.sqrt(sum / data.length);
-        const level = Math.max(0.06, Math.min(1, rms * 3.2));
+        const level = scaler.push(rms);
         setLevels((prev) => {
           const next = prev.length >= WAVE_BARS ? prev.slice(1) : prev.slice();
           next.push(level);

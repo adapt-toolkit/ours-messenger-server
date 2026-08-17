@@ -379,6 +379,9 @@
 .file-loading { padding: 24px 40px; font-size: 0.8rem; color: var(--text-3); }
 
 .voice-bubble { display: flex; align-items: center; gap: 9px; min-width: 210px; padding: 9px 12px; }
+/* Room for the waveform above, without changing the bubble for a note that has
+   only the thin rail. */
+.voice-bubble:has(.voice-track.has-wave) { min-width: 240px; }
 .voice-play {
   width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
   display: grid; place-items: center; border: none; cursor: pointer;
@@ -387,9 +390,25 @@
 .bubble.me .voice-play { background: var(--on-accent); color: var(--accent-deep); }
 .voice-play:disabled { opacity: 0.5; }
 .voice-track { flex: 1; height: 4px; border-radius: 99px; background: color-mix(in oklab, currentColor 18%, transparent); position: relative; }
+/* A REAL WAVEFORM, once the bytes have been decoded. A 4px progress rail says
+   nothing about the recording; this is the shape of the actual audio. It is
+   taller than the rail it replaces because a waveform read at a glance needs
+   vertical room to be a shape rather than a texture, and the bars carry no
+   background of their own so an undecodable note falls back to the rail with no
+   empty box left behind. */
+.voice-wave { position: absolute; inset: 0; display: flex; align-items: center; gap: 1px; overflow: hidden; }
+.voice-wave-bar {
+  flex: 1 1 0; min-width: 2px; border-radius: 2px; min-height: 2px;
+  background: color-mix(in oklab, currentColor 30%, transparent);
+  transition: background 0.12s linear;
+}
+.voice-wave-bar.played { background: currentColor; }
 .voice-track-fill { height: 100%; border-radius: 99px; background: currentColor; transition: width 0.12s linear; }
 /* playback scrubbing: a taller hit-area + a draggable knob revealed on hover/scrub */
 .voice-track.seekable { height: 6px; cursor: pointer; touch-action: none; }
+/* After .seekable deliberately: a seekable waveform is still a waveform, and the
+   two rules have equal specificity, so order is what decides. */
+.voice-track.has-wave { height: 34px; border-radius: 6px; background: transparent; }
 .voice-track.scrubbing .voice-track-fill { transition: none; }
 .voice-track-knob {
   position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
@@ -442,8 +461,22 @@
   outline-offset: 1px;
 }
 
+/* THE FRAME HUGS ITS CONTENT, AND THE CONTENT FILLS THE FRAME.
+   `min-width: 220px` used to sit on .filecard. A bubble is sized by its content
+   in the ordinary way, and a card held open by a min-width is not content the
+   bubble measures — so a short filename produced a 220px card inside a 154px
+   frame. The card overran the frame's right edge and the Download action ended
+   up nowhere near where the frame said that edge was.
+   Of the two available fixes, hugging is the right one and pinning the action
+   alone is not: pinning would put the button at the frame's edge while leaving
+   the card still overrunning it, which fixes the symptom the owner described
+   and leaves the geometry incoherent. With the fixed minimum gone the frame
+   measures the card, the card fills the frame, and the trailing action lands on
+   the same right edge in both — at every filename length and viewport width.
+   A short name now yields a small bubble rather than a 220px one, which is what
+   hugging means and is the deliberate part of this change. */
 .filecard-bubble { padding: 8px 10px; }
-.filecard { display: flex; align-items: center; gap: 10px; min-width: 220px; }
+.filecard { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
 .filecard-ic {
   width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
   display: grid; place-items: center;
@@ -451,7 +484,9 @@
 }
 .bubble.me .filecard-ic { background: color-mix(in oklab, var(--on-accent) 18%, transparent); color: var(--on-accent); border-color: transparent; }
 .filecard-meta { min-width: 0; flex: 1; }
-.filecard-name { font-size: 0.88rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+/* Truncate against the space the card actually has, not against a fixed 220px
+   that has nothing to do with the frame it is now stretched inside. */
+.filecard-name { font-size: 0.88rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .filecard-sub { font-size: 0.74rem; opacity: 0.7; }
 .filecard .icon-btn { color: inherit; }
 .filecard .icon-btn.disabled { opacity: 0.4; pointer-events: none; }
@@ -497,8 +532,12 @@
 .vr-time { font-size: 0.9rem; font-weight: 600; color: var(--text); flex-shrink: 0; min-width: 42px; }
 /* live waveform bars */
 .vr-slide { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; overflow: hidden; transition: opacity 0.1s linear; }
-.vr-wave { display: flex; align-items: center; gap: 2px; height: 26px; flex: 1; min-width: 0; overflow: hidden; justify-content: flex-end; }
-.vr-bar { width: 3px; min-height: 3px; border-radius: 2px; flex-shrink: 0; background: var(--accent); align-self: center; transition: height 0.08s linear; }
+/* TALLER, AND WIDER BARS. 26px of track with speech shaped into the bottom
+   tenth of it read as a flat line; the height here is paired with the
+   perceptual scaling in voiceWaveformCore, because either one alone leaves it
+   unreadable — a taller strip with a linear scale is just more empty space. */
+.vr-wave { display: flex; align-items: center; gap: 3px; height: 44px; flex: 1; min-width: 0; overflow: hidden; justify-content: flex-end; }
+.vr-bar { width: 4px; min-height: 4px; border-radius: 2px; flex-shrink: 0; background: var(--accent); align-self: center; transition: height 0.08s linear; }
 .vr-hint { font-size: 0.78rem; color: var(--text-3); white-space: nowrap; flex-shrink: 0; }
 /* the lock affordance rises above the mic; fills toward accent as you slide up */
 .vr-lock {

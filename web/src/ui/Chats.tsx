@@ -27,7 +27,7 @@ import {
   roomLineForContact,
   roomMessagePreview,
   type RoomLine,
-} from './roomMessageCore.mjs';
+} from '../../../shared/roomMessageCore.mjs';
 
 // DEBUG (marker-gated, iOS received-file render investigation). Build with
 // VITE_FILES_DEBUG=1 to show a per-row readout of the RAW extraction facts so
