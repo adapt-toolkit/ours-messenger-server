@@ -221,8 +221,32 @@ export function AppShell() {
       await Promise.all([refreshPage(cid), refreshContacts()]);
     }).catch(showError);
   }, [gateState, refreshContacts, refreshPage, showError]);
-  const converge = useCallback(async (cid: string, ready: (page: NonNullable<ReturnType<typeof pageFor>>) => boolean) => {
-    const key = `page:${cid}`;
+  /**
+   * Poll the conversation until `ready`, then stop.
+   *
+   * `purpose` SCOPES THE CANCELLATION, and it is load-bearing. Every caller used
+   * to share one generation slot per contact, so the last converge to start
+   * silently orphaned all the others. In practice that meant the convergence
+   * watching for a delivered receipt was cancelled by the one the send itself
+   * starts — whose predicate ("my message is in the page") is satisfied by its
+   * very first poll. Nothing was left watching for the receipt, and the tick
+   * waited for whatever unrelated refresh happened next, which is usually the
+   * READ receipt. That is the "one tick, then straight to read" report.
+   *
+   * On a fast link the receipt lands before the send resolves, so the ordering
+   * is harmless and the bug hides completely — which is why it never showed up
+   * in local testing.
+   *
+   * Same purpose still supersedes: a read receipt for the same wire ids cancels
+   * the delivered convergence for them, and should, because it is strictly
+   * stronger.
+   */
+  const converge = useCallback(async (
+    cid: string,
+    ready: (page: NonNullable<ReturnType<typeof pageFor>>) => boolean,
+    purpose = 'page',
+  ) => {
+    const key = `page:${cid}:${purpose}`;
     const generation = (convergence.current.get(key) ?? 0) + 1;
     convergence.current.set(key, generation);
     for (const delay of convergenceDelays) {
@@ -259,7 +283,7 @@ export function AppShell() {
     }
     if (anchorConverged.current) return;
     anchorConverged.current = true;
-    void converge(cid, (page) => page.messages.some((item) => item.wire_id === wireId))
+    void converge(cid, (page) => page.messages.some((item) => item.wire_id === wireId), `anchor:${wireId}`)
       .catch(() => undefined)
       .finally(() => setAnchorPending(false));
   }, [anchorPending, converge, state.loaded, state.pages]);
@@ -353,15 +377,27 @@ export function AppShell() {
         }
         if (event.type === 'message_received') {
           const contact = stateRef.current.contacts.contacts.find((item) => item.container_id === event.contact_id);
-          await converge(event.contact_id, (page) => page.messages.some((item) => item.wire_id === event.wire_id));
+          await converge(
+            event.contact_id,
+            (page) => page.messages.some((item) => item.wire_id === event.wire_id),
+            `message:${event.wire_id}`,
+          );
           if (selectedContactCid(stateRef.current) === event.contact_id) await markVisibleRead(event.contact_id);
           else if (contact) pushToast(event.contact_id, contact.name, 'New message');
           return;
         }
+        // APPLY IT NOW, from the payload the event already carries. The poll
+        // below is confirmation, not the mechanism: it reconciles with canonical
+        // state and catches anything the event did not name. Before this, the
+        // event's kind and wire ids were discarded and the client went back to
+        // the server to rediscover what it had just been told.
+        dispatch({
+          type: 'receipt', contactCid: event.contact_id, kind: event.kind, wireIds: event.wire_ids,
+        });
         await converge(event.contact_id, (page) => event.wire_ids.every((wireId) => {
           const row = page.messages.find((item) => item.wire_id === wireId);
           return !!row?.receipt && receiptRank[row.receipt] >= receiptRank[event.kind];
-        }));
+        }), `receipt:${event.wire_ids.join(',')}`);
       })().catch(showError);
     };
     const disconnectLive = listenLiveEvents(handleEvent);
@@ -462,7 +498,11 @@ export function AppShell() {
               },
             });
             if (sent.wire_id) {
-              void converge(cid, (page) => page.messages.some((message) => message.wire_id === sent.wire_id));
+              void converge(
+                cid,
+                (page) => page.messages.some((message) => message.wire_id === sent.wire_id),
+                `send:${sent.wire_id}`,
+              );
             } else {
               // An introduction-carried send: converging on its wire id would poll
               // the full 10.5s schedule for a canonical row that is never written.

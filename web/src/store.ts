@@ -6,6 +6,7 @@ import type {
   IdentityView,
 } from './types.js';
 import type { AppRoute } from './router.js';
+import { strongerReceipt } from './receiptOrder.mjs';
 
 export interface AppState {
   identity: IdentityView | null;
@@ -31,6 +32,13 @@ export type AppAction =
   | { type: 'contacts'; contacts: ContactsResponse }
   | { type: 'page'; contactCid: string; page: ConversationPage }
   | { type: 'sent_message'; contactCid: string; message: ConversationMessage }
+  /**
+   * Apply a receipt the SERVER ALREADY TOLD US ABOUT, from the live event's own
+   * payload, instead of going back to the server to rediscover it. The event
+   * carries the kind and the wire ids; throwing that away and polling for it is
+   * what made the tick depend on a poll landing at the right moment.
+   */
+  | { type: 'receipt'; contactCid: string; kind: 'delivered' | 'read'; wireIds: readonly string[] }
   | {
       type: 'older_page'; contactCid: string; page: ConversationPage;
       /** Snapshot that followed this cursor when the request began; closes refresh races without gaps. */
@@ -165,6 +173,37 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           [key]: { ...current, messages, total: Math.max(current.total + 1, messages.length) },
         },
         pendingSends: { ...state.pendingSends, [key]: pending },
+      };
+    }
+    case 'receipt': {
+      if (!state.identity) return state;
+      const key = dialogKey(state.identity.cid, action.contactCid);
+      const current = state.pages[key];
+      const pending = state.pendingSends[key];
+      const named = new Set(action.wireIds);
+      // MONOTONIC, like the server's own overlay: a receipt only ever moves
+      // forward. Live events can arrive out of order, and a delivered event
+      // landing after a read one must not walk the tick back to one tick.
+      const apply = (messages: ConversationPage['messages']) => {
+        let changed = false;
+        const next = messages.map((message) => {
+          if (!message.wire_id || !named.has(message.wire_id)) return message;
+          const receipt = strongerReceipt(message.receipt, action.kind);
+          if (receipt === message.receipt) return message;
+          changed = true;
+          return { ...message, receipt };
+        });
+        return changed ? next : messages;
+      };
+      const messages = current ? apply(current.messages) : undefined;
+      const nextPending = pending ? apply(pending) : undefined;
+      // Identity comparison, so an event naming messages we do not hold — or one
+      // that changes nothing — does not re-render the conversation.
+      if (messages === current?.messages && nextPending === pending) return state;
+      return {
+        ...state,
+        pages: current && messages ? { ...state.pages, [key]: { ...current, messages } } : state.pages,
+        pendingSends: pending && nextPending ? { ...state.pendingSends, [key]: nextPending } : state.pendingSends,
       };
     }
     case 'older_page': {
