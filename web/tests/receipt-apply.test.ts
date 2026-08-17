@@ -118,4 +118,41 @@ const receipt = (kind: 'delivered' | 'read', wireIds: string[]) =>
     'a receipt reaches the optimistic row, which is all that exists until the page arrives');
 }
 
-console.log('receipt-apply OK — the event applies its own payload, forward only, and only to what it names');
+// ---- and a page response that is honest but OLDER cannot undo any of it ----
+// Several /page GETs are in flight at once as a matter of course, and they
+// complete in whatever order the network gives them. src/conversation.ts
+// enforces this direction within one response; nothing enforced it across two.
+{
+  let state = withPage([message('W1')]);
+  state = appReducer(state, receipt('delivered', ['W1']));
+  // A response issued before the receipt existed, landing after it was applied.
+  state = appReducer(state, {
+    type: 'page',
+    contactCid: CID,
+    page: { contact: CID, messages: [message('W1', null)], total: 1, unread: 0, hasMore: false, nextBefore: null },
+  });
+  assert.equal(receiptOf(state, 'W1'), 'delivered',
+    'A STALE PAGE RESPONSE DOES NOT WALK THE TICK BACK — this is what makes applying the event durable');
+
+  state = appReducer(state, receipt('read', ['W1']));
+  state = appReducer(state, {
+    type: 'page',
+    contactCid: CID,
+    page: { contact: CID, messages: [message('W1', 'delivered')], total: 1, unread: 0, hasMore: false, nextBefore: null },
+  });
+  assert.equal(receiptOf(state, 'W1'), 'read', 'and a page still reporting delivered does not undo read');
+}
+
+// A page response that moves a receipt FORWARD is still applied, since it is the
+// canonical source and the events only ever announce what it will confirm.
+{
+  let state = withPage([message('W1')]);
+  state = appReducer(state, {
+    type: 'page',
+    contactCid: CID,
+    page: { contact: CID, messages: [message('W1', 'read')], total: 1, unread: 0, hasMore: false, nextBefore: null },
+  });
+  assert.equal(receiptOf(state, 'W1'), 'read', 'a page response carrying a stronger receipt is applied');
+}
+
+console.log('receipt-apply OK — and a stale page response cannot walk a tick backwards');

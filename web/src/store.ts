@@ -95,6 +95,31 @@ export function pageFor(state: AppState, contactCid: string): ConversationPage |
   return state.identity ? state.pages[dialogKey(state.identity.cid, contactCid)] ?? null : null;
 }
 
+/**
+ * Overwrite a row with a newer copy WITHOUT losing a receipt it already has.
+ *
+ * src/conversation.ts enforces `null < delivered < read` within one response and
+ * says so: "a stale map can never walk a tick backwards". Nothing enforced it
+ * ACROSS responses. `refreshPage` is called, unawaited, from six places — the
+ * convergence schedule alone fires at 0/100/400/1000/3000/6000ms, and live
+ * events, markRead and the per-contact snapshot sweep add more — so several
+ * /page GETs are in flight at once as a matter of course, and they complete in
+ * whatever order the network gives them.
+ *
+ * An older response is not wrong. It is honest and out of date, and applying it
+ * on top of a newer one walked the tick from delivered back to one tick, where
+ * it stayed until something else happened to refresh. It also made the receipt
+ * applied straight from a live event undurable: the next poll already in flight
+ * would undo it.
+ */
+function keepStrongerReceipt(
+  current: ConversationPage['messages'][number],
+  next: ConversationPage['messages'][number],
+): ConversationPage['messages'][number] {
+  const receipt = strongerReceipt(current.receipt, next.receipt);
+  return receipt === next.receipt ? next : { ...next, receipt };
+}
+
 function mergeMessages(
   first: ConversationPage['messages'],
   second: ConversationPage['messages'],
@@ -108,7 +133,7 @@ function mergeMessages(
       if (message.wire_id) stable.set(message.wire_id, merged.length);
       merged.push(message);
     } else {
-      merged[existing] = message;
+      merged[existing] = keepStrongerReceipt(merged[existing], message);
     }
   }
   return merged;
@@ -138,14 +163,24 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       const pending = state.pendingSends[key] ?? [];
       const canonicalWireIds = new Set(action.page.messages.map((message) => message.wire_id));
       const remainingPending = pending.filter((message) => !canonicalWireIds.has(message.wire_id));
+      // The wholesale-replacement branch needs the same protection as the merge
+      // branch: replacing the page with an older response drops every receipt
+      // the page had learned since that request was issued.
+      const held = new Map(current?.messages.map((message) => [message.wire_id, message.receipt]) ?? []);
+      const reconciled = current
+        ? action.page.messages.map((message) => {
+            const receipt = strongerReceipt(held.get(message.wire_id) ?? null, message.receipt);
+            return receipt === message.receipt ? message : { ...message, receipt };
+          })
+        : action.page.messages;
       const canonicalPage = current && current.messages.length > 50
         ? {
             ...action.page,
-            messages: mergeMessages(current.messages, action.page.messages),
+            messages: mergeMessages(current.messages, reconciled),
             hasMore: current.hasMore,
             nextBefore: current.nextBefore,
           }
-        : action.page;
+        : { ...action.page, messages: reconciled };
       const messages = mergeMessages(canonicalPage.messages, remainingPending);
       const page = {
         ...canonicalPage,
