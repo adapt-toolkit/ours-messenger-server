@@ -186,16 +186,9 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
   // the actual samples.
   const [bars, setBars] = useState<number[] | null>(null);
 
-  if (loaded && !url) {
-    return (
-      <div className={cls + ' filecard-bubble file-offdevice-bubble'}>
-        {rec.available === false ? <FetchMedia rec={rec} onFetch={onFetch} /> : <OriginalDeviceNote label="Voice message" />}
-        {footer}
-        <VoiceTranscript rec={rec} />
-      </div>
-    );
-  }
-
+  // ABOVE THE OFF-DEVICE EARLY RETURN, deliberately: a hook declared after a
+  // conditional return runs on some renders and not others, and React unmounts
+  // the tree when the count changes. `url` being null is handled inside instead.
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
@@ -224,6 +217,16 @@ function VoiceBubble({ rec, cls, footer, onFetch }: { rec: FileRecord; cls: stri
     })();
     return () => { cancelled = true; closeContext(); };
   }, [url]);
+
+  if (loaded && !url) {
+    return (
+      <div className={cls + ' filecard-bubble file-offdevice-bubble'}>
+        {rec.available === false ? <FetchMedia rec={rec} onFetch={onFetch} /> : <OriginalDeviceNote label="Voice message" />}
+        {footer}
+        <VoiceTranscript rec={rec} />
+      </div>
+    );
+  }
 
   const toggle = () => {
     const a = audioRef.current;
