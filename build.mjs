@@ -16,7 +16,7 @@
 import { build } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -106,6 +106,67 @@ await Promise.all([
   copyFile(adaptWasm, resolve(dist, 'chunks', 'mufl-bindings.wasm')),
   cp(resolve(adaptDist, 'mufl_files'), adaptMuflFiles, { recursive: true }),
 ]);
+
+// THE NATIVE ADDON IS A RUNTIME ASSET TOO, AND MISSING IT IS SILENT.
+//
+// @adapt-toolkit/sdk prefers the @adapt-toolkit/sdk-native N-API backend and
+// falls back to WASM when it cannot load. sdk-native finds its prebuilt binding
+// through `createRequire(import.meta.url)` on a RELATIVE path:
+//
+//   ../prebuilds/<platform>-<arch>/adapt_js.node
+//
+// Unbundled, `import.meta.url` is sdk-native/dist/index.js, so that path is
+// correct. Bundled, it becomes dist/chunks/<chunk>.js, so the same path points
+// at dist/prebuilds — which nothing wrote. Both candidates miss, sdk-native's
+// module-level check throws ERR_ADAPT_NO_PREBUILD, and @adapt-toolkit/sdk reads
+// that as "no binding for this platform" and quietly uses WASM.
+//
+// THAT FALLBACK IS CORRECT AND STAYS. It is what keeps platforms with no
+// prebuilt binding working, so a missing addon must never fail this build. The
+// defect is that it also fired on a host where the prebuild was PRESENT and
+// merely mislocated by bundling: production served every transaction through
+// the WASM backend and hit its 2 GiB emscripten heap ceiling, twice in 24
+// hours, while a 27 MB adapt_js.node sat unused in node_modules. Nothing said
+// so — answering "wasm or native?" meant reading /proc/<pid>/maps.
+//
+// So put the binding where the BUNDLED module looks. `files` ships `dist`, so
+// the copy travels in the tarball with the WASM blob and the MUFL packets.
+// src/daemon.ts logs which backend was actually loaded, so the next time this
+// silently regresses, one line of the boot log says so.
+function findPackageDir(fromFile, name) {
+  // Node's own node_modules walk. sdk-native is a dependency of
+  // @adapt-toolkit/sdk, so start there and accept either a nested copy or the
+  // usual hoisted one. `exports` in sdk-native's package.json declares only
+  // ".", so resolving a subpath (or its package.json) is refused with
+  // ERR_PACKAGE_PATH_NOT_EXPORTED — walking is what actually works.
+  let dir = dirname(fromFile);
+  for (;;) {
+    const candidate = resolve(dir, 'node_modules', name);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+const platformArch = `${process.platform}-${process.arch}`;
+const nativePkg = findPackageDir(adaptWasm, '@adapt-toolkit/sdk-native');
+const nativeBinding = nativePkg
+  ? [
+    resolve(nativePkg, 'prebuilds', platformArch, 'adapt_js.node'),
+    resolve(nativePkg, 'build', 'Release', 'adapt_js.node'),
+  ].find((path) => existsSync(path))
+  : undefined;
+if (nativeBinding) {
+  // dist/chunks/<chunk>.js resolves '../prebuilds/...' against dist/, so this is
+  // the one location the bundled loader will look in.
+  await mkdir(resolve(dist, 'prebuilds', platformArch), { recursive: true });
+  await copyFile(nativeBinding, resolve(dist, 'prebuilds', platformArch, 'adapt_js.node'));
+  console.log(`[build] native ADAPT binding staged: dist/prebuilds/${platformArch}/adapt_js.node`);
+} else {
+  // Not an error. This is the case the WASM fallback exists for.
+  console.log(`[build] no native ADAPT binding for ${platformArch} — the bundle will use the WASM backend`);
+}
 
 await viteBuild({
   configFile: resolve(root, 'vite.config.ts'),
