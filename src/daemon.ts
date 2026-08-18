@@ -27,6 +27,34 @@ function hasCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && (error as Error & { code?: unknown }).code === code;
 }
 
+// WHICH ADAPT BACKEND DID THIS PROCESS ACTUALLY GET?
+//
+// @adapt-toolkit/sdk prefers a native N-API binding and falls back to WASM when
+// it cannot load one. The fallback is deliberate and correct — it is what makes
+// platforms without a prebuilt binding work — but it is also SILENT, and the
+// two backends are not interchangeable in the way that matters here: the WASM
+// build runs inside a 2 GiB emscripten heap that cannot be raised at runtime.
+// Production ran on the WASM fallback for as long as it did because nothing
+// ever said which one it had; the only way to answer was to read
+// /proc/<pid>/maps of a live process.
+//
+// This is OBSERVED, not re-derived. process.report lists the shared objects
+// this process really loaded, so the line reports what happened. Repeating the
+// SDK's own selection logic here would risk a line that agrees with itself and
+// is wrong — precisely the failure being fixed.
+function describeAdaptBackend(): string {
+  try {
+    const report = process.report?.getReport() as unknown as { sharedObjects?: readonly string[] };
+    const binding = (report?.sharedObjects ?? []).find((object) => object.endsWith('adapt_js.node'));
+    return binding
+      ? `native (${binding})`
+      : 'wasm (no native binding loaded — the 2 GiB heap ceiling applies)';
+  } catch {
+    // Never let an observability line break startup.
+    return 'unknown (process.report unavailable)';
+  }
+}
+
 export async function startRuntime(
   cfg: MessengerConfig,
   buildInfo: BuildInfo,
@@ -45,6 +73,9 @@ export async function startRuntime(
       version: `${buildInfo.name}@${buildInfo.version}`,
       handleSignals: false,
     });
+    // After startDaemon, so the backend has actually been loaded and not merely
+    // selected. Once per process, on the operator's stdout.
+    console.log(`[messenger] adapt backend: ${describeAdaptBackend()}`);
     const apiToken = (await readFile(env.tokenPath, 'utf8')).trim();
     if (!apiToken) throw new Error('owned SDK runtime created an empty API token');
 
