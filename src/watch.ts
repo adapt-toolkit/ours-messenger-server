@@ -109,6 +109,78 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
   return null;
 }
 
+// ============================================================================
+// RECONCILE — why a reconnect is not enough on its own
+// ============================================================================
+// `client.watchNotifications(name, { signal })` is called with NO `since`, so the
+// SDK defaults it to "tip" and the daemon answers a tip request with the current
+// cursor and ZERO events. That is right for a cold start and WRONG for a
+// reconnect: `startWatcher`'s outer loop re-enters the same call after every
+// transient failure, so each reconnect jumps to the tip and silently discards
+// every notification that arrived while the stream was down. Not deferred —
+// discarded. The messages are fine (they are in the packet and readable over
+// REST); only the notification is lost, which is exactly the "it was there when
+// I opened the app, but nobody told me" report.
+//
+// Measured on the live messenger: 16 reconnects in ~7.5 hours on an idle fleet.
+//
+// PASSING THE CURSOR IS NOT AVAILABLE TO US. `r.cursor` lives inside the SDK
+// generator's own loop and is never yielded; the records carry no cursor field.
+// The messenger cannot remember what it was never told. (Surfacing it is a
+// worthwhile ours-sdk change, but it is a public API change, and it would still
+// only cover gaps THIS process was awake for.)
+//
+// So we reconcile from canonical state instead, which is strictly stronger: it
+// also recovers notifications lost while the messenger process was entirely
+// DOWN — this one has died twice in 24h on a 2 GiB WASM ceiling — a window no
+// cursor held in memory could ever have covered.
+//
+// *** THE DEDUPE IN PushStore.enqueueJob IS LOAD-BEARING FOR CORRECTNESS. ***
+// It keys on `${identityCid}:${wireId}:${kind}` and returns false for a job that
+// already exists, and terminal jobs are RETAINED for TERMINAL_RETENTION_MS (7
+// days) rather than deleted. That is the ONLY thing standing between this
+// reconcile and re-pushing every unread message on every reconnect — 16 times a
+// night, on the same wire_ids. Deliberately no second guard here: two
+// overlapping dedupes would let someone weaken either one and still see green.
+// If you are changing that key, or shortening that retention, this is the caller
+// that breaks, and it breaks by spamming a human's phone.
+async function reconcileMissed(
+  client: OursClient,
+  delivery: Pick<PushDeliveryQueue, 'enqueue'>,
+  log: WatcherLog,
+): Promise<number> {
+  let queued = 0;
+  // Unread is the right filter: a message the owner has already read needs no
+  // notification, and anything still unread is something they were plausibly
+  // never told about.
+  const messages = await client.listIncomingMessages();
+  for (const m of messages) {
+    if (m.status !== 'unread') continue;
+    if (delivery.enqueue({
+      event: 'message_received',
+      sender_id: m.sender_id,
+      sender_name: m.sender_name,
+      wire_id: m.wire_id,
+    })) queued++;
+  }
+  const files = await client.listIncomingFiles();
+  for (const f of files) {
+    if (f.status !== 'unread') continue;
+    if (delivery.enqueue({
+      event: 'file_received',
+      sender_id: f.from.id,
+      sender_name: f.from.name,
+      wire_id: f.wire_id,
+      // notificationKind() reads `kind` to split voice from file; passing the
+      // raw value keeps that decision in one place rather than duplicating it
+      // here, and matches what the live daemon record carries.
+      kind: f.kind,
+    })) queued++;
+  }
+  if (queued > 0) log.info(`watch reconcile: queued ${queued} push(es) for notifications missed while disconnected`);
+  return queued;
+}
+
 function abortableWait(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
@@ -157,6 +229,20 @@ export function startWatcher(
           reconnecting = false;
         }
         const upstream = watch(identity, controller.signal);
+        // Before consuming the (tip-primed) stream, recover anything it will not
+        // replay. This runs on the FIRST pass too, not only on reconnects: the
+        // gap a cold start leaves is the messenger having been down, which is
+        // the widest gap of all and the one a cursor could never have closed.
+        // Failure here must not cost us the watch — an unqueued push is degraded
+        // UX, a dead watcher is a broken one, which is the same rule the push
+        // block below follows.
+        if (options.delivery) {
+          try {
+            await reconcileMissed(client, options.delivery, log);
+          } catch (e) {
+            reportFailure(log.warn, 'watch reconcile', e);
+          }
+        }
         for await (const record of upstream) {
           if (controller.signal.aborted) break;
           stats.events++;
