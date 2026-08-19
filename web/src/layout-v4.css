@@ -595,6 +595,10 @@
   overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
 }
 .shared-media-list.photos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; }
+/* Rows in the column-flex list must overflow the scroller, not shrink into it.
+   Without this the default flex-shrink:1 squeezes every file onto one screen
+   and the list never scrolls (the grid variant above is unaffected). */
+.shared-media-list > * { flex-shrink: 0; }
 .shared-media-item {
   display: flex; align-items: center; min-width: 0; border: 1px solid var(--line);
   border-radius: var(--r-md); background: var(--surface-2); overflow: hidden;
