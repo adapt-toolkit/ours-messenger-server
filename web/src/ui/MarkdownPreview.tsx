@@ -16,11 +16,52 @@ import { Icon } from './icons';
 const MERMAID_MIN_SCALE = 0.25;
 const MERMAID_MAX_SCALE = 8;
 
+type MermaidTheme = 'default' | 'dark';
+
+let mermaidRenderQueue: Promise<void> = Promise.resolve();
+
+function readMermaidTheme(): MermaidTheme {
+  return document.documentElement.classList.contains('theme-dark') ? 'dark' : 'default';
+}
+
+function useMermaidTheme(): MermaidTheme {
+  const [theme, setTheme] = useState<MermaidTheme>(readMermaidTheme);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const syncTheme = () => setTheme(readMermaidTheme());
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+    syncTheme();
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
+}
+
+function renderMermaid(id: string, source: string, theme: MermaidTheme) {
+  const render = mermaidRenderQueue.then(async () => {
+    const { default: mermaid } = await import('mermaid');
+    // Mermaid configuration is global. Keep initialize + render in one
+    // serialized critical section so another diagram cannot replace the
+    // palette between those calls.
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme,
+      fontFamily: 'var(--sans)',
+    });
+    return mermaid.render(id, source);
+  });
+  mermaidRenderQueue = render.then(() => undefined, () => undefined);
+  return render;
+}
+
 function clampMermaidScale(value: number) {
   return Math.min(MERMAID_MAX_SCALE, Math.max(MERMAID_MIN_SCALE, value));
 }
 
-function MermaidFullscreen(props: { svg: string; onClose: () => void }) {
+function MermaidFullscreen(props: { svg: string; theme: MermaidTheme; onClose: () => void }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     pointerId: number;
@@ -75,7 +116,11 @@ function MermaidFullscreen(props: { svg: string; onClose: () => void }) {
     <Dialog.Root open onOpenChange={(open) => { if (!open) props.onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="mermaid-fullscreen-backdrop" />
-        <Dialog.Content className="mermaid-fullscreen" aria-describedby="mermaid-fullscreen-help">
+        <Dialog.Content
+          className="mermaid-fullscreen"
+          data-mermaid-theme={props.theme}
+          aria-describedby="mermaid-fullscreen-help"
+        >
           <Dialog.Title className="mermaid-fullscreen-title">Diagram viewer</Dialog.Title>
           <div className="mermaid-fullscreen-tools">
             <button className="icon-btn" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomAt(scale / 1.25)}>
@@ -151,25 +196,17 @@ function MermaidDiagram({ source }: { source: string }) {
   const rawId = useId();
   const [svg, setSvg] = useState('');
   const [error, setError] = useState('');
-  const [renderedTheme, setRenderedTheme] = useState<'default' | 'dark'>('default');
+  const [renderedTheme, setRenderedTheme] = useState<MermaidTheme>('default');
   const [fullscreen, setFullscreen] = useState(false);
+  const theme = useMermaidTheme();
 
   useEffect(() => {
     let live = true;
     const id = `mermaid-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-    const theme = document.documentElement.classList.contains('theme-dark') ? 'dark' : 'default';
-    void import('mermaid')
-      .then(async ({ default: mermaid }) => {
-        // Mermaid keeps configuration globally. Reapply the active app theme
-        // for each preview so reopening a document after a theme switch cannot
-        // reuse the palette from the previous modal.
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme,
-          fontFamily: 'var(--sans)',
-        });
-        const rendered = await mermaid.render(id, source);
+    setSvg('');
+    setError('');
+    void renderMermaid(id, source, theme)
+      .then((rendered) => {
         if (live) {
           setRenderedTheme(theme);
           setSvg(rendered.svg);
@@ -182,7 +219,7 @@ function MermaidDiagram({ source }: { source: string }) {
       live = false;
       document.getElementById(`d${id}`)?.remove();
     };
-  }, [rawId, source]);
+  }, [rawId, source, theme]);
 
   if (error) return <pre className="markdown-mermaid-error">Mermaid error: {error}</pre>;
   if (!svg) return <div className="markdown-mermaid-loading">Rendering diagram…</div>;
@@ -199,7 +236,9 @@ function MermaidDiagram({ source }: { source: string }) {
         </button>
         <div className="markdown-mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
       </div>
-      {fullscreen && <MermaidFullscreen svg={svg} onClose={() => setFullscreen(false)} />}
+      {fullscreen && (
+        <MermaidFullscreen svg={svg} theme={renderedTheme} onClose={() => setFullscreen(false)} />
+      )}
     </>
   );
 }
