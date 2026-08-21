@@ -13,8 +13,6 @@ import {
 } from './markdownReviewCore.mjs';
 import { Icon } from './icons';
 
-let mermaidInitialized = false;
-
 const MERMAID_MIN_SCALE = 0.25;
 const MERMAID_MAX_SCALE = 8;
 
@@ -153,24 +151,29 @@ function MermaidDiagram({ source }: { source: string }) {
   const rawId = useId();
   const [svg, setSvg] = useState('');
   const [error, setError] = useState('');
+  const [renderedTheme, setRenderedTheme] = useState<'default' | 'dark'>('default');
   const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     let live = true;
     const id = `mermaid-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+    const theme = document.documentElement.classList.contains('theme-dark') ? 'dark' : 'default';
     void import('mermaid')
       .then(async ({ default: mermaid }) => {
-        if (!mermaidInitialized) {
-          mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: 'strict',
-            theme: 'neutral',
-            fontFamily: 'var(--sans)',
-          });
-          mermaidInitialized = true;
-        }
+        // Mermaid keeps configuration globally. Reapply the active app theme
+        // for each preview so reopening a document after a theme switch cannot
+        // reuse the palette from the previous modal.
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme,
+          fontFamily: 'var(--sans)',
+        });
         const rendered = await mermaid.render(id, source);
-        if (live) setSvg(rendered.svg);
+        if (live) {
+          setRenderedTheme(theme);
+          setSvg(rendered.svg);
+        }
       })
       .catch((err) => {
         if (live) setError(err instanceof Error ? err.message : String(err));
@@ -185,7 +188,7 @@ function MermaidDiagram({ source }: { source: string }) {
   if (!svg) return <div className="markdown-mermaid-loading">Rendering diagram…</div>;
   return (
     <>
-      <div className="markdown-mermaid">
+      <div className="markdown-mermaid" data-mermaid-theme={renderedTheme}>
         <button
           className="icon-btn markdown-mermaid-expand"
           aria-label="View diagram fullscreen"

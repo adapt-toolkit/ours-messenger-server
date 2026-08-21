@@ -500,15 +500,15 @@
 .markdown-body a { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; }
 .markdown-mermaid {
   position: relative; overflow-x: auto; padding: 16px; margin: 0 0 1em;
-  border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface);
 }
 .markdown-mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: auto; }
 .markdown-mermaid-expand {
   position: sticky; top: 0; left: calc(100% - 34px); z-index: 1;
-  margin: 0 0 -34px; color: #334155; background: rgb(255 255 255 / 0.9);
-  border: 1px solid #d7dee8; box-shadow: 0 2px 8px rgb(15 23 42 / 0.12);
+  margin: 0 0 -34px; color: var(--text-2); background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--line-strong); box-shadow: var(--shadow-sm);
 }
-.markdown-mermaid-expand:hover { color: #0f172a; background: #fff; }
+.markdown-mermaid-expand:hover { color: var(--text); background: var(--surface); }
 .markdown-mermaid-loading, .markdown-mermaid-error {
   padding: 20px; margin: 0 0 1em; color: var(--text-3); text-align: center;
   border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
@@ -520,7 +520,7 @@
 }
 .mermaid-fullscreen {
   position: fixed; inset: 0; z-index: 1001; overflow: hidden;
-  color: #e5e7eb; background: #f8fafc;
+  color: var(--text); background: var(--bg);
 }
 .mermaid-fullscreen-title {
   position: absolute; width: 1px; height: 1px; overflow: hidden;
