@@ -598,6 +598,10 @@ export function Conversation(props: {
       if (pinnedToBottomRef.current) followBottom(followTargetRef.current !== null);
     });
     observer.observe(content);
+    // Composer/reply rows and mobile browser chrome resize the viewport without
+    // changing the timeline content. Observe both boxes so an intentionally
+    // pinned reader stays on the newest message through those interactions.
+    observer.observe(scroller);
     return () => observer.disconnect();
   }, [contact?.id]);
 
