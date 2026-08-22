@@ -37,6 +37,7 @@ const types = new Map([
 
 const streams = new Set();
 let streamRevision = 0;
+let identityRequests = 0;
 let sent = null;
 let holdUntil = 0;
 
@@ -57,7 +58,10 @@ const server = createServer((request, response) => {
     });
     return;
   }
-  if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
+  if (url.pathname === '/api/identity') {
+    identityRequests += 1;
+    return json({ name: 'Me', cid: 'ME-CID' });
+  }
   if (url.pathname === '/api/build-info') return json({ name: '@ours.network/messenger-server', version: '0.1.0', sha: 'fixture' });
   if (url.pathname === '/api/contacts') return json({ contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [] });
   if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
@@ -103,30 +107,43 @@ page.on('pageerror', (error) => { throw error; });
 await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
 await page.locator('.composer textarea').waitFor({ timeout: 20_000 });
 
-// Do not race the event against EventSource startup. A fixed sleep happened to
-// be enough on a developer machine, but a busy CI runner can render the
-// composer before its SSE request reaches this fixture. The receipt event is
-// intentionally live-only during the hold window, so emitting before a stream
-// exists turns this into a startup-timing test instead of a receipt test.
-const streamDeadline = Date.now() + 15_000;
-let stableStream = false;
-while (!stableStream && Date.now() < streamDeadline) {
-  if (streams.size === 0) {
-    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
-    continue;
-  }
-  const observedRevision = streamRevision;
-  await new Promise((resolveWait) => setTimeout(resolveWait, 750));
-  stableStream = streams.size > 0 && streamRevision === observedRevision;
-}
-assert.ok(stableStream, 'the browser settled on a live event stream before the receipt fixture emitted');
-
 const ticks = () => page.$$eval('[data-receipt-status]', (nodes) => nodes.map((n) => n.getAttribute('data-receipt-status')));
 
 // ---- send, then deliver the receipt while /page still says nothing ---------
 await page.locator('.composer textarea').fill('does the tick arrive on time?');
 await page.locator('.composer textarea').press('Enter');
 await page.waitForFunction(() => document.querySelectorAll('[data-receipt-status]').length > 0, null, { timeout: 15_000 });
+
+// Do not race the receipt against EventSource startup or the one reconnect that
+// can accompany service-worker settlement. Waiting before the send was still
+// racy: on a loaded CI runner that reconnect can happen while the POST is in
+// flight. Settle after the sent row exists, then prove the app has an active
+// handler by sending a harmless sync probe and observing its identity refresh.
+// The receipt remains a single live event; the probe only establishes the test
+// precondition that its transport and application listener are both ready.
+const streamDeadline = Date.now() + 15_000;
+let activeStream = false;
+let probe = 0;
+while (!activeStream && Date.now() < streamDeadline) {
+  if (streams.size === 0) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    continue;
+  }
+  const observedRevision = streamRevision;
+  await new Promise((resolveWait) => setTimeout(resolveWait, 750));
+  if (streams.size === 0 || streamRevision !== observedRevision) continue;
+  const identityBaseline = identityRequests;
+  emit('sync_required', {
+    reason: `receipt-fixture-probe-${probe += 1}`,
+    identity: 'ME-CID',
+  });
+  const probeDeadline = Math.min(streamDeadline, Date.now() + 3000);
+  while (identityRequests === identityBaseline && streamRevision === observedRevision && Date.now() < probeDeadline) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  activeStream = identityRequests > identityBaseline && streamRevision === observedRevision;
+}
+assert.ok(activeStream, 'the browser handled a live probe before the receipt fixture emitted');
 
 holdUntil = Date.now() + HOLD_MS;
 sent.receipt = 'delivered';
