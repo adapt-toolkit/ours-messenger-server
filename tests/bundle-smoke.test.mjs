@@ -19,7 +19,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { counter } from './harness.mjs';
 
@@ -66,7 +66,8 @@ t.ok(
 t.eq(help.code, 0, '`--help` exits 0');
 t.ok(help.out.includes('ours-messenger-server <command>'), '`--help` prints usage on stdout');
 t.ok(help.out.includes('OURS_MESSENGER_IDENTITY'), 'and the usage names the one required variable');
-t.ok(help.out.includes('init --name') && help.out.includes('migrate --source'), 'and documents both offline lifecycle commands');
+t.ok(help.out.includes('shared ours daemon'), 'and documents the shared-daemon lifecycle');
+t.ok(!help.out.includes(' init ') && !help.out.includes(' migrate '), 'and exposes no identity provisioning commands');
 
 // A missing identity must be a clean, named error — not a stack trace, and not a
 // silent default. This is the second most common first-run experience after --help.
@@ -81,25 +82,10 @@ t.ok(
   'with no stack trace — the message is the whole answer for a config error',
 );
 
-const invalidInitState = join(ROOT, '.tmp-invalid-init-state');
-const invalidInit = await run(
-  ['init', '--name', '', '--bio', 'public bio', '--yes'],
-  { OURS_MESSENGER_STATE_DIR: invalidInitState },
-);
-t.eq(invalidInit.code, 1, '`init` rejects an empty Human name');
-t.ok(invalidInit.err.includes('--name requires a non-empty value'), 'and names the invalid field');
-t.ok(!existsSync(invalidInitState), 'invalid init performs no filesystem mutation');
-
-const emptyServeState = join(ROOT, '.tmp-empty-serve-state');
-rmSync(emptyServeState, { recursive: true, force: true });
-const emptyServe = await run(['serve'], {
-  OURS_MESSENGER_STATE_DIR: emptyServeState,
-  OURS_MESSENGER_IDENTITY: 'Human',
-  OURS_MESSENGER_PUBLIC_ORIGIN: 'http://127.0.0.1:8420',
-});
-t.eq(emptyServe.code, 1, '`serve` rejects a genuinely empty isolated state');
-t.ok(emptyServe.err.includes('INITIALIZATION_REQUIRED'), 'with the stable typed lifecycle code');
-t.ok(!existsSync(emptyServeState), 'before creating any state directory or runtime artifact');
+const runtimeAssets = readdirSync(join(ROOT, 'dist'), { recursive: true })
+  .map(String)
+  .filter((name) => /\.(?:wasm|node|muflo)$/.test(name));
+t.eq(runtimeAssets, [], 'the application bundle contains no daemon evaluator or MUFL runtime assets');
 
 console.log(`\nbundle-smoke OK (${t.count} checks)`);
 process.exit(0);

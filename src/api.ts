@@ -1,5 +1,4 @@
-// THE REST SURFACE — the messaging half of what the browser calls today, plus
-// the one new push-subscription endpoint.
+// The browser surface projected from the shared daemon's durable history.
 //
 // WHAT IS DELIBERATELY ABSENT, because an absence is invisible unless it is written
 // down:
@@ -21,16 +20,20 @@
 //     third-party notifier. This server IS the notifier.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { OursClient, OursError } from '@ours.network/sdk';
-import { ConversationPageError, DEFAULT_PAGE_LIMIT, projectPage } from './conversation.js';
+import type { HistoryFile, OursClient, OursError } from '@ours.network/sdk';
+import { ConversationPageError, DEFAULT_PAGE_LIMIT, projectHistoryPage } from './conversation.js';
 import type { PushStore } from './push.js';
 import { mediaResponsePolicy } from './media-response.js';
 import type { Runtime } from './daemon.js';
 import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
-import type { MediaStore, ReplyReference } from './media.js';
 import { publicEngineError, publicInternalError } from './security.js';
+
+interface ReplyReference {
+  readonly wire_id: string;
+  readonly sentence?: number;
+}
 
 export const API_PREFIX = '/api/';
 export const MAX_HTTP_BODY_BYTES = 32 * 1024 * 1024;
@@ -45,7 +48,6 @@ export interface ApiDeps {
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
-  readonly media?: MediaStore;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
   readonly sseQueueLimit?: number;
@@ -273,6 +275,64 @@ function publicFetchedFiles(value: unknown): Readonly<Record<string, unknown>> {
   };
 }
 
+async function resolveContact(client: OursClient, contact: string): Promise<{
+  readonly cid: string;
+  readonly announcedName: string;
+}> {
+  const contacts = await client.listContacts();
+  const row = contacts.contacts.find((item) => item.container_id === contact || item.name === contact);
+  return { cid: row?.container_id ?? contact, announcedName: row?.name ?? contact };
+}
+
+function beforeSequence(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new ConversationPageError(`before cursor ${JSON.stringify(raw)} is invalid`);
+  }
+  return value;
+}
+
+async function listAllFiles(client: OursClient, peerCid: string): Promise<HistoryFile[]> {
+  const files: HistoryFile[] = [];
+  let before: number | undefined;
+  for (;;) {
+    const page = await client.listFiles({ peer_cid: peerCid, before_seq: before, limit: 200 });
+    files.push(...page.items);
+    if (page.next_cursor === null) return files;
+    before = page.next_cursor;
+  }
+}
+
+function publicMediaRecord(
+  row: HistoryFile,
+  identity: { readonly cid: string; readonly name: string },
+  version: number,
+): Readonly<Record<string, unknown>> {
+  const inbound = row.direction === 'in';
+  const kind = row.kind === 'voice_message'
+    ? 'voice_message'
+    : row.mime.toLowerCase().split(';', 1)[0].trim().startsWith('image/') ? 'photo' : 'file';
+  return {
+    wire_id: row.wire_id,
+    contact_id: row.peer.id,
+    dir: row.direction,
+    sender_id: inbound ? row.peer.id : identity.cid,
+    sender_name: inbound ? row.peer.name : identity.name,
+    filename: row.filename,
+    logical_name: row.filename.normalize('NFC').toLocaleLowerCase('en-US'),
+    version,
+    mime: row.mime,
+    size: row.byte_length,
+    sha256: row.sha256,
+    date: row.date,
+    date_source: 'protocol',
+    kind,
+    reply_to: row.reply_to,
+    available: !inbound || row.inbox_state === 'read',
+  };
+}
+
 async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -387,7 +447,7 @@ const ROUTES: Record<string, Handler> = {
   },
 
   // ---- messaging -----------------------------------------------------------
-  'POST /api/messages/send': async ({ client, body, deps }) => {
+  'POST /api/messages/send': async ({ client, body }) => {
     const reply = replyReference(body);
     const result = await client.sendMessage({
       contact: str(body, 'contact'),
@@ -401,11 +461,10 @@ const ROUTES: Record<string, Handler> = {
       // No wire id to record a reply reference against, and none is coming.
       return { wire_id: null, delivery: INTRODUCED };
     }
-    deps.media?.recordReply(wireId, reply);
     return { wire_id: wireId, delivery: 'tracked' };
   },
 
-  'POST /api/messages/send-file': async ({ client, body, deps }) => {
+  'POST /api/messages/send-file': async ({ client, body }) => {
     const dataBase64 = inlineBase64(body);
     const contact = str(body, 'contact');
     const safeFilename = filename(body);
@@ -419,65 +478,75 @@ const ROUTES: Record<string, Handler> = {
       reply_to_wire_id: reply?.wire_id,
       reply_to_sentence: reply?.sentence,
     });
-    const wireId = outcomeWireId(result);
-    if (wireId && (result as { kind?: string }).kind !== 'refused') {
-      deps.media?.recordOutgoing({
-        wire_id: wireId,
-        contact_id: contact,
-        sender_id: deps.identityCid,
-        sender_name: deps.config.identity,
-        filename: safeFilename,
-        mime: safeMime,
-        reply_to: reply,
-      }, Buffer.from(dataBase64, 'base64'));
-    }
     return result;
   },
 
   // ---- conversations: THE NON-CONSUMING READ PATH --------------------------
-  'GET /api/conversations/:contact': async ({ client, params }) =>
-    client.getConversation({ contact: params.contact }),
+  'GET /api/conversations/:contact': async ({ client, params }) => {
+    const peer = await resolveContact(client, params.contact);
+    const history = await client.listHistory({ peer_cid: peer.cid, limit: 200 });
+    return {
+      messages: projectHistoryPage(params.contact, history, await client.getHistorySummary({ peer_cid: peer.cid }), {
+        announcedContact: peer.announcedName,
+      }).messages,
+    };
+  },
 
-  'GET /api/conversations/:contact/page': async ({ client, params, query, deps }) => {
+  'GET /api/conversations/:contact/page': async ({ client, params, query }) => {
     const contact = params.contact;
     const rawLimit = query.get('limit');
     const limit = rawLimit === null ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
-    const before = query.get('before') ?? undefined;
-    const [conversation, receipts, incoming, contacts] = await Promise.all([
-      client.getConversation({ contact }),
-      client.getReceipts({ contact }),
-      client.listIncomingMessages(),
-      // The SERVER-ANNOUNCED identity, which is what decides whether a body may
-      // be read as a room envelope. The route param may be a container id or a
-      // local alias, and neither is authenticated metadata.
-      client.listContacts(),
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new ConversationPageError(`limit must be an integer in 1..200, got ${String(rawLimit)}`);
+    }
+    const peer = await resolveContact(client, contact);
+    const before = beforeSequence(query.get('before') ?? undefined);
+    const [history, summary, newest] = await Promise.all([
+      client.listHistory({
+        peer_cid: peer.cid,
+        before_seq: before,
+        limit,
+      }),
+      client.getHistorySummary({ peer_cid: peer.cid }),
+      before === undefined ? Promise.resolve(null) : client.listHistory({ peer_cid: peer.cid, limit: 1 }),
     ]);
-    const announcedContact = contacts.contacts.find(
-      (row) => row.container_id === contact || row.name === contact,
-    )?.name ?? contact;
-    const incomingReplies = new Map(incoming.map((message) => [message.wire_id, message.reply_to]));
-    const withReplies = conversation.messages.map((message) => ({
-      ...message,
-      reply_to: incomingReplies.get(message.wire_id) ?? deps.media?.replyFor(message.wire_id) ?? null,
-    }));
-    return projectPage(contact, withReplies, receipts, { limit, before, announcedContact });
+    const projected = projectHistoryPage(contact, history, summary, { announcedContact: peer.announcedName });
+    if (!newest) return projected;
+    return {
+      ...projected,
+      preview: projectHistoryPage(contact, newest, summary, { announcedContact: peer.announcedName }).preview,
+    };
   },
 
-  'GET /api/conversations/:contact/receipts': async ({ client, params }) =>
-    client.getReceipts({ contact: params.contact }),
+  'GET /api/conversations/:contact/receipts': async ({ client, params }) => {
+    const peer = await resolveContact(client, params.contact);
+    const receipts: Record<string, 'delivered' | 'read'> = {};
+    let before: number | undefined;
+    for (;;) {
+      const page = await client.listHistory({ peer_cid: peer.cid, direction: 'out', before_seq: before, limit: 200 });
+      for (const row of page.items) {
+        if (row.delivery_state === 'delivered' || row.delivery_state === 'read') {
+          receipts[row.wire_id] = row.delivery_state;
+        }
+      }
+      if (page.next_cursor === null) break;
+      before = page.next_cursor;
+    }
+    return { contact: params.contact, receipts };
+  },
 
   // THE HUMAN READ EVENT. The only thing in this server that emits a read receipt.
-  'POST /api/conversations/:contact/read': async ({ client, params }) =>
-    client.markRead({ contact: params.contact }),
-
-  'POST /api/conversations/policy': async ({ client, body }) => {
-    const keep = optBool(body, 'keep_history');
-    if (keep === undefined) throw bad('keep_history must be a boolean');
-    const result = await client.setConversationPolicy({ keep_history: keep });
-    // Same reasoning as bindIdentity: enabling history adds a capability that
-    // existing contacts do not learn until our next send.
-    const readvertised = keep ? await client.readvertiseOnUpgrade() : null;
-    return { ...result, readvertised };
+  'POST /api/conversations/:contact/read': async ({ client, params }) => {
+    const peer = await resolveContact(client, params.contact);
+    const unread = (await client.listIncomingMessages()).filter((row) => row.from.id === peer.cid);
+    let marked = 0;
+    for (let offset = 0; offset < unread.length; offset += 200) {
+      const wireIds = unread.slice(offset, offset + 200).map((row) => row.wire_id);
+      if (wireIds.length === 0) continue;
+      const result = await client.getMessages({ wire_ids: wireIds });
+      marked += result.messages.length;
+    }
+    return { contact: params.contact, marked };
   },
 
   // The non-consuming inbox summary. Metadata only — it does NOT hand over bodies
@@ -552,44 +621,46 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/files/incoming': async ({ client }) => client.listIncomingFiles(),
 
   'GET /api/conversations/:contact/files': async ({ client, deps, params }) => {
-    const incoming = await client.listIncomingFiles();
-    deps.media?.reconcileIncoming(incoming);
-    return { contact: params.contact, files: deps.media?.list(params.contact) ?? [] };
+    const peer = await resolveContact(client, params.contact);
+    const files = (await listAllFiles(client, peer.cid)).reverse();
+    const versions = new Map<string, number>();
+    return {
+      contact: params.contact,
+      files: files.map((row) => {
+        const logicalName = row.filename.normalize('NFC').toLocaleLowerCase('en-US');
+        const version = (versions.get(logicalName) ?? 0) + 1;
+        versions.set(logicalName, version);
+        return publicMediaRecord(row, {
+          cid: deps.identityCid,
+          name: deps.config.identity,
+        }, version);
+      }),
+    };
   },
 
-  'POST /api/files/fetch': async ({ client, body, deps }) => {
+  'POST /api/files/fetch': async ({ client, body }) => {
     const ids = body.wire_ids;
     if (ids === undefined || ids === null) throw bad('wire_ids is required for browser file retrieval');
     if (!Array.isArray(ids) || !ids.every((v) => typeof v === 'string' && v !== '')) {
       throw bad('wire_ids, when present, must be an array of non-empty strings');
     }
-    const fetched = await client.getFiles({ wire_ids: ids as string[] });
-    if (deps.media) {
-      const incoming = await client.listIncomingFiles();
-      deps.media.reconcileIncoming(incoming);
-      for (const row of fetched.files) {
-        const bytes = await client.fetchFile(row.wire_id);
-        deps.media.storeIncoming(row.wire_id, bytes, row);
-      }
+    const requested = ids as string[];
+    const unread = new Set((await client.listIncomingFiles()).map((row) => row.wire_id));
+    const pending = requested.filter((wireId) => unread.has(wireId));
+    if (pending.length === 0) {
+      return publicFetchedFiles({
+        files: (await Promise.all(requested.map((wireId) => client.getFileInfo({ wire_id: wireId })))).filter(Boolean),
+      });
     }
-    return publicFetchedFiles(fetched);
-  },
-
-  // NOTE THE IDENTIFIER SPLIT, which reads as a typo and gets "fixed": deferFiles
-  // takes FILE_IDs, which are NUMBERS, while getFiles selects by WIRE_IDs, which
-  // are strings. Two different identifiers on the same file. JSON from a browser
-  // will happily carry "3" where 3 is meant, and the engine keys on
-  // `$file_ids -> ids: int[]`, so a string would select nothing and report
-  // `deferred: 0` — a silent no-op that looks like a successful retry.
-  'POST /api/files/defer': async ({ client, body }) => {
-    const ids = body.file_ids;
-    if (!Array.isArray(ids) || !ids.every((v) => Number.isInteger(v))) {
-      throw bad('file_ids must be an array of integers (not strings)');
-    }
-    return client.deferFiles({ file_ids: ids as number[] });
+    return publicFetchedFiles(await client.getFiles({ wire_ids: pending }));
   },
 
   'GET /api/files/:wireId': async ({ client, params, res }) => {
+    const record = await client.getFileInfo({ wire_id: params.wireId });
+    if (!record) throw new HttpError(404, 'file not found');
+    if (record.direction === 'in' && record.inbox_state !== 'read') {
+      throw new HttpError(409, 'file must be explicitly fetched first');
+    }
     const bytes = await client.fetchFile(params.wireId);
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
@@ -599,9 +670,13 @@ const ROUTES: Record<string, Handler> = {
     return undefined;
   },
 
-  'GET /api/media/:wireId': async ({ deps, params, res }) => {
-    if (!deps.media) throw new Error('messenger media store is unavailable');
-    const { record, bytes } = deps.media.read(params.wireId);
+  'GET /api/media/:wireId': async ({ client, params, res }) => {
+    const record = await client.getFileInfo({ wire_id: params.wireId });
+    if (!record) throw new HttpError(404, 'media not found');
+    if (record.direction === 'in' && record.inbox_state !== 'read') {
+      throw new HttpError(409, 'media must be explicitly fetched first');
+    }
+    const bytes = await client.fetchFile(params.wireId);
     const encodedName = encodeURIComponent(record.filename).replaceAll("'", '%27');
     const policy = mediaResponsePolicy(record.mime);
     res.writeHead(200, {
@@ -614,7 +689,7 @@ const ROUTES: Record<string, Handler> = {
       'cross-origin-resource-policy': 'same-origin',
       'referrer-policy': 'no-referrer',
     });
-    res.end(bytes);
+    res.end(Buffer.from(bytes));
     return undefined;
   },
 
@@ -661,8 +736,7 @@ const ROUTES: Record<string, Handler> = {
     const identity = await client.currentIdentity();
     return {
       identity: publicIdentity(identity),
-      keepHistory: deps.config.keepHistory,
-      runtime: { ownership: 'embedded-sdk', mcp: false },
+      runtime: deps.runtime.described,
       watcher: deps.watcherStats(),
       pushSubscriptions: deps.push.bindingCount,
       pushQueue: deps.push.queueStats(),

@@ -13,10 +13,10 @@ let runtimeClosed = false;
 
 const client = {
   async chooseIdentity() { return { cid: 'CID-STABLE' }; },
-  async setConversationPolicy() { return { keepHistory: true }; },
-  async readvertiseOnUpgrade() { return { readvertised: 0 }; },
   async currentIdentity() { return { name: 'Human', cid: 'CID-STABLE', bio: 'fixture' }; },
-  async version() { return { version: 'fixture' }; },
+  async version() { return { version: 'fixture', compat: 3, stateDir: '/operator/daemon' }; },
+  async listIncomingMessages() { return []; },
+  async listIncomingFiles() { return []; },
   async releaseLease() { leaseReleased = true; },
   async *watchNotifications(_identity, { signal }) {
     await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
@@ -25,9 +25,9 @@ const client = {
 
 const startRuntime = async () => {
   if (mode === 'ready') {
-    // The real SDK restore performs long CPU-bound packet work on the caller's
-    // event loop. A listener on that same loop exists in the kernel but cannot
-    // answer build/readiness probes, which is operationally still unavailable.
+    // Model a pathological slow attach on the caller's event loop. The bounded
+    // readiness responder remains independently available while no identity
+    // lease or application API exists yet.
     const blockedUntil = Date.now() + 3_000;
     while (Date.now() < blockedUntil) {
       // Deliberately model the source boundary; the readiness responder must
@@ -39,10 +39,13 @@ const startRuntime = async () => {
   return {
     client,
     port: 32123,
-    stateDir: `${stateDir}/runtime`,
+    stateDir: '/operator/daemon',
     leaseToken: 'fixture-lease',
-    described: {},
-    async close() { runtimeClosed = true; },
+    described: { ownership: 'shared-daemon' },
+    async close() {
+      await client.releaseLease();
+      runtimeClosed = true;
+    },
   };
 };
 
@@ -57,8 +60,6 @@ const starting = start({
   identity: 'Human',
   force: false,
   stateDir,
-  keepHistory: true,
-  runtime: { brokerUrl: 'wss://invalid.local/none' },
 }, {
   name: '@ours.network/messenger-server',
   version: '0.1.0',

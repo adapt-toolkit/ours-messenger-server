@@ -1,7 +1,8 @@
-// THE WHOLE SERVER, END TO END: its owned SDK runtime, the REST surface, and a real
+// THE WHOLE SERVER, END TO END: its shared-daemon client, the REST surface, and a real
 // signed WebPush request captured on the wire.
 //
-// It boots src/server.ts and its embedded runtime, exercises the routes a
+// It launches a daemon through the published CLI, boots src/server.ts against
+// that shared process, exercises the routes a
 // frontend actually calls, and then does the thing the owner named by name —
 // a message lands in the packet on this server and THIS SERVER sends the push.
 // The push is asserted against a local endpoint we control: the request that
@@ -20,8 +21,7 @@ import { createECDH, randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { counter, memSample, until } from './harness.mjs';
+import { counter, memSample, startHarnessDaemon, until } from './harness.mjs';
 
 // THE FAKE PUSH SERVICE IS HTTPS, AND IT HAS TO BE. `web-push` calls
 // `https.request` unconditionally (src/web-push-lib.js:369) — there is no http
@@ -71,21 +71,28 @@ ecdh.generateKeys();
 const p256dh = ecdh.getPublicKey().toString('base64url');
 const auth = randomBytes(16).toString('base64url');
 
-// ---- boot the real server and the runtime IT owns ----------------------------
-const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-state-'));
+// ---- boot one CLI-owned daemon, provision identities, then attach messenger --
+const daemon = await startHarnessDaemon('rest-e2e');
+const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-app-state-'));
 const publicOrigin = 'http://messenger.test';
-execFileSync(process.execPath, [
-  '--import', 'tsx', fileURLToPath(new URL('./fixtures/owned-runtime-child.mjs', import.meta.url)),
-], {
-  env: {
-    ...process.env,
-    TEST_MODE: 'init',
-    TEST_RESULT_PATH: join(certDir, 'init-result.json'),
-    TEST_INIT_NAME: 'Me',
-    OURS_MESSENGER_STATE_DIR: ownStateDir,
-  },
-  stdio: 'ignore',
+const { OursClient } = daemon.sdk;
+const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
+const human = await provision.createRootIdentity({
+  name: 'Me', bio: 'messenger identity', exposeLocal: true,
+  localAutoAccept: true, skipIfRootExists: false,
 });
+const peer = new OursClient({ url: daemon.url, leaseToken: 'peer-lease' });
+const peerIdentity = await peer.createIdentity({
+  name: 'Peer', bio: 'the other end', exposeLocal: true, localAutoAccept: true,
+});
+const invite = await provision.generateInvite({});
+await peer.addContact({ invite: invite.blob });
+await until('the contact link', async () => {
+  const v = await peer.listContacts();
+  return v.contacts.some((c) => c.name === 'Me') ? v : undefined;
+});
+await provision.releaseLease();
+
 const { start } = await import('../src/server.ts');
 const server = await start(
   {
@@ -95,8 +102,6 @@ const server = await start(
     identity: 'Me',
     force: false,
     stateDir: ownStateDir,
-    keepHistory: true,
-    runtime: { brokerUrl: 'wss://invalid.local/none' },
   },
   {
     name: '@ours.network/messenger-server', version: '0.1.0',
@@ -104,23 +109,6 @@ const server = await start(
   },
 );
 
-// ---- a second session in the same owned runtime -----------------------------
-const { OursClient } = await import('@ours.network/sdk');
-const runtimeToken = readFileSync(join(server.runtime.stateDir, 'daemon-token'), 'utf8').trim();
-const peer = new OursClient({
-  url: `http://127.0.0.1:${server.runtime.port}`,
-  leaseToken: 'peer-lease',
-  apiToken: runtimeToken,
-});
-const peerIdentity = await peer.createIdentity({ name: 'Peer', bio: 'the other end', exposeLocal: false, localAutoAccept: true });
-await peer.setConversationPolicy({ keep_history: true });
-await peer.readvertiseOnUpgrade();
-const invite = await server.runtime.client.generateInvite({});
-await peer.addContact({ invite: invite.blob });
-await until('the contact link', async () => {
-  const v = await peer.listContacts();
-  return v.contacts.some((c) => c.name === 'Me') ? v : undefined;
-});
 const base = `http://127.0.0.1:${server.port}`;
 const api = async (method, path, body) => {
   const mutating = method !== 'GET' && method !== 'HEAD';
@@ -153,8 +141,6 @@ const unknownApi = await api('GET', '/api/not-a-route');
 t.eq(unknownApi.status, 404, 'unknown /api routes remain JSON 404s and never fall through to HTML');
 const publicMcp = await fetch(base + '/mcp');
 t.eq(publicMcp.status, 404, 'GET /mcp is 404 on the messenger surface');
-const runtimeMcp = await fetch(`http://127.0.0.1:${server.runtime.port}/mcp`);
-t.eq(runtimeMcp.status, 404, 'GET /mcp is 404 on the embedded runtime (no MCP integration injected)');
 
 // ---- identity, state, build info --------------------------------------------
 const who = await api('GET', '/api/identity');
@@ -162,20 +148,18 @@ t.eq(who.status, 200, 'GET /api/identity responds 200');
 t.eq(who.json.name, 'Me', 'and reports the bound identity — this is the old getProfileName');
 
 const state = await api('GET', '/api/state');
-t.eq(state.json.runtime.ownership, 'embedded-sdk', '/api/state reports messenger-owned runtime provenance');
-t.eq(state.json.keepHistory, true, 'and the retention policy in force');
+t.eq(state.json.runtime.ownership, 'shared-daemon', '/api/state reports shared-daemon provenance');
 t.ok(
-  !JSON.stringify(state.json).includes(runtimeToken) &&
-    !JSON.stringify(state.json).includes(ownStateDir) &&
+  !JSON.stringify(state.json).includes(ownStateDir) &&
     state.json.runtime.port === undefined && state.json.runtime.brokerUrl === undefined,
-  'and owner token, state path, internal port, and broker are absent from the state response',
+  'and state paths, daemon endpoint, token, and broker are absent from the state response',
 );
 
 const build = await api('GET', '/api/build-info');
 t.eq(build.json.name, '@ours.network/messenger-server', 'GET /api/build-info identifies the server');
 t.eq(build.json.sha, '3fb10cc41af69e1a15cb99eab1c1b408ec245de0', 'and reports its build-time full commit');
 const health = await api('GET', '/api/healthz');
-t.eq(health.status, 200, 'GET /api/healthz proves the owned runtime is ready');
+t.eq(health.status, 200, 'GET /api/healthz proves the shared daemon lease is ready');
 t.eq(health.json.identityCid, who.json.cid, 'and matches the startup-bound identity CID');
 
 // ---- contacts and invites ----------------------------------------------------
@@ -239,7 +223,9 @@ t.eq((await api('GET', '/api/state')).json.pushSubscriptions, 1,
 
 // ---- THE THING HE ASKED FOR: a message lands, THIS SERVER pushes ------------
 const SECRET = 'sekrit-message-text-that-must-not-leak';
-await peer.sendMessage({ contact: 'Me', text: SECRET });
+const inbound = await peer.sendMessage({ contact: 'Me', text: SECRET });
+const sentId = inbound.wireId;
+t.ok(typeof sentId === 'string' && sentId.length > 0, 'the peer send has a canonical wire id');
 
 const req = await until('the server to issue a push', async () => (pushed.length ? pushed[0] : undefined), 60_000);
 t.eq(pushed.length, 1, 'exactly ONE push request was issued for one message');
@@ -264,15 +250,15 @@ const page = await until('the message to appear in the conversation page', async
 t.eq(page.json.unread, 1, 'GET …/page reports 1 unread — reading a page marks nothing');
 t.eq(page.json.messages.at(-1).text, SECRET, 'and the page carries the message');
 
-const sentId = (await peer.getConversation({ contact: 'Me' })).messages.filter((m) => m.dir === 'out').at(-1).wire_id;
-t.ok((await peer.getReceipts({ contact: 'Me' })).receipts[sentId] !== 'read',
+const beforeRead = await peer.getHistoryItem({ wire_id: sentId });
+t.ok(beforeRead?.delivery_state !== 'read',
      'the peer has NO read receipt yet — the REST read path is non-consuming');
 
 const marked = await api('POST', '/api/conversations/Peer/read');
 t.eq(marked.json.marked, 1, 'POST …/read marks exactly the one unread entry');
 await until('the read receipt to reach the peer', async () => {
-  const r = await peer.getReceipts({ contact: 'Me' });
-  return r.receipts[sentId] === 'read' ? r : undefined;
+  const row = await peer.getHistoryItem({ wire_id: sentId });
+  return row?.delivery_state === 'read' ? row : undefined;
 });
 t.ok(true, 'and the peer now sees READ — the human read event, and only it, emits the receipt');
 
@@ -292,8 +278,8 @@ const sent = await api('POST', '/api/messages/send', {
 t.eq(sent.status, 200, 'POST /api/messages/send sends as the bound identity');
 t.eq(typeof sent.json.wire_id, 'string', 'text send response exposes the canonical wire id to browser reconciliation');
 await until('the reply to reach the peer', async () => {
-  const v = await peer.getConversation({ contact: 'Me' });
-  return v.messages.some((m) => m.dir === 'in' && m.text === 'reply from the server') ? v : undefined;
+  const v = await peer.listHistory({ peer_cid: human.info.cid, limit: 20 });
+  return v.items.some((m) => m.direction === 'in' && m.text === 'reply from the server') ? v : undefined;
 });
 t.ok(true, 'and it arrives at the peer');
 const replyPage = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/page?limit=10`);
@@ -327,7 +313,9 @@ t.eq(readFileSync(peerPhotos.files.find((file) => file.wire_id === photoWire2).p
   'photo v2 round-trips independently without overwriting v1');
 const photoInventory = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/files`);
 const photoVersions = photoInventory.json.files.filter((file) => file.logical_name === 'photo.png');
-t.eq(photoVersions.map((file) => file.version), [1, 2], 'dialog inventory exposes an exact ordered version history');
+t.eq(photoVersions.length, 2, 'dialog inventory preserves both logical file versions');
+t.eq(photoVersions.map((file) => file.version), [1, 2],
+  'and exposes stable logical version ordinals independent of daemon sequence');
 t.ok(photoVersions.every((file) => file.kind === 'photo' && file.sha256 && file.available),
   'outgoing photo inventory carries immutable hashes, provenance, and available bytes');
 
@@ -344,7 +332,7 @@ const voiceInventory = await until('voice metadata to appear in the dialog inven
 });
 const voiceMeta = voiceInventory.json.files.find((file) => file.wire_id === voiceSent.wireId);
 t.eq(voiceMeta.kind, 'voice_message', 'exact MIME marker classifies the incoming OGG/Opus payload as voice');
-t.eq(voiceMeta.available, false, 'incoming bytes are not consumed until the browser explicitly fetches them');
+t.eq(voiceMeta.available, false, 'incoming bytes stay unavailable to the browser until explicit fetch');
 const fetchedVoice = await api('POST', '/api/files/fetch', { wire_ids: [voiceSent.wireId] });
 t.eq(fetchedVoice.status, 200, 'explicit browser fetch retrieves voice bytes and transcription metadata');
 const voiceResponse = await fetch(`${base}/api/media/${encodeURIComponent(voiceSent.wireId)}`);
@@ -393,6 +381,8 @@ for (let attempt = 0; attempt < 35; attempt++) {
 t.ok(rateLimited, 'push subscription mutations enforce a bounded per-client rate');
 
 await server.close();
+await peer.releaseLease();
+await daemon.close();
 await new Promise((r) => pushService.close(r));
 rmSync(ownStateDir, { recursive: true, force: true });
 rmSync(certDir, { recursive: true, force: true });

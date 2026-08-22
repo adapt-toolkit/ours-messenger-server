@@ -1,4 +1,5 @@
-// The HTTP host. It owns one isolated SDK runtime and one public REST/SSE server.
+// The HTTP host. It attaches to one shared ours daemon and owns only the public
+// REST/SSE server plus messenger-specific WebPush state.
 
 import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
@@ -15,8 +16,6 @@ import { startWatcher, type WatcherHandle } from './watch.js';
 import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { publicInternalError, reportFailure } from './security.js';
-import { assertStateInitializedForServe } from './lifecycle.js';
-import { MediaStore } from './media.js';
 import { attachPresenceServer, PresenceRegistry } from './presence.js';
 
 export interface ServerHandle {
@@ -366,22 +365,11 @@ export async function start(
     delivery = undefined;
     events?.close();
 
-    if (runtime) {
-      try {
-        await runtime.client.releaseLease();
-      } catch (error) {
-        reportFailure(log.warn, 'lease release', error);
-      }
-      await runtime.close();
-    }
+    if (runtime) await runtime.close().catch((error) => reportFailure(log.warn, 'lease release', error));
   };
 
   try {
     log.info(`build ${buildInfo.name}@${buildInfo.version} sha=${buildInfo.sha} dirty=${buildInfo.dirty}`);
-    // This read-only gate precedes owned-runtime configuration. An empty serve
-    // therefore creates no directory, lock, token, registrar, or listener.
-    assertStateInitializedForServe(cfg);
-
     startupProbe = await startStartupProbe(cfg, buildInfo);
     const port = startupProbe.port;
     log.info('public HTTP startup probe ready');
@@ -394,16 +382,13 @@ export async function start(
     }
 
     runtime = await dependencies.startRuntime(cfg, buildInfo);
-    log.info('owned runtime ready');
+    log.info('shared daemon ready');
 
     const bound = await bindIdentity(runtime, cfg);
-    log.info(`bound identity ready (keep_history=${bound.keepHistory})`);
+    log.info(`bound shared-daemon identity ${bound.name} (${bound.cid})`);
 
     const push = PushStore.open(cfg.stateDir, bound.cid);
     log.info(`push state ready (${push.bindingCount} active subscription(s), queue=${push.queueStats().pending})`);
-
-    const media = MediaStore.open(cfg.stateDir);
-    log.info(`media index ready (${media.list().length} file(s))`);
 
     events = new MessengerEventBus();
     const presence = new PresenceRegistry();
@@ -411,7 +396,7 @@ export async function start(
       store: push, client: runtime.client, identityCid: bound.cid, log,
       foregroundBindingIds: () => presence.onlineBindings(bound.cid),
     });
-    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { media, delivery });
+    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { delivery });
 
     const readyDeps: ApiDeps = {
       runtime,
@@ -426,7 +411,6 @@ export async function start(
       }),
       events,
       identityCid: bound.cid,
-      media,
     };
 
     const moduleDir = dirname(fileURLToPath(import.meta.url));

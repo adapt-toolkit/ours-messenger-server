@@ -247,7 +247,15 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       const current = state.pages[key];
       if (!current) return state;
       const messages = mergeMessages(mergeMessages(action.page.messages, action.newer), current.messages);
-      const page = { ...action.page, total: Math.max(action.page.total, current.total, messages.length), messages };
+      const page = {
+        ...action.page,
+        // An older page's rows cannot define the chat-list preview. Preserve the
+        // newest snapshot even when talking to an older server that projects the
+        // preview from the requested page instead of whole-dialog history.
+        preview: current.preview,
+        total: Math.max(action.page.total, current.total, messages.length),
+        messages,
+      };
       return { ...state, pages: { ...state.pages, [key]: page } };
     }
     case 'route': return {

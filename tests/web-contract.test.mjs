@@ -33,7 +33,10 @@ assert.ok(source.includes("'X-Ours-Messenger-CSRF': '1'"), 'every web mutation c
 assert.ok(!source.includes("from '../storage/") && !source.includes('indexedDB'), 'server state is authoritative; browser packet/file stores are absent');
 assert.ok(source.includes('Raw HTML is never enabled'), 'message Markdown keeps raw HTML disabled');
 assert.ok(source.includes('aria-label={`${content} ${presentation.label}`}'), 'receipt marks have accessible labels');
-assert.ok(css.includes('@media (max-width: 860px)') && css.includes('prefers-reduced-motion'), 'canonical 861px mobile detail and reduced motion are explicit');
+assert.ok(
+  (css.includes('min-width:861px') || css.includes('min-width: 861px')) && css.includes('prefers-reduced-motion'),
+  'canonical 861px responsive boundary and reduced motion are explicit',
+);
 assert.ok(built.includes('command-settings') && built.includes('Settings'), 'mobile keeps the canonical command-bar Settings entry for Web Push');
 assert.ok(source.includes('useReducer') && source.includes("from 'react-dom/client'"), 'the browser shell is React state rendered through createRoot');
 

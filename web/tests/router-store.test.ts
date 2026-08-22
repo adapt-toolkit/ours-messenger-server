@@ -28,6 +28,7 @@ const newest = {
     read: true, wire_id: `W${index + 51}`, receipt: null,
   })),
   total: 100, unread: 0, hasMore: true, nextBefore: 'W51',
+  preview: 'message 100',
 };
 state = appReducer(state, { type: 'page', contactCid: 'A', page: newest });
 const older = {
@@ -37,11 +38,14 @@ const older = {
     read: true, wire_id: `W${index + 1}`, receipt: null,
   })),
   total: 100, unread: 0, hasMore: false, nextBefore: null,
+  preview: 'message 50',
 };
 state = appReducer(state, { type: 'older_page', contactCid: 'A', page: older, newer: newest.messages });
 assert.deepEqual(pageFor(state, 'A')?.messages.map((message) => message.wire_id),
   Array.from({ length: 100 }, (_, index) => `W${index + 1}`),
   'older pages prepend in deterministic chronological order');
+assert.equal(pageFor(state, 'A')?.preview, 'message 100',
+  'an older page cannot replace the newest chat-list preview');
 state = appReducer(state, { type: 'older_page', contactCid: 'A', page: older, newer: newest.messages });
 assert.equal(pageFor(state, 'A')?.messages.length, 100, 'replayed cursor responses de-duplicate stable wire ids');
 

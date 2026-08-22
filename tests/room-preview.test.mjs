@@ -90,7 +90,9 @@ t.eq(pageFor(ROOM, []).preview, '', 'an empty conversation has no preview');
 const roomText = roomBody({ kind: 'room_msg', text: 'the deploy is green' });
 const pushed = [];
 const client = {
-  getConversation: async () => ({ messages: [{ ...msg(roomText, 1), dir: 'in' }] }),
+  getHistoryItem: async () => ({
+    ...msg(roomText, 1), direction: 'in', peer: { id: 'CID-ROOM', name: ROOM },
+  }),
   listIncomingFiles: async () => [],
   version: async () => ({ ok: true }),
 };

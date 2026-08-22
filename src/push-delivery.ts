@@ -9,7 +9,7 @@ export interface PushDeliveryLog {
 
 export interface PushDeliveryOptions {
   readonly store: PushStore;
-  readonly client: Partial<Pick<OursClient, 'getConversation' | 'listIncomingFiles'>>;
+  readonly client: Partial<Pick<OursClient, 'getHistoryItem' | 'getFileInfo'>>;
   readonly identityCid: string;
   readonly log: PushDeliveryLog;
   readonly now?: () => number;
@@ -45,20 +45,22 @@ async function projectFromSdk(
 ): Promise<PushEvent> {
   const url = `/chats/${encodeURIComponent(job.contactId)}#chat-message-${encodeURIComponent(job.wireId)}`;
   if (job.kind === 'message') {
-    if (!client.getConversation) throw new Error('message projection is unavailable');
-    const conversation = await client.getConversation({ contact: job.contactId });
-    const message = conversation.messages.find((row) => row.wire_id === job.wireId && row.dir === 'in');
-    if (!message) throw new Error('canonical message projection is not ready');
+    if (!client.getHistoryItem) throw new Error('message projection is unavailable');
+    const message = await client.getHistoryItem({ wire_id: job.wireId });
+    if (!message || message.direction !== 'in' || message.peer.id !== job.contactId) {
+      throw new Error('canonical message projection is not ready');
+    }
     return {
       v: 1, kind: 'message', title: job.senderName ?? 'New message', body: message.text,
       contact_id: job.contactId, wire_id: job.wireId, url,
     };
   }
 
-  if (!client.listIncomingFiles) throw new Error('file projection is unavailable');
-  const files = await client.listIncomingFiles();
-  const file = files.find((row) => row.wire_id === job.wireId && row.from.id === job.contactId);
-  if (!file) throw new Error('canonical file projection is not ready');
+  if (!client.getFileInfo) throw new Error('file projection is unavailable');
+  const file = await client.getFileInfo({ wire_id: job.wireId });
+  if (!file || file.direction !== 'in' || file.peer.id !== job.contactId) {
+    throw new Error('canonical file projection is not ready');
+  }
   const kind: PushKind = file.kind === 'voice_message'
     ? 'voice' : file.mime.toLowerCase().startsWith('image/') ? 'photo' : 'file';
   const label = kind === 'voice' ? 'Voice message' : kind === 'photo' ? 'Photo' : 'File';

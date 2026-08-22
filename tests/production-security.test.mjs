@@ -51,12 +51,12 @@ function makeDeps(client = {}) {
     runtime: {
       client,
       described: {
-        ownership: 'embedded-sdk',
+        ownership: 'shared-daemon',
+        application: '@ours.network/messenger-server@0.1.0',
         host: '127.0.0.1',
-        port: 49152,
-        stateDir: '/tmp/DO-NOT-EXPOSE/runtime',
-        brokerUrl: 'wss://user:password@broker.invalid/?token=DO-NOT-EXPOSE',
-        tokenSource: 'owned-file',
+        daemonVersion: '3.0.2',
+        daemonCompat: '3',
+        apiVisibility: 'daemon-configured',
         mcp: false,
       },
     },
@@ -69,9 +69,8 @@ function makeDeps(client = {}) {
     },
     config: {
       host: '127.0.0.1', port: 0, identity: 'Me', force: false,
-      stateDir: '/tmp/DO-NOT-EXPOSE', keepHistory: true,
+      stateDir: '/tmp/DO-NOT-EXPOSE',
       publicOrigin: PUBLIC_ORIGIN,
-      runtime: { brokerUrl: 'wss://broker.invalid/' },
     },
     buildInfo: BUILD,
     watcherStats: () => ({ pushes: 1, events: 2, reconnects: 0 }),
@@ -183,7 +182,7 @@ try {
   console.error = originalError;
 }
 
-// Readiness proves both an owned-runtime response and the startup-bound CID.
+// Readiness proves both a shared-daemon response and the startup-bound CID.
 const healthy = await call(makeDeps({ currentIdentity: async () => ({ cid: 'BOUND-CID', name: 'Me' }) }), {
   url: '/api/healthz',
 });
@@ -220,19 +219,22 @@ assert.ok(!profile.wire.includes(HEALTH_SECRET) && !profile.wire.includes('/priv
 const state = await call(makeDeps(leakyClient), { url: '/api/state' });
 assert.equal(state.status, 200);
 assert.deepEqual(state.json.identity, { cid: 'BOUND-CID', name: 'Me', bio: 'Public bio' });
-assert.equal(state.json.runtime.ownership, 'embedded-sdk');
+assert.equal(state.json.runtime.ownership, 'shared-daemon');
 for (const forbidden of [HEALTH_SECRET, '/private', 'stateDir', 'brokerUrl', 'internalPort', 'selection', 'tokenSource']) {
   assert.ok(!state.wire.includes(forbidden), `/api/state redacts ${forbidden}`);
 }
 
-const fetched = await call(makeDeps({ getFiles: async () => ({
+const fetched = await call(makeDeps({
+  listIncomingFiles: async () => [{ wire_id: 'WIRE' }],
+  getFiles: async () => ({
   mode: 'selected', requested: ['WIRE'], text: `saved at ${SENTINEL_PATH}`,
   files: [{
     file_id: 7, wire_id: 'WIRE', from: { id: 'PEER', name: 'Peer' }, filename: 'safe.bin',
     path: SENTINEL_PATH, mime: 'application/octet-stream', size: 1, sha256: 'HASH',
     status: 'processed', date: 'DATE', kind: 'file', sender: `from ${SENTINEL_PATH}`,
   }],
-}) }), {
+  }),
+}), {
   method: 'POST', url: '/api/files/fetch', headers: mutationHeaders,
   body: JSON.stringify({ wire_ids: ['WIRE'] }),
 });

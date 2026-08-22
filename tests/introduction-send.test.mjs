@@ -1,122 +1,100 @@
-// THE REGRESSION FOR "the surface said a delivered message was not delivered".
-//
-// A first message to an identity this one has no contact edge with cannot use the
-// ordinary send transaction. The SDK connects on the way past and carries the text
-// inside the introduction: the message ARRIVES, and it gets NO WIRE ID, because the
-// introduction has no slot for one.
-//
-// `POST /api/messages/send` used to require a wire id and throw without one, so that
-// successful send was answered with HTTP 500 and the client rendered
-// "Send failed … the message was not delivered" over a message the peer already had.
-//
-// WHAT THIS ASSERTS, and why each half is needed:
-//   1. the introduction-carried send answers 200, reports delivery "introduced",
-//      and reports wire_id null — not a fabricated id, and not an error;
-//   2. THE PEER ACTUALLY HAS THE MESSAGE. Without this, assertion 1 would stay green
-//      if the route were "fixed" by swallowing a genuine failure, which is the exact
-//      wrong fix and the one the old throw was defending against;
-//   3. the ordinary send over the now-existing edge still reports a real wire id and
-//      delivery "tracked", so the honest path is not quietly downgraded to the
-//      untracked one;
-//   4. a missing wire id on any OTHER outcome kind still throws — the guard the old
-//      code was providing is kept, narrowed to the cases where it is correct.
+// A first send through a registrar-verified local introduction must be delivered
+// and create the edge. Current shared-daemon history can track that send from the
+// outset; the separate introduction-send-guard unit contract retains coverage of
+// peers that report the legacy delivered-without-wire-id `introduced` outcome.
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { counter, freePort, memSample, until } from './harness.mjs';
+import { start } from '../src/server.ts';
+import { counter, memSample, startHarnessDaemon, until } from './harness.mjs';
 
 const t = counter();
 memSample('before');
 
-const stateDir = mkdtempSync(join(tmpdir(), 'messenger-introsend-'));
-const port = await freePort();
-const publicOrigin = `http://127.0.0.1:${port}`;
-execFileSync(process.execPath, [
-  '--import', 'tsx', fileURLToPath(new URL('./fixtures/owned-runtime-child.mjs', import.meta.url)),
-], {
-  env: {
-    ...process.env, TEST_MODE: 'init', TEST_RESULT_PATH: join(stateDir, 'init-result.json'),
-    TEST_INIT_NAME: 'Me', OURS_MESSENGER_STATE_DIR: stateDir,
-  },
-  stdio: 'ignore',
-});
-
-const { start } = await import('../src/server.ts');
-const server = await start({
-  host: '127.0.0.1', port, publicOrigin, identity: 'Me', force: false,
-  stateDir, keepHistory: true, runtime: { brokerUrl: 'wss://invalid.local/none' },
-}, { name: '@ours.network/messenger-server', version: '0.1.0', sha: 'introduction-send-test', dirty: false });
-
-const { OursClient } = await import('@ours.network/sdk');
-const runtimeToken = readFileSync(join(server.runtime.stateDir, 'daemon-token'), 'utf8').trim();
-const peer = new OursClient({
-  url: `http://127.0.0.1:${server.runtime.port}`, leaseToken: 'peer-lease', apiToken: runtimeToken,
-});
-await peer.createIdentity({ name: 'Peer', bio: 'the other end', exposeLocal: true, localAutoAccept: true });
-await peer.setConversationPolicy({ keep_history: true });
-await peer.readvertiseOnUpgrade();
-// DELIBERATELY NO INVITE AND NO addContact. The absence of the edge is the subject.
-
-const base = `http://127.0.0.1:${port}`;
-const api = async (method, path, body) => {
-  const res = await fetch(base + path, {
-    method,
-    headers: method === 'GET' ? {} : {
-      'content-type': 'application/json', origin: publicOrigin, 'x-ours-messenger-csrf': '1',
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
+const daemon = await startHarnessDaemon('introsend');
+const messengerState = mkdtempSync(join(tmpdir(), 'messenger-introsend-app-'));
+let server;
+let peer;
+try {
+  const { OursClient } = daemon.sdk;
+  const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
+  const human = await provision.createRootIdentity({
+    name: 'Me', bio: 'messenger identity', exposeLocal: true,
+    localAutoAccept: true, skipIfRootExists: false,
   });
-  const text = await res.text();
-  return { status: res.status, json: text ? JSON.parse(text) : null };
-};
+  await provision.releaseLease();
 
-t.eq((await api('GET', '/api/contacts')).json.contacts, [], 'no contact edge exists before the first send');
+  peer = new OursClient({ url: daemon.url, leaseToken: 'peer' });
+  await peer.createTemporaryIdentity({
+    name: 'Peer', bio: 'the other end', exposeLocal: true, localAutoAccept: true,
+  });
 
-// ---- 1. the introduction-carried send -------------------------------------
-const introText = 'the first message, carried by the introduction';
-const introduced = await api('POST', '/api/messages/send', { contact: 'Peer', text: introText });
-t.eq(introduced.status, 200, 'a send with no contact edge answers 200, not 500');
-t.eq(introduced.json.delivery, 'introduced', 'and reports the outcome for what it is: introduced');
-t.eq(introduced.json.wire_id, null, 'with wire_id null — no id is invented for a message that has none');
+  const publicOrigin = 'http://messenger.test';
+  server = await start({
+    host: '127.0.0.1', port: 0, publicOrigin, identity: 'Me', force: false,
+    stateDir: messengerState,
+  }, {
+    name: '@ours.network/messenger-server', version: '0.1.0',
+    sha: 'introduction-send-test', dirty: false,
+  });
 
-// ---- 2. THE COUNTERWEIGHT: the peer really has it -------------------------
-// Assertion 1 alone would also pass if the route had been "fixed" by swallowing a
-// real failure. This is what makes the 200 mean something.
-const landed = await until('the introduction-carried message to reach the peer', async () => {
-  const incoming = await peer.listIncomingMessages();
-  const match = incoming.find((message) => message.text === introText);
-  return match ?? undefined;
-});
-t.ok(landed, 'THE PEER RECEIVED IT — the 200 describes a delivered message, not a swallowed error');
-t.eq(landed.wire_id, '', 'and it carries no wire id at the peer either, which is why no receipt can name it');
+  const base = `http://127.0.0.1:${server.port}`;
+  const api = async (method, path, body) => {
+    const res = await fetch(base + path, {
+      method,
+      headers: method === 'GET' ? {} : {
+        'content-type': 'application/json', origin: publicOrigin,
+        'x-ours-messenger-csrf': '1',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    return { status: res.status, json: text ? JSON.parse(text) : null };
+  };
 
-// The introduction is also what creates the edge, so the contact list must move.
-const linked = await until('the contact edge the introduction created', async () => {
-  const contacts = (await api('GET', '/api/contacts')).json.contacts;
-  return contacts.some((contact) => contact.name === 'Peer') ? contacts : undefined;
-});
-t.ok(linked.some((contact) => contact.name === 'Peer'), 'the introduction created the contact edge');
+  t.eq((await api('GET', '/api/contacts')).json.contacts, [],
+    'no contact edge exists before the first send');
 
-// ---- 3. the ordinary path is unchanged ------------------------------------
-const trackedText = 'the second message, over the edge that now exists';
-const tracked = await api('POST', '/api/messages/send', { contact: 'Peer', text: trackedText });
-t.eq(tracked.status, 200, 'the ordinary send still answers 200');
-t.eq(tracked.json.delivery, 'tracked', 'and reports delivery "tracked"');
-t.ok(typeof tracked.json.wire_id === 'string' && tracked.json.wire_id.length > 0,
-     'with a real wire id — the honest path is not downgraded to the untracked one');
+  const introText = 'the first message, carried by the introduction';
+  const introduced = await api('POST', '/api/messages/send', { contact: 'Peer', text: introText });
+  t.eq(introduced.status, 200, 'an introduction-carried send answers 200');
+  t.eq(introduced.json.delivery, 'tracked', 'and reports the current tracked introduction outcome');
+  t.ok(typeof introduced.json.wire_id === 'string' && introduced.json.wire_id.length > 0,
+    'with the canonical history wire id');
 
-const receipted = await until('a delivered receipt for the tracked send', async () => {
-  const receipts = await server.runtime.client.getReceipts({ contact: 'Peer' });
-  return receipts.receipts[tracked.json.wire_id] ? receipts : undefined;
-});
-t.eq(receipted.receipts[tracked.json.wire_id], 'delivered',
-     'and it acquires a delivered receipt, which the introduction-carried one never can');
+  const landed = await until('the introduction-carried message to reach Peer', async () => {
+    const history = await peer.listHistory({ peer_cid: human.info.cid, limit: 10 });
+    return history.items.find((message) => message.text === introText) ?? undefined;
+  });
+  t.ok(landed, 'the peer actually received the message');
+  t.eq(landed.wire_id, introduced.json.wire_id, 'and both histories agree on the wire id');
 
-await server.close?.();
-rmSync(stateDir, { recursive: true, force: true });
+  await until('the contact edge created by the introduction', async () => {
+    const contacts = (await api('GET', '/api/contacts')).json.contacts;
+    return contacts.some((contact) => contact.name === 'Peer') ? contacts : undefined;
+  });
+  t.ok(true, 'the introduction created the contact edge');
+
+  const trackedText = 'the second message, over the established edge';
+  const tracked = await api('POST', '/api/messages/send', { contact: 'Peer', text: trackedText });
+  t.eq(tracked.status, 200, 'the ordinary send still answers 200');
+  t.eq(tracked.json.delivery, 'tracked', 'and reports tracked delivery');
+  t.ok(typeof tracked.json.wire_id === 'string' && tracked.json.wire_id.length > 0,
+    'with the canonical wire id');
+
+  await until('the tracked message to acquire a delivered receipt', async () => {
+    const row = await server.runtime.client.getHistoryItem({ wire_id: tracked.json.wire_id });
+    return row?.delivery_state === 'delivered' ? row : undefined;
+  });
+  t.ok(true, 'the tracked send acquires a delivered receipt');
+} finally {
+  await server?.close();
+  await peer?.releaseLease();
+  await daemon.close();
+  rmSync(messengerState, { recursive: true, force: true });
+}
+
 memSample('after');
-console.log(`\nintroduction-send OK (${t.count} checks) — an introduction-carried send is reported as delivered-but-untracked, never as a failure`);
+console.log(`\nintroduction-send OK (${t.count} checks) — registrar introduction creates a tracked edge and receipts`);
 process.exit(0);

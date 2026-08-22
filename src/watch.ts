@@ -25,7 +25,6 @@
 import type { OursClient } from '@ours.network/sdk';
 import { MessengerEventBus, normalizeNotification } from './events.js';
 import type { PushEvent, PushStore } from './push.js';
-import type { MediaStore } from './media.js';
 import { reportFailure } from './security.js';
 import type { PushDeliveryQueue } from './push-delivery.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
@@ -49,7 +48,6 @@ export interface WatcherOptions {
   readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** A successful probe defines "reattached" before the sync broadcast. */
   readonly probe?: () => Promise<unknown>;
-  readonly media?: MediaStore;
   /** Durable production delivery; direct PushStore.send remains a test seam. */
   readonly delivery?: Pick<PushDeliveryQueue, 'enqueue'>;
 }
@@ -63,11 +61,11 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
   const url = `/chats/${encodeURIComponent(contactId)}`;
 
   if (record.event === 'message_received') {
-    let message: Awaited<ReturnType<OursClient['getConversation']>>['messages'][number] | undefined;
+    let message: Awaited<ReturnType<OursClient['getHistoryItem']>> | undefined;
     for (const delay of [0, 50, 200, 500]) {
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-      const conversation = await client.getConversation({ contact: contactId });
-      message = conversation.messages.find((row) => row.wire_id === wireId && row.dir === 'in');
+      message = await client.getHistoryItem({ wire_id: wireId }) ?? undefined;
+      if (message?.direction !== 'in' || message.peer.id !== contactId) message = undefined;
       if (message) break;
     }
     if (!message) throw new Error('canonical message was not available for push projection');
@@ -83,11 +81,11 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
   }
 
   if (record.event === 'file_received') {
-    let file: Awaited<ReturnType<OursClient['listIncomingFiles']>>[number] | undefined;
+    let file: Awaited<ReturnType<OursClient['getFileInfo']>> | undefined;
     for (const delay of [0, 50, 200, 500]) {
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-      const files = await client.listIncomingFiles();
-      file = files.find((row) => row.wire_id === wireId && row.from.id === contactId);
+      file = await client.getFileInfo({ wire_id: wireId }) ?? undefined;
+      if (file?.direction !== 'in' || file.peer.id !== contactId) file = undefined;
       if (file) break;
     }
     if (!file) throw new Error('canonical file metadata was not available for push projection');
@@ -158,8 +156,8 @@ async function reconcileMissed(
     if (m.status !== 'unread') continue;
     if (delivery.enqueue({
       event: 'message_received',
-      sender_id: m.sender_id,
-      sender_name: m.sender_name,
+      sender_id: m.from.id,
+      sender_name: m.from.name,
       wire_id: m.wire_id,
     })) queued++;
   }
@@ -257,10 +255,6 @@ export function startWatcher(
             // convergence. A temporarily unavailable canonical file projection
             // must become a durable push retry, not a lost notification.
             if (options.delivery) options.delivery.enqueue(record);
-            if (record.event === 'file_received' && options.media) {
-              const incoming = await client.listIncomingFiles();
-              options.media.reconcileIncoming(incoming);
-            }
             if (options.delivery) continue;
             const event = await pushEventFor(client, record);
             if (!event) continue;
