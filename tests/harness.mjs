@@ -1,19 +1,13 @@
-// Standalone SDK harness for actor/receipt tests that do not boot the full
-// messenger server. Production uses the same startDaemon API through
-// src/daemon.ts and adds messenger-owned lifecycle around it.
-//
-// EVERY ENV VAR IS SET BEFORE THE FIRST SDK IMPORT, and the ordering is
-// load-bearing rather than stylistic: the SDK reads its config at MODULE LOAD, so
-// importing first and configuring after silently boots against ~/.ours and the
-// public broker. ours-tg-connector's suite learned this by dying with "Failed to
-// invoke initializer in ADAPT environment" — an error naming neither the env nor
-// the ordering.
+// Shared-daemon harness used by integration tests. Production and tests both
+// attach through the public SDK client; only the operator CLI launches the
+// daemon process.
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -63,37 +57,64 @@ export const freePort = () =>
   });
 
 /**
- * Boot an isolated daemon and return `{ url, stateDir, sdk, close }`.
- *
- * Call this BEFORE importing anything that imports the SDK.
+ * Boot an isolated daemon through @ours.network/cli and return
+ * `{ url, stateDir, sdk, close }`.
  */
 export async function startHarnessDaemon(tag) {
   const stateDir = mkdtempSync(join(tmpdir(), `messenger-${tag}-`));
-  process.env.OURS_STATE_DIR = stateDir;
-  // No broker: these tests exercise two identities inside ONE daemon, which is
-  // local delivery. Pointing at a real broker would make the suite depend on the
-  // network and on somebody else's uptime.
-  process.env.OURS_BROKER_URL = 'wss://invalid.local/none';
-  process.env.OURS_API_VISIBILITY = 'open';
   const port = await freePort();
-  process.env.OURS_PORT = String(port);
+  const url = `http://127.0.0.1:${port}`;
+  const env = {
+    ...process.env,
+    OURS_STATE_DIR: stateDir,
+    OURS_PORT: String(port),
+    OURS_BROKER_URL: 'wss://invalid.local/none',
+    OURS_API_VISIBILITY: 'open',
+  };
+  // Keep the parent selection coherent as well: start() uses attachOursClient.
+  Object.assign(process.env, {
+    OURS_STATE_DIR: stateDir,
+    OURS_PORT: String(port),
+    OURS_BROKER_URL: env.OURS_BROKER_URL,
+    OURS_API_VISIBILITY: env.OURS_API_VISIBILITY,
+  });
+
+  const cli = resolve(import.meta.dirname, '..', 'node_modules', '@ours.network', 'cli', 'dist', 'cli.js');
+  const child = spawn(process.execPath, [cli, 'daemon', 'serve'], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  try {
+    await until('shared daemon startup', async () => {
+      if (child.exitCode !== null) throw new Error(`ours daemon exited ${child.exitCode}: ${output}`);
+      try {
+        const response = await fetch(`${url}/version`);
+        return response.ok ? true : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+  } catch (error) {
+    child.kill('SIGTERM');
+    rmSync(stateDir, { recursive: true, force: true });
+    throw error;
+  }
 
   const sdk = await import('@ours.network/sdk');
-  const { startDaemon } = await import('@ours.network/sdk/daemon');
-
-  // startDaemon BOOTS THE WRAPPER ITSELF. Calling bootWrapper() first and then
-  // startDaemon() initialises the ADAPT environment TWICE in one process and dies
-  // with "Failed to invoke initializer in ADAPT environment", naming neither the
-  // double init nor which call was the second.
-  const handle = await startDaemon({ version: 'test' });
 
   return {
-    url: `http://127.0.0.1:${port}`,
+    url,
     port,
     stateDir,
     sdk,
     async close() {
-      await handle.close?.();
+      if (child.exitCode === null) {
+        child.kill('SIGTERM');
+        await new Promise((resolveExit) => child.once('exit', resolveExit));
+      }
       rmSync(stateDir, { recursive: true, force: true });
     },
   };

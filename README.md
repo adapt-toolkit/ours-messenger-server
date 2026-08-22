@@ -1,115 +1,62 @@
 # @ours.network/messenger-server
 
-A self-hosted web messenger for ours.network. One process owns an isolated SDK
-daemon runtime, a token-authenticated loopback `OursClient`, and the public
-same-origin REST/SSE application. It has no runtime or deployment dependency on
-ours-mcp, and `/mcp` returns 404 on both HTTP servers.
+A self-hosted web messenger for ours.network. It attaches to the same shared
+ours daemon used by the CLI and peer services, leases one configured identity,
+and exposes a same-origin REST/SSE web application. Messenger never starts,
+stops, embeds, or owns the daemon, and `/mcp` always returns 404.
 
-MUFL conversation history remains the only durable source of message and receipt
-state. SSE carries metadata-only invalidations; the browser always rebuilds truth
-from REST snapshots.
+Message and file history is persisted by the shared daemon outside MUFL packets.
+Messenger reads the daemon's external history API and selectively consumes only
+the unread messages for the active conversation. SSE carries metadata-only
+invalidations; the browser rebuilds durable truth from REST snapshots.
 
-## Runtime ownership and isolation
+## Shared daemon and identity
 
-`start()` configures the SDK before its first import, then dynamically imports
-`@ours.network/sdk/daemon` and calls `startDaemon()` without an MCP integration.
-The runtime always uses:
+`start()` calls the SDK's client-only `attachOursClient`, using the standard
+`OURS_CONFIG`, `OURS_STATE_DIR`, `OURS_PORT`, endpoint, and API-token selection.
+The SDK verifies that the endpoint belongs to the expected state directory
+before sending credentials. Messenger then calls `chooseIdentity` for exactly
+`OURS_MESSENGER_IDENTITY`; it never creates an identity or chooses one
+implicitly.
 
-- `127.0.0.1` with port `0` (an OS-selected private port);
-- SDK `apiVisibility=owner` and its private `0600` token file;
-- an `OursClient` carrying that token and a per-process lease;
-- `<OURS_MESSENGER_STATE_DIR>/runtime` for identities and runtime state;
-- `<OURS_MESSENGER_STATE_DIR>/push.json` for messenger WebPush state;
-- `<OURS_MESSENGER_STATE_DIR>/media` for owner-only immutable media blobs,
-  reply correlations, provenance, hashes, and logical file versions;
-- `<OURS_MESSENGER_STATE_DIR>/runtime/config.json` as the only SDK config path.
+The shared daemon owns identity keys, MUFL protocol state, message/file history,
+and file blobs. Messenger owns only its public HTTP server and application state
+under `OURS_MESSENGER_STATE_DIR`, including WebPush subscriptions, delivery
+queue metadata, and VAPID keys. Shutting down messenger releases its SDK lease
+but does not stop the daemon.
 
-Ambient `OURS_STATE_DIR`, `OURS_CONFIG`, `OURS_PORT`, broker selection and API
-token are overwritten before SDK evaluation. The messenger never reads or writes
-`~/.ours` implicitly. The only runtime selection exposed by messenger is
-`OURS_MESSENGER_BROKER_URL`.
-
-An OS-held advisory `flock` on `.messenger-runtime.lock` refuses concurrent use
-of the same state directory before SDK import. The file contains diagnostic JSON
-but its existence and PID text are never ownership evidence. Closing the held
-descriptor, `SIGKILL`, process loss, and reboot release ownership in the kernel;
-PID reuse cannot steal a live descriptor lock and no stale file is removed.
-
-`serve` never creates an identity. A read-only preflight on an empty owned store
-throws the typed `INITIALIZATION_REQUIRED` error before creating a directory,
-lock, token, registrar, or listener. Once identities exist, a misspelled
-configured name remains a hard non-mutating SDK error.
-
-After that preflight, a lightweight worker owns the public port while the
-potentially CPU-bound persisted-identity restore runs on the main event loop.
-During this startup gate only `/api/build-info` returns 200;
-`/api/healthz` returns an explicit `status=starting` 503, and every other API
-request returns 503 before body parsing or SDK access. Once runtime restore,
-identity binding, retention policy, push/media stores, and the watcher are
-ready, the worker closes and the full server takes over the same port before
-startup completes.
-
-Startup remains transactional: any runtime, binding, store, watcher, or listener
-failure closes the public server if present, stops the watcher, releases the
-lease, and closes the runtime. Normal `close()` is idempotent and uses the same
-ordered path. Tests require both loopback ports, listening server handles, and
-advisory ownership to be released afterward; OS signal listener ownership is
-enforced by the SDK lifecycle gate described below.
+Startup is transactional: a daemon-attach, identity-bind, application-store,
+watcher, or listener failure closes the public server if present, stops the
+watcher, releases the lease, and preserves existing state. Normal `close()` is
+idempotent and follows the same ordered path.
 
 ## Running
 
-The package and lockfile pin the published `@ours.network/sdk@1.3.1`. This release
-provides the embedded daemon, receipt/event metadata, file/voice operations, and
-`handleSignals: false` contract required by the messenger. The server owns signal
-handling and ordered shutdown; it never removes another component's listeners.
+Install and start the shared daemon with `@ours.network/cli`, create the identity
+there, then start messenger with the same daemon selection:
 
 ```bash
 npm install
 npm run build
 
-# First run: creates exactly one Human/root identity offline. Omit --yes to
-# review the exact state/name/bio and confirm interactively.
-OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
-  node dist/cli.js init --name 'Ada@server' --bio 'Ada on the messenger host' --yes
+# One-time host setup. These commands come from @ours.network/cli.
+ours config setup --port 3070 --state-dir /srv/ours
+ours daemon start
+ours identity create-root --name 'Ada@server'
 
 OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
+  OURS_STATE_DIR=/srv/ours \
+  OURS_PORT=3070 \
   OURS_MESSENGER_IDENTITY='Ada@server' \
   OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
   node dist/cli.js serve
 ```
 
-`init` requires non-empty `--name` and `--bio`, calls the SDK Human/root API
-(never the flat identity API), verifies exactly one matching root, and writes an
-owner-only `initialization.json` receipt containing its stable CID. Every later
-`serve` verifies a matching name/CID when that receipt is present. A second init
-refuses before starting or mutating the runtime.
-
-To import an existing **stopped SDK state directory** (or a stopped messenger
-state root containing `runtime/`) into an empty destination, stop every source
-writer first and use an explicit new backup path:
-
-```bash
-OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
-  node dist/cli.js migrate \
-    --source /srv/old-ours-state \
-    --backup /srv/backups/ours-messenger-20260814 \
-    --yes
-```
-
-The command rejects identical/nested paths, symlinks, a live messenger advisory
-lock, a corroborated live CLI-managed daemon, an empty/incomplete source, an
-existing backup, or any non-empty destination before mutation. It first copies
-source and empty-destination backups, then copies the complete runtime through a
-private sibling staging root, verifies a deterministic path/size/SHA-256
-manifest, and atomically installs the destination. For a messenger-root source,
-outer `push.json` and the complete `media/` tree are included as well.
-`migration.json` records source, backup,
-identities, file/byte totals, and matching source/destination manifests. Because
-identity keys and the complete actor state blob are copied byte-for-byte, CID,
-conversation history, receipts, `keep_history`, push subscriptions, file bytes,
-reply correlations, provenance, and media version history are preserved
-across the clean destination restart. Never point messenger at a concurrently
-used `~/.ours` directory.
+`serve` is the only messenger command. Daemon lifecycle, identity provisioning,
+and daemon-state reset belong to the ours CLI. This storage epoch intentionally
+has no migration: remove old daemon state before installing it, as documented by
+the SDK/CLI release. Messenger-specific `push.json` remains separate and is not
+daemon identity storage.
 
 Open `http://127.0.0.1:8420/`. Useful configuration:
 
@@ -118,8 +65,6 @@ OURS_MESSENGER_HOST              default 127.0.0.1
 OURS_MESSENGER_PORT              default 8420; 0 selects a dynamic public port
 OURS_MESSENGER_PUBLIC_ORIGIN     required exact external http(s) origin
 OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger
-OURS_MESSENGER_BROKER_URL        default wss://broker1.ours.network
-OURS_MESSENGER_KEEP_HISTORY      default true
 OURS_MESSENGER_FORCE             default false
 OURS_MESSENGER_VAPID_PUBLIC_KEY  optional; must be paired with the private key
 OURS_MESSENGER_VAPID_PRIVATE_KEY optional secret; never expose to the browser
@@ -140,17 +85,18 @@ sends accept bounded inline base64 only and reject the `path` key.
 
 The public messenger REST surface has no built-in user authentication. Keep the
 default loopback bind or put an authenticated reverse proxy in front of a
-non-loopback bind. The internal runtime token protects only the private SDK HTTP
+non-loopback bind. The shared daemon token protects only its private SDK HTTP
 surface and is never returned by `/api/state` or written to messenger logs.
 
 ## Receipts and live updates
 
-Delivered and read are distinct. The core emits delivered after accepted
-storage; read is emitted only by `markRead`. Browser snapshot reads are
-non-consuming, and `getMessages` is intentionally absent from the REST surface.
-The web read gate calls `POST /api/conversations/:contact/read` only when that
-exact dialog is visible. Duplicate calls are harmless because only unread-to-read
-transitions produce receipt wire IDs.
+Delivered and read are distinct. The daemon records delivered after accepted
+storage; browser snapshot reads are non-consuming. The web read gate calls
+`POST /api/conversations/:contact/read` only when that exact dialog is visible.
+That route filters the non-consuming unread index by the selected peer CID and
+selectively consumes only those wire IDs. The general consuming `getMessages`
+operation is intentionally absent from the REST surface. Duplicate calls are
+harmless because only unread-to-read transitions produce receipt wire IDs.
 
 `GET /api/events` is a bounded SSE invalidation stream:
 
@@ -230,10 +176,10 @@ explicit read, text/file mutations, per-dialog media inventory and explicit
 incoming fetch, owner-only media download, WebPush routes, `/api/state`,
 `/api/healthz`, `/api/build-info`, and `/api/events`. During startup, build
 metadata is available while health returns a fixed `status=starting` 503. After
-the readiness transition, health returns 200 only when the owned runtime responds
+the readiness transition, health returns 200 only when the shared daemon responds
 before its deadline with the startup-bound identity CID; failures use one fixed
-503 shape. State excludes runtime paths, broker,
-internal port and token provenance. Build metadata is injected by `build.mjs` as
+503 shape. State excludes the daemon endpoint, token, and broker configuration.
+Build metadata is injected by `build.mjs` as
 the full Git SHA plus clean/dirty provenance; `OURS_MESSENGER_RELEASE_BUILD=1`
 refuses dirty tracked or untracked source. Unknown `/api/*` routes remain JSON
 404 responses. `/mcp` is a
@@ -260,11 +206,9 @@ npm test
 ```
 
 The suite covers mutation intent gates, safe inline-file bounds, health identity
-and timeout behavior, response/log redaction, immutable build identity, the
-owned-runtime source boundary, explicit root initialization,
-empty-serve non-mutation, stable CID provenance, byte-complete migration and
-invalid-input non-mutation, live lock collisions, graceful release, SIGKILL/PID
-reuse recovery, bundle execution, ambient state isolation, real-token redaction,
+and timeout behavior, response/log redaction, immutable build identity, shared
+daemon attachment, exact identity leasing, external history paging, selective
+conversation reads, graceful lease release, bundle execution, token redaction,
 `/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
 REST/WebPush encryption and full payloads, reply correlation, immutable media and
 version round-trips, hostile top-level media navigation, exact voice MIME/bytes,
@@ -273,12 +217,9 @@ isolation/installability/offline launch in Chromium, SSE backpressure and
 reconnect, cursor paging with stable scroll anchoring, invite-dialog reopen,
 focused-client contracts and the exact-dialog read gate.
 
-## SDK lifecycle ownership
+## SDK lifecycle boundary
 
-The pinned SDK exposes `DaemonOptions.handleSignals?: boolean`; messenger calls
-`startDaemon({ handleSignals: false })`. The SDK therefore installs no process
-signal handlers and never exits the host process. The targeted source-contract
-test plus owned-runtime shutdown tests enforce this boundary.
-
-The known SDK teardown report of one bounded `AdaptPacketContext` allocation is
-unchanged and remains upstream lifecycle accounting, not messenger state growth.
+Messenger imports only the public client surface of `@ours.network/sdk`.
+Bundle-contract tests reject daemon/native/MUFL artifacts and embedded-runtime
+imports. Process signals stop the messenger HTTP application and release its
+identity lease; daemon lifecycle remains exclusively under the ours CLI.

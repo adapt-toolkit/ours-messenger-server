@@ -1,7 +1,7 @@
 {
   "name": "@ours.network/messenger-server",
   "version": "0.1.0",
-  "description": "Self-hosted messenger backend for ours.network with an isolated embedded SDK runtime, REST/SSE API, focused web client, and WebPush.",
+  "description": "Self-hosted messenger application for one identity on a shared ours daemon, with REST/SSE API, focused web client, and WebPush.",
   "type": "module",
   "license": "FSL-1.1-Apache-2.0",
   "author": "Adapt Toolkit",
@@ -20,8 +20,8 @@
   },
   "files": [
     "dist",
-    "mufl_files",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
@@ -33,8 +33,8 @@
     "serve": "node dist/cli.js serve",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:startup": "node --import tsx tests/startup-readiness.test.mjs",
-    "test:offline": "for f in tests/owned-runtime.test.mjs tests/runtime-lock.test.mjs tests/lifecycle-gate.test.mjs tests/sdk-signal-ownership.blocker.test.mjs tests/bundle-smoke.test.mjs tests/native-backend-resolves.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/media-store.test.mjs tests/media-response.test.mjs tests/push-store.test.mjs tests/push-store-hardening.test.mjs tests/push-browser-lifecycle.test.mjs tests/sw-push.test.mjs tests/push-delivery.test.mjs tests/events.test.mjs tests/watch-reconcile.test.mjs tests/introduction-send-guard.test.mjs tests/sse-e2e.test.mjs tests/presence.test.mjs tests/static-hosting.test.mjs tests/pwa-contract.test.mjs tests/update-check.test.mjs tests/web-contract.test.mjs web/tests/api.test.ts web/tests/events.test.ts web/tests/presence.test.ts web/tests/router-store.test.ts web/tests/components.test.tsx web/tests/markdown.test.tsx web/tests/voice.test.ts web/tests/read-gate.test.ts web/tests/receipt-presentation.test.ts web/tests/voice-duration.test.ts web/tests/voice-waveform.test.ts tests/room-preview.test.mjs web/tests/receipt-apply.test.ts; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
-    "test:loopback": "for f in tests/receipts.test.mjs tests/introduction-send.test.mjs tests/state-dir-isolation.test.mjs tests/package-runtime-assets.test.mjs tests/rest-e2e.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
+    "test:offline": "for f in tests/shared-daemon-contract.test.mjs tests/bundle-smoke.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/media-response.test.mjs tests/push-store.test.mjs tests/push-store-hardening.test.mjs tests/push-browser-lifecycle.test.mjs tests/sw-push.test.mjs tests/push-delivery.test.mjs tests/events.test.mjs tests/watch-reconcile.test.mjs tests/introduction-send-guard.test.mjs tests/sse-e2e.test.mjs tests/presence.test.mjs tests/static-hosting.test.mjs tests/pwa-contract.test.mjs tests/update-check.test.mjs tests/web-contract.test.mjs web/tests/api.test.ts web/tests/events.test.ts web/tests/presence.test.ts web/tests/router-store.test.ts web/tests/components.test.tsx web/tests/markdown.test.tsx web/tests/voice.test.ts web/tests/read-gate.test.ts web/tests/receipt-presentation.test.ts web/tests/voice-duration.test.ts web/tests/voice-waveform.test.ts tests/room-preview.test.mjs web/tests/receipt-apply.test.ts; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
+    "test:loopback": "for f in tests/shared-daemon-e2e.test.mjs tests/introduction-send.test.mjs tests/rest-e2e.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
     "test:browser": "node tests/browser-pwa.test.mjs && node tests/browser-composer-focus.test.mjs && node tests/browser-scroll-stability.test.mjs && node tests/browser-message-control-scroll.test.mjs && node tests/browser-mermaid-theme.test.mjs && node tests/browser-cold-open-sync.test.mjs && node --import tsx tests/browser-message-lists.test.mjs && node tests/browser-voice-duration.test.mjs && node tests/browser-file-bubble-layout.test.mjs && node tests/browser-voice-waveform.test.mjs && node tests/browser-receipt-render.test.mjs && node tests/browser-receipt-converge-order.test.mjs && node tests/browser-media-panel-scroll.test.mjs",
     "test": "npm run build && npm run test:startup && npm run test:offline && npm run test:loopback && npm run test:browser"
   },
@@ -42,7 +42,7 @@
     "@fontsource-variable/fraunces": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
-    "@ours.network/sdk": "1.3.1",
+    "@ours.network/sdk": "3.0.2",
     "@radix-ui/react-dialog": "^1.1.23",
     "framer-motion": "^12.43.0",
     "jsqr": "^1.4.0",
@@ -60,6 +60,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@ours.network/cli": "2.0.2",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^20.14.0",

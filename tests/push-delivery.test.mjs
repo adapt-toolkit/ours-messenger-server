@@ -158,8 +158,15 @@ try {
     const policyQueue = new PushDeliveryQueue({
       store: policyStore,
       client: {
-        async getConversation() { return { messages: [{ dir: 'in', wire_id: 'MESSAGE-1', text: 'full message text' }] }; },
-        async listIncomingFiles() { return rows; },
+        async getHistoryItem({ wire_id }) {
+          return wire_id === 'MESSAGE-1'
+            ? { direction: 'in', wire_id, text: 'full message text', peer: { id: 'CID-A', name: 'Alice' } }
+            : null;
+        },
+        async getFileInfo({ wire_id }) {
+          const row = rows.find((candidate) => candidate.wire_id === wire_id);
+          return row ? { ...row, direction: 'in', peer: row.from } : null;
+        },
       },
       identityCid: 'CID-ME', log: { info() {}, warn() {} }, now: () => now, random: () => 0, autoStart: false,
     });

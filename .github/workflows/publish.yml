@@ -1,0 +1,86 @@
+name: CI
+
+# Canonical ours.network single-package publish flow, with Chromium installed
+# because messenger's full gate includes its browser suite.
+# Required secrets: NPM_TOKEN, VERSION_BUMP_APP_ID, and
+# VERSION_BUMP_APP_PRIVATE_KEY.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    name: Gates (typecheck · build · test)
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm pack --dry-run
+
+  version-bump:
+    needs: gates
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    name: Version bump
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      bumped: ${{ steps.bump.outputs.bumped }}
+      new-sha: ${{ steps.bump.outputs.new-sha }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.VERSION_BUMP_APP_ID }}
+          private-key: ${{ secrets.VERSION_BUMP_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Run version bump
+        id: bump
+        env:
+          PKG_PATH: package.json
+        run: bash .github/workflows/scripts/bump-version.sh
+
+  npm-publish:
+    needs: [gates, version-bump]
+    if: needs.version-bump.outputs.bumped == 'true'
+    runs-on: ubuntu-latest
+    name: Publish to npm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version-bump.outputs.new-sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - name: Publish @ours.network/messenger-server
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

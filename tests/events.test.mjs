@@ -51,8 +51,8 @@ const pushes = [];
 const controllerWait = async () => {};
 const handle = startWatcher(
   {
-    getConversation: async () => ({
-      messages: [{ dir: 'in', wire_id: 'WIRE-2', text: 'the full push body' }],
+    getHistoryItem: async () => ({
+      direction: 'in', wire_id: 'WIRE-2', text: 'the full push body', peer: { id: 'CID-A', name: 'Alice' },
     }),
   },
   'Me',
@@ -107,7 +107,6 @@ const fileHandle = startWatcher(
   fileBus,
   {
     delivery: { enqueue() { durableEnqueues++; return true; } },
-    media: { reconcileIncoming() { throw new Error('must not reach reconciliation'); } },
     watch: () => (async function* () {
       yield { event: 'file_received', sender_id: 'CID-A', wire_id: 'FILE-LAG', date: 'D4' };
     })(),

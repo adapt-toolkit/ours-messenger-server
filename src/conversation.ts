@@ -1,29 +1,40 @@
-// getConversationPage — A HOST-SIDE PROJECTION, WITH NO MUFL BEHIND IT.
+// Conversation pages are a host-side projection of shared-daemon history.
 //
-// `getConversation` returns the WHOLE conversation, oldest first. That is the
-// right shape for the engine to expose and the wrong shape for a scrollback: a
-// frontend opening a two-year-old thread does not want two years of it. Paging is
-// therefore done HERE, over the array the SDK already returned, which is why this
-// needed no SDK change and no MUFL.
+// The daemon pages external history newest-first by stable sequence. The browser
+// renders oldest-first, so `projectHistoryPage` reverses one bounded page while
+// preserving the daemon's exclusive next cursor and whole-dialog summary.
 //
-// `getReceipts` is overlaid on top even though `ConversationMessage.receipt`
-// already carries one. The two come from different reads, and the receipts map is
-// the authoritative one; overlaying it costs a merge and removes a class of
-// "the tick did not update until I reloaded" bug. The overlay is MONOTONIC in the
-// same direction the engine guarantees — null < delivered < read — so a stale map
-// can never walk a tick backwards.
+// `projectPage` remains as a pure compatibility/test seam for already-projected
+// arrays. Its receipt overlay is monotonic — null < delivered < read — so a stale
+// receipt map can never walk a tick backwards.
 //
 // THIS PATH IS NON-CONSUMING AND SENDS NOTHING. Reading a page does not mark
-// anything read and does not emit a receipt. `markRead` is a separate, explicit
-// call the frontend makes when a HUMAN actually sees the messages. That
-// separation is the whole reason this surface exists — see README, "Two ticks".
+// anything read and does not emit a receipt. The explicit read route selects the
+// visible peer's unread wire IDs and consumes only that subset through the SDK.
 
-import type { ConversationMessage, ReceiptsResult } from '@ours.network/sdk';
+import type { HistoryMessage, HistoryPage } from '@ours.network/sdk';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactMessagePreview } from '../shared/roomMessageCore.mjs';
 
 export const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 500;
+
+export type Receipt = 'delivered' | 'read' | null;
+
+export interface ConversationMessage {
+  readonly dir: 'in' | 'out';
+  readonly text: string;
+  readonly date: string;
+  readonly read: boolean;
+  readonly wire_id: string;
+  readonly receipt: Receipt;
+  readonly reply_to?: { readonly wire_id: string; readonly sentence?: number } | null;
+}
+
+export interface ReceiptsResult {
+  readonly contact: string;
+  readonly receipts: Readonly<Record<string, Exclude<Receipt, null>>>;
+}
 
 export interface ConversationPage {
   readonly contact: string;
@@ -31,7 +42,7 @@ export interface ConversationPage {
   readonly messages: readonly ConversationMessage[];
   /** Total entries in the conversation, not in this page. */
   readonly total: number;
-  /** Inbound entries a human has not seen. What `markRead` would transition. */
+  /** Inbound entries a human has not seen. What the explicit read route transitions. */
   readonly unread: number;
   /** True when older entries exist before this page. */
   readonly hasMore: boolean;
@@ -133,4 +144,33 @@ export function projectPage(
 function previewOf(announcedContact: string, newest: ConversationMessage | undefined): string {
   if (!newest) return '';
   return contactMessagePreview(announcedContact, newest.text) as string;
+}
+
+/** Project one newest-first daemon history page into the browser's oldest-first shape. */
+export function projectHistoryPage(
+  contact: string,
+  history: HistoryPage<HistoryMessage>,
+  summary: { readonly total: number; readonly unread: number },
+  opts: { readonly announcedContact?: string } = {},
+): ConversationPage {
+  const messages: ConversationMessage[] = history.items.map((row) => ({
+    dir: row.direction,
+    text: row.text,
+    date: row.date,
+    read: row.direction === 'out' || row.inbox_state === 'read',
+    wire_id: row.wire_id,
+    receipt: row.direction === 'out' && (row.delivery_state === 'delivered' || row.delivery_state === 'read')
+      ? row.delivery_state
+      : null,
+    reply_to: row.reply_to,
+  })).reverse();
+  return {
+    contact,
+    messages,
+    total: summary.total,
+    unread: summary.unread,
+    hasMore: history.next_cursor !== null,
+    nextBefore: history.next_cursor === null ? null : String(history.next_cursor),
+    preview: previewOf(opts.announcedContact ?? contact, messages.at(-1)),
+  };
 }

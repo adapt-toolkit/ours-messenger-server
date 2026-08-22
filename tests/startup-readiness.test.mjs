@@ -1,22 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const fixture = fileURLToPath(new URL('./fixtures/startup-readiness-child.mjs', import.meta.url));
 const scratch = mkdtempSync(join(tmpdir(), 'messenger-startup-readiness-'));
-const identityDir = join(scratch, 'runtime', 'Human');
-mkdirSync(identityDir, { recursive: true });
-writeFileSync(join(identityDir, 'identity.key'), 'fixture-key');
-writeFileSync(join(identityDir, 'state_data.bin'), 'fixture-state');
-
-const digest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
-const identityBefore = digest(join(identityDir, 'identity.key'));
-const stateBefore = digest(join(identityDir, 'state_data.bin'));
+const unrelatedState = join(scratch, 'operator-owned-sentinel');
+writeFileSync(unrelatedState, 'must not change');
 
 const freePort = () => new Promise((resolve, reject) => {
   const server = createServer();
@@ -116,7 +109,7 @@ try {
     const closed = await waitFor('ordered shutdown', async () =>
       run.messages.find((message) => message.type === 'closed'));
     assert.equal(closed.leaseReleased, true);
-    assert.equal(closed.runtimeClosed, true);
+    assert.equal(closed.runtimeClosed, true, 'messenger closes its runtime handle after releasing the lease');
     await waitExit(run.child);
     assert.equal(await request(port, '/api/build-info'), undefined, 'shutdown closes the public listener');
   } finally {
@@ -138,8 +131,8 @@ try {
     await stop(rejected.child);
   }
 
-  assert.equal(digest(join(identityDir, 'identity.key')), identityBefore, 'startup never rewrites the persisted identity key');
-  assert.equal(digest(join(identityDir, 'state_data.bin')), stateBefore, 'startup never corrupts persisted identity state');
+  assert.equal(readFileSync(unrelatedState, 'utf8'), 'must not change',
+    'startup never mutates unrelated operator-owned state');
   console.log('startup-readiness OK — bounded listener, safe 503 gate, atomic readiness, rollback and shutdown');
 } finally {
   rmSync(scratch, { recursive: true, force: true });

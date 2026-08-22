@@ -1,223 +1,149 @@
 # Messenger architecture
 
-Status: implemented on `@ours.network/sdk@1.3.1`
-
 ## System boundary
 
-One messenger process owns three surfaces:
+One messenger process owns the browser application and its same-origin HTTP
+surface. Identity and protocol state belong to one independently managed ours
+daemon:
 
 ```text
 browser ──same-origin REST/SSE──► messenger server
                                       │
-                                      │ token-authenticated loopback only
+                                      │ public SDK client + identity lease
                                       ▼
-                              embedded ours SDK daemon
+                                 shared ours daemon
                                       │
                                       ▼
                             encrypted ours peer transport
 ```
 
-The embedded daemon binds `127.0.0.1` on an OS-selected port with owner-only API
-visibility. Its token never leaves the server process. Messenger injects no MCP
-integration, and `/mcp` is a plain 404 on both HTTP surfaces. Ambient ours state,
-config, broker, port, and token selection are replaced before the SDK's first
-dynamic import.
+Messenger calls the public `attachOursClient` SDK boundary. Standard
+`OURS_CONFIG`, `OURS_STATE_DIR`, `OURS_PORT`, endpoint, and API-token selection
+resolve one coherent daemon; the SDK verifies the daemon's reported state root
+before credentials are sent. Messenger then leases exactly
+`OURS_MESSENGER_IDENTITY`. It never starts or stops a daemon, imports the daemon
+runtime, provisions an identity, or guesses an identity.
 
 The public REST surface is intentionally unauthenticated. Loopback is the secure
 default; non-loopback use requires an authenticated reverse proxy and an exact
-configured public origin. Every mutation also requires JSON content type, exact
-`Origin`, and the messenger CSRF header. There is no permissive CORS/preflight
-path.
+configured public origin. Every mutation requires JSON content type, exact
+`Origin`, and the messenger CSRF header. There is no permissive CORS path.
 
 ## Ownership and lifecycle
 
-Messenger holds an advisory file lock on its runtime state for the process
-lifetime. After a read-only persisted-state preflight, a lightweight worker
-owns the public port so build provenance and negative readiness remain
-observable even while CPU-bound packet restore occupies the main event loop. Its
-startup gate returns 503 for health and every other API route; it has no SDK
-client and cannot touch identity state. After restore, identity bind, stores,
-and watcher are all ready, the full server takes over the same port. Startup is
-transactional: a runtime, bind, push-store, watcher, or listener failure closes
-every completed stage. Ordered shutdown closes the public server, watcher/SSE
-fan-out, identity lease, and embedded daemon. The SDK is started with
-`handleSignals: false`, so the host exclusively owns signal handling and
-process exit.
+The shared daemon owns identity keys, peer protocol state, durable message and
+file history, file blobs, read state, and delivery receipts. Messenger owns its
+public listener and application state under `OURS_MESSENGER_STATE_DIR`: WebPush
+keys, subscriptions, and the durable delivery queue.
 
-`serve` never creates identities. Offline `init` creates and verifies exactly one
-Human/root identity and records its stable CID in `initialization.json`. Offline
-`migrate` accepts only a stopped, complete source and an empty destination. It
-creates a private backup, stages a byte-for-byte copy, compares deterministic
-path/size/SHA-256 manifests, and atomically installs the result.
+A lightweight worker owns the public port while daemon attachment and identity
+binding complete. During that gate only build provenance is available; health
+and other API requests return 503. After the lease, application stores, watcher,
+and delivery queue are ready, the full server takes over the same port.
 
-Messenger-root migration includes all three durable trees:
+Startup is transactional. Failure closes the startup listener or public server,
+watcher, delivery queue, SSE fan-out, and acquired SDK lease. Ordered shutdown
+does the same and is idempotent. It does not stop the shared daemon, alter daemon
+configuration, or delete daemon state.
 
-- `runtime/`: identity keys, actor state, conversation history, receipts;
-- `push.json`: VAPID material and subscriptions;
-- `media/`: immutable blobs, provenance, hashes, replies, and file versions.
+## Canonical history and receipts
 
-## Canonical message and receipt state
+The daemon's external history database is canonical for text, files, ordering,
+read state, and receipts. The messenger never treats packet-local MUFL history or
+a private sidecar as application history.
 
-MUFL conversation history remains canonical for text, ordering, read flags, and
-receipts. The browser never constructs optimistic message rows; after a send it
-refetches the authoritative conversation projection.
+The stable keys are peer CID, monotonically increasing history sequence, and
+cross-peer `wire_id`. Names are display-only; local inbox `msg_id` values are not
+cross-peer identifiers. Conversation pages call `listHistory` plus
+`getHistorySummary`, projecting the daemon's newest-first pages into the
+browser's oldest-first presentation. The daemon sequence is the pagination
+cursor.
 
-The stable keys are contact CID and cross-peer `wire_id`. Names are display-only,
-and local inbox `msg_id` values are not cross-peer identifiers. Receipt display
-is monotonic:
+Conversation GETs are non-consuming. The explicit read route first lists unread
+message metadata, filters by the selected peer CID, and calls selective
+`getMessages({ wire_ids })` in bounded batches. It therefore never consumes a
+message from another dialog. Receipt display is monotonic:
 
 ```text
 sent → delivered → read
 ```
 
-Conversation GETs are non-consuming. `markRead(contactCid)` is called only while
-that exact dialog is visibly open: the tab is visible, the chats route and CID
-match, the mobile detail pane is open when applicable, and no covering dialog is
-present. Concurrent attempts are coalesced per CID. Repeated calls are harmless
-because only unread-to-read transitions emit receipt wire IDs.
+The browser calls the read route only while that exact dialog is visibly open:
+the tab is visible, route and CID match, the mobile detail pane is open when
+applicable, and no covering dialog is present.
 
 ## Events and convergence
 
-The SDK watcher is single-owner and non-consuming. It normalizes authenticated
-message, receipt, and file notifications into metadata-only events. One bounded
-in-process bus feeds SSE and the push decision.
-
+One non-consuming daemon notification watch feeds a bounded in-process bus.
 SSE is an invalidation channel, never a second message log:
 
 - each client begins with `sync_required(connected)`;
 - reconnect emits `sync_required(daemon_reconnected)`;
-- queue overflow collapses to `sync_required(overflow)`;
-- message/file/receipt events contain CIDs, wire IDs, kinds, and dates only;
-- there is no replay cursor; REST snapshots always rebuild truth.
+- queue overflow collapses missed details to `sync_required(overflow)`;
+- message, file, and receipt events contain correlation metadata only;
+- REST snapshots always rebuild canonical state.
 
-SDK notification emission can precede the following durable save. Both the
-browser and push watcher therefore use bounded convergence retries before giving
-up until the next sync or user action. They never patch canonical state from an
-event payload.
+Daemon notification emission can precede the following history read becoming
+visible. Push projection therefore performs bounded convergence retries through
+`getHistoryItem` or `getFileInfo`; it never copies message bodies from event
+payloads.
 
-## Replies and media
+## Replies and files
 
-The SDK conversation projection does not expose outbound reply correlation.
-Messenger therefore keeps a narrow sidecar keyed by the returned outbound wire
-ID. Inbound reply metadata is joined from the SDK's non-consuming inbox view.
-The sidecar supplements projection only; MUFL still owns message bodies and
-receipt state.
+Reply correlation is stored in daemon history and projected from canonical
+`reply_to` metadata. Browser file input is bounded to 20 MiB and must be inline
+base64 with a safe filename and MIME; a browser cannot ask the server to read an
+arbitrary filesystem path.
 
-File transport uses the SDK's existing encrypted file operation. Browser input
-is limited to 20 MiB and must be inline bytes plus a safe filename/MIME; a browser
-cannot ask the server to read a filesystem path. Each available file is stored
-once under its wire ID with SHA-256 integrity metadata and owner-only permissions.
-The per-contact inventory records direction, authenticated peer, observed date
-and its source, logical filename, MIME, byte size, availability, reply target,
-and sequential version number. A conflicting overwrite of one wire ID fails
-closed.
+The daemon stores encrypted-transfer results and immutable bytes by wire ID.
+Messenger lists file history through `listFiles`, retrieves metadata through
+`getFileInfo`, consumes only explicitly selected unread files through
+`getFiles({ wire_ids })`, and streams bytes through `fetchFile`. Active content
+is forced to download with `nosniff`, a deny-by-default CSP, and no-store cache
+headers.
 
-Incoming file notifications expose metadata but do not download bytes. A user
-must explicitly fetch selected wire IDs. The server then asks the SDK for those
-files, persists exact bytes, and makes them available through a private
-`no-store`, `nosniff` media route.
-
-Voice messages use the SDK's exact media discriminator:
-`x-ours-kind=voice-message`. Browser recording chooses the first supported format
-in deterministic order:
-
-1. OGG/Opus;
-2. WebM/Opus;
-3. MP4/AAC as the Safari fallback.
-
-The advertised filename also retains the SDK's `voice-message-` fallback prefix.
-If none of those MediaRecorder contracts is available, recording fails closed
-with a user-facing error. Voice bubbles use the canonical compact player and
-surface the server's transcription status, text, or categorized failure when it
-is present in the media projection.
+Voice messages use the exact `x-ours-kind=voice-message` MIME discriminator.
+Browser recording chooses OGG/Opus, WebM/Opus, then MP4/AAC. Transcription status
+and text are projections of daemon file history.
 
 ## Safe rendering
 
-Message Markdown is parsed into React nodes without `dangerouslySetInnerHTML`.
-Only HTTP(S) links are clickable. File previews are rendered from explicitly
-fetched Blob object URLs and revoke those URLs on teardown.
-
-- images use an image element;
-- voice messages use the canonical compact player backed by an audio element;
-- Markdown uses the same safe node renderer;
-- HTML uses a sandboxed iframe with no sandbox capabilities and an injected
-  deny-by-default CSP (`default-src 'none'; script-src 'none'`).
-
-Download remains available for every fetched media record. Original content is
-never injected into the main application DOM.
+Message Markdown becomes React nodes without `dangerouslySetInnerHTML`; only
+HTTP(S) links are clickable. File previews use explicit Blob URLs and revoke
+them on teardown. HTML previews run in a sandboxed iframe with no capabilities
+and a deny-by-default content-security policy.
 
 ## Web Push privacy boundary
 
-Push is an explicit browser opt-in. Full preview (the default) contains the
-canonical sender and message text or file/photo/voice label; private preview
-contains generic content. Both include only a validated same-origin dialog path.
-Standard Web Push content encryption protects the payload to the subscribed
-browser, and VAPID authenticates this server to the push service.
+Push is browser opt-in. A full preview contains canonical sender and message
+text or a file label; private preview contains generic content. Standard WebPush
+content encryption protects the payload to the subscribed browser, and VAPID
+authenticates this server to the push service. This is separate from the ours
+peer-to-peer channel: the push provider still observes routing metadata, and the
+device can reveal decrypted text on its lock screen.
 
-This is not the ours end-to-end peer channel. The push provider observes routing
-and delivery metadata, while the browser/device can reveal decrypted text on its
-lock screen. Settings states this before subscription. Push failure never stops
-the upstream watcher, and generating a notification never consumes or marks a
-message read.
+`push.json` is versioned, atomic, owner-only, and scoped to the startup-bound
+identity CID. Public routes expose only the VAPID public key, fingerprint,
+configuration epoch, and opaque binding acknowledgements. Subscription
+mutations have strict origin/CSRF checks, validation, size and rate limits.
 
-`push.json` is a versioned, atomic, owner-only (`0600`) messenger store. VAPID
-keys and browser bindings are scoped by the startup-bound identity CID. Public
-routes expose only the VAPID public key, fingerprint/config epoch, and opaque
-binding acknowledgements; endpoints and subscription keys never round-trip in
-responses or logs. Subscription mutations require the normal exact Origin and
-CSRF intent checks, plus a 16 KiB body cap, strict HTTPS/base64url/key-size
-validation, per-identity binding limits, and per-client rate limiting. VAPID
-rotation advances the configuration epoch so stale devices enter Repair rather
-than appearing active.
-
-The watcher creates a durable deduplicated job keyed by identity CID, wire ID,
-and kind, containing correlation metadata but no content. Delivery re-projects
-canonical SDK state on every attempt. Jobs resume after restart, expire after a
-bounded retry window, and use exponential backoff with jitter. A 404/410 prunes
-the dead binding; 429, 5xx, and network failures retry. A job with no current
-binding is not created. Identity separation applies to bindings and jobs.
-
-The service worker performs a bounded live-client query before deciding whether
-to show a notification: a visible non-iOS client suppresses it, while an
-installed iOS client always shows it because background liveness is unreliable.
-Malformed payloads degrade to generic text. Click URLs reject protocol-relative
-and cross-origin targets, then focus/navigate a matching window or open a new
-one. Badge state is cleared when the app becomes visible. Subscription repair is
-requested on worker rotation and `pushsubscriptionchange`.
-
-The application owns subscription validation, Origin/CSRF enforcement, safe
-URLs, identity isolation, and secret redaction. Public-user authentication is a
-separate deployment responsibility; loopback is the default and non-loopback
-exposure requires an authenticated reverse proxy and the exact configured
-origin.
+The delivery queue stores correlation metadata but no content. Each attempt
+re-reads canonical history. Permanent endpoint failures prune a binding;
+transient failures retry with bounded exponential backoff. Foreground browser
+presence can suppress delivery for the matching binding without suppressing
+other devices.
 
 ## PWA cache boundary
 
-The manifest starts at `/chats`, is scoped to `/`, and uses standalone display.
-The service worker caches only navigation shell and static assets. Every
-`/api/*` request—including SSE—bypasses service-worker caching. Consequently the
-app can launch offline and show its connection state, but messages, identities,
-receipts, subscriptions, and media are not copied into browser persistence.
-
-Worker updates are surfaced in Settings and activate only after an explicit user
-action. Push click handling focuses or opens the app at the supplied dialog path.
+The service worker handles installation, update, notification, and offline shell
+behavior. Every `/api/*` request, including SSE, bypasses service-worker caching.
+Messages, identities, receipts, subscriptions, and media are never copied into
+browser persistence.
 
 ## Verification model
 
-The release gate combines:
-
-- typecheck and production build;
-- unit contracts for media integrity, replies, Markdown/HTML safety, voice MIME
-  selection, SSE redaction/backpressure, and PWA cache rules;
-- loopback tests for initialization, migration, advisory ownership, packaging,
-  and runtime teardown;
-- a real two-identity REST/runtime test covering receipts, reply correlation,
-  two logical file versions with exact byte/hash checks, explicit incoming voice
-  fetch, and encrypted full-text Web Push;
-- real Chromium checks for manifest installability, service-worker activation,
-  API cache isolation, and offline shell navigation;
-- production dependency audit and packed-artifact smoke tests.
-
-The known SDK shutdown diagnostic for one bounded `AdaptPacketContext` allocation
-is upstream lifecycle accounting and is tested separately from messenger-owned
-state growth.
+The release gate combines typechecking, production build, offline unit and web
+contracts, shared-daemon loopback tests launched through the published CLI,
+real REST/WebPush/file coverage, Chromium PWA and layout checks, and packed
+artifact inspection. Bundle checks reject daemon, native evaluator, WASM, and
+MUFL runtime assets so messenger cannot silently regress into daemon ownership.

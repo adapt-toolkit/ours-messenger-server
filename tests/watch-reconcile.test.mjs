@@ -28,9 +28,9 @@ import { MessengerEventBus } from '../src/events.ts';
 import { startWatcher } from '../src/watch.ts';
 
 const UNREAD_MESSAGES = [
-  { msg_id: 1, sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'W-MISSED-1', text: 'never leaves', date: 'D1', status: 'unread', reply_to: null },
-  { msg_id: 2, sender_id: 'CID-B', sender_name: 'Bob', wire_id: 'W-MISSED-2', text: 'also private', date: 'D2', status: 'unread', reply_to: null },
-  { msg_id: 3, sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'W-ALREADY-READ', text: 'seen', date: 'D0', status: 'read', reply_to: null },
+  { msg_id: 1, from: { id: 'CID-A', name: 'Alice' }, wire_id: 'W-MISSED-1', text: 'never leaves', date: 'D1', status: 'unread', reply_to: null },
+  { msg_id: 2, from: { id: 'CID-B', name: 'Bob' }, wire_id: 'W-MISSED-2', text: 'also private', date: 'D2', status: 'unread', reply_to: null },
+  { msg_id: 3, from: { id: 'CID-A', name: 'Alice' }, wire_id: 'W-ALREADY-READ', text: 'seen', date: 'D0', status: 'read', reply_to: null },
 ];
 const UNREAD_FILES = [
   { file_id: 1, wire_id: 'F-MISSED-1', from: { id: 'CID-A', name: 'Alice' }, filename: 'a.png', mime: 'image/png', size: 1, size_source: 'received_payload', status: 'unread', date: 'D1', sha256: null, reply_to: null, kind: 'file' },
@@ -43,7 +43,6 @@ function makeHarness({ streams }) {
   const client = {
     listIncomingMessages: async () => UNREAD_MESSAGES,
     listIncomingFiles: async () => UNREAD_FILES,
-    getConversation: async () => ({ messages: [] }),
     version: async () => ({ ok: true }),
   };
   // Stand-in for PushDeliveryQueue with the REAL dedupe rule PushStore.enqueueJob
@@ -133,7 +132,6 @@ const idle = (signal) => (async function* () {
     {
       listIncomingMessages: async () => { throw new Error('daemon busy'); },
       listIncomingFiles: async () => [],
-      getConversation: async () => ({ messages: [] }),
       version: async () => ({ ok: true }),
     },
     'Me',
