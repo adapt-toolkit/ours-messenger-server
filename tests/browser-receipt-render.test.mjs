@@ -24,7 +24,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 
-const HOLD_MS = 4000;
+const HOLD_MS = 8000;
 const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the receipt render gate');
 
@@ -36,6 +36,7 @@ const types = new Map([
 ]);
 
 const streams = new Set();
+let streamRevision = 0;
 let sent = null;
 let holdUntil = 0;
 
@@ -49,7 +50,11 @@ const server = createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     response.write(': open\n\n');
     streams.add(response);
-    response.on('close', () => streams.delete(response));
+    streamRevision += 1;
+    response.on('close', () => {
+      streams.delete(response);
+      streamRevision += 1;
+    });
     return;
   }
   if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
@@ -97,7 +102,24 @@ const page = await context.newPage();
 page.on('pageerror', (error) => { throw error; });
 await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
 await page.locator('.composer textarea').waitFor({ timeout: 20_000 });
-await page.waitForTimeout(600);
+
+// Do not race the event against EventSource startup. A fixed sleep happened to
+// be enough on a developer machine, but a busy CI runner can render the
+// composer before its SSE request reaches this fixture. The receipt event is
+// intentionally live-only during the hold window, so emitting before a stream
+// exists turns this into a startup-timing test instead of a receipt test.
+const streamDeadline = Date.now() + 15_000;
+let stableStream = false;
+while (!stableStream && Date.now() < streamDeadline) {
+  if (streams.size === 0) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    continue;
+  }
+  const observedRevision = streamRevision;
+  await new Promise((resolveWait) => setTimeout(resolveWait, 750));
+  stableStream = streams.size > 0 && streamRevision === observedRevision;
+}
+assert.ok(stableStream, 'the browser settled on a live event stream before the receipt fixture emitted');
 
 const ticks = () => page.$$eval('[data-receipt-status]', (nodes) => nodes.map((n) => n.getAttribute('data-receipt-status')));
 
@@ -110,13 +132,13 @@ holdUntil = Date.now() + HOLD_MS;
 sent.receipt = 'delivered';
 emit('receipt_received', { contact_id: 'PEER', kind: 'delivered', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:01.000Z' });
 
-// A second is far inside the four-second hold, and far outside the 81ms this
-// takes when nothing cancels it. Before the fix this window elapsed with the
-// client having stopped issuing requests entirely.
+// Five seconds is still inside the eight-second hold while allowing a heavily
+// loaded Actions runner enough time to schedule Chromium. Before the fix this
+// window elapsed with the client having stopped issuing requests entirely.
 await page.waitForFunction(
   () => [...document.querySelectorAll('[data-receipt-status]')].some((node) => node.getAttribute('data-receipt-status') === 'delivered'),
   null,
-  { timeout: 1500 },
+  { timeout: 5000 },
 ).catch(() => {});
 assert.ok((await ticks()).includes('delivered'),
   `the delivered tick appears from the event itself, while /page is still reporting no receipt (saw ${JSON.stringify(await ticks())})`);
