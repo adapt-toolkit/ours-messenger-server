@@ -20,10 +20,13 @@ import { counter } from './harness.mjs';
 import { projectPage } from '../src/conversation.ts';
 import { startWatcher } from '../src/watch.ts';
 import { MessengerEventBus } from '../src/events.ts';
+import { isCoworkRoomContact, roomContactLabel } from '../shared/roomMessageCore.mjs';
 
 const t = counter();
 
 const ROOM = 'ours-cowork-room:atelier';
+const ROOM_V051 = 'ours-cowork-01hzyk8m0000000000000000aa';
+const ROOM_LEGACY = 'cowork-room-01hzyk8m0000000000000000aa';
 const PERSON = 'Alice';
 
 const roomBody = (extra) => JSON.stringify({
@@ -66,6 +69,28 @@ for (const page of [chat, briefing, future, futureNoText]) {
     `INV-R3: the author identity is never shown (${page.preview})`);
 }
 t.ok(true, 'INV-R3: no preview exposes author.identity');
+
+// ---- 1b. every supported room-identity generation, one recogniser ----------
+// The server announces the room's contact name; three generations of cowork
+// emit three grammars. All must be recognised, and near-misses must stay
+// ordinary contacts — a false positive would reinterpret a person's messages.
+t.ok(isCoworkRoomContact(ROOM), 'a named room identity (ours-cowork-room:<name>) is a room');
+t.ok(isCoworkRoomContact(ROOM_V051), 'a ULID room identity (ours-cowork-<ulid>) is a room');
+t.ok(isCoworkRoomContact(ROOM_LEGACY), 'a legacy room identity (cowork-room-<ulid>) is a room');
+t.ok(!isCoworkRoomContact('ours-cowork-'), 'the bare ULID prefix alone is not a room');
+t.ok(!isCoworkRoomContact('ours-cowork-not-a-ulid'), 'a ULID-prefixed name with an invalid ULID is not a room');
+t.ok(!isCoworkRoomContact('ours-cowork-01HZYK8M0000000000000000AA'), 'an uppercase ULID is not a room — the grammar is lowercase Crockford');
+t.ok(!isCoworkRoomContact(PERSON), 'an ordinary contact is not a room');
+
+t.eq(roomContactLabel(ROOM), 'atelier', 'a named room labels as its name');
+t.eq(roomContactLabel(ROOM_V051), 'Room 01hzyk8m', 'a ULID room labels as Room <8chars>');
+t.eq(roomContactLabel(ROOM_LEGACY), 'Room 01hzyk8m', 'a legacy room labels as Room <8chars>');
+t.eq(roomContactLabel(PERSON), null, 'an ordinary contact has no room label');
+
+// A message relayed under the v0.5.1 identity renders through the same funnel.
+const v051 = pageFor(ROOM_V051, [msg(roomBody({ kind: 'room_msg', text: 'pushed the branch' }), 1)]);
+t.eq(v051.preview, 'Mallory · pushed the branch', 'a v0.5.1 room message previews as speaker and words');
+t.ok(!v051.preview.includes('{'), 'and carries no JSON');
 
 // ---- 2. what must NOT be claimed -------------------------------------------
 // A person typing JSON into the composer keeps seeing what they typed.
