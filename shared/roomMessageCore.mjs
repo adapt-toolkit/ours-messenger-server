@@ -3,14 +3,13 @@
 // JSON: every relayed body is canonical JSON, so the raw $text of each entry is
 // `{"at":…,"author":{…},"kind":"room_msg",…}`.
 //
-// Contract source: adapt-toolkit/ours-cowork main @ 08a19d3 (merged PR #1) —
-// src/intake.ts `relayPendingUnlocked` builds
+// The cowork relay body is
 //   {version:1, kind, room_id, message_id, author:{identity,display_name,role},
 //    text, at, briefing_role?, briefing_version?, membership?, signature}
-// and `bounceRemovedSender` sends the content-free
+// and a removed sender receives the content-free
 //   {version:1, kind:'room_not_member', room_id, signature}.
-// Room-voice notices are authored by the room's own identity with role 'room'
-// (src/service.ts ROOM_ROLE); a participant's message carries their seat.
+// Room-voice notices are authored by the room's own identity with role 'room';
+// a participant's message carries their seat.
 //
 // THIS MODULE IS SHARED BY THE BROWSER AND THE SERVER, and lives outside web/
 // for that reason. A room payload reaches THREE surfaces — the conversation, the
@@ -22,11 +21,11 @@
 // TWO RULES THIS FILE EXISTS TO KEEP, and they now bind those three surfaces
 // rather than one:
 //
-// 1. INV-R6 (additive JSON): the kind set grows server-side without a client
+// 1. Additive JSON: the kind set grows server-side without a client
 //    release. A kind this build has never seen MUST still render its `text` as
 //    a readable line — never raw JSON, never blank. Everything below funnels
 //    through `renderRoomMessage`, whose default branch is exactly that.
-// 2. INV-R3 (anonymity): in an anonymous room the author envelope carries an
+// 2. Anonymity: in an anonymous room the author envelope carries an
 //    ALIAS and a room-scoped participant id, and the real cid never leaves the
 //    server. `author.identity` is NEVER read for display here — only
 //    `display_name` and `role` — so a body that did leak one could not put it
@@ -146,7 +145,7 @@ export function renderRoomMessage(body) {
       return systemLine(kind, 'Room', 'You are no longer a member of this room.');
 
     default:
-      // INV-R6. A kind from a newer server than this build: show its text. Only
+      // A kind from a newer server than this build: show its text. Only
       // when the body carries none do we fall back to naming the notice — still
       // a sentence, still never JSON, still never blank.
       return text
