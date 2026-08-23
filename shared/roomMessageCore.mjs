@@ -45,8 +45,10 @@ export const KNOWN_ROOM_KINDS = [
 export const ROOM_VOICE_ROLE = 'room';
 
 const ROOM_KIND_PREFIX = 'room_';
-/** Prefix used by the server-announced contact identity. */
+/** Prefix used by the server-announced contact identity (cowork 0.4.x). */
 export const ROOM_IDENTITY_PREFIX = 'ours-cowork-room:';
+/** Prefix emitted by ours-cowork >= 0.5.1 room identities (ULID-based). */
+export const CURRENT_ROOM_IDENTITY_PREFIX = 'ours-cowork-';
 /** Exact prefix emitted by ours-cowork <= 0.3.3 room identities. */
 export const LEGACY_ROOM_IDENTITY_PREFIX = 'cowork-room-';
 
@@ -177,14 +179,18 @@ function legacyRoomId(announced) {
   return LOWER_CROCKFORD_ULID.test(roomId) ? roomId : null;
 }
 
+function currentRoomId(announced) {
+  if (typeof announced !== 'string' || !announced.startsWith(CURRENT_ROOM_IDENTITY_PREFIX)) return null;
+  const suffix = announced.slice(CURRENT_ROOM_IDENTITY_PREFIX.length);
+  return LOWER_CROCKFORD_ULID.test(suffix) ? suffix : null;
+}
+
 /** True only for a current or exact legacy server-announced room identity. */
 export function isCoworkRoomContact(announced) {
   const identity = String(announced ?? '').trim();
-  const current = identity.startsWith(ROOM_IDENTITY_PREFIX)
+  const v04 = identity.startsWith(ROOM_IDENTITY_PREFIX)
     && identity.slice(ROOM_IDENTITY_PREFIX.length).trim().length > 0;
-  // Preserve the current namespace's established whitespace normalization,
-  // but keep the legacy grammar exact: no surrounding whitespace or suffixes.
-  return current || legacyRoomId(announced) !== null;
+  return v04 || currentRoomId(announced) !== null || legacyRoomId(announced) !== null;
 }
 
 /** Safe contact-row/toast preview: ordinary contacts always keep raw content. */
@@ -234,6 +240,8 @@ export function roomContactLabel(announced) {
     const shortName = identity.slice(ROOM_IDENTITY_PREFIX.length).trim();
     return shortName || null;
   }
+  const v05Id = currentRoomId(announced);
+  if (v05Id !== null) return `Room ${v05Id.slice(0, 8)}`;
   const roomId = legacyRoomId(announced);
   return roomId === null ? null : `Room ${roomId.slice(0, 8)}`;
 }
