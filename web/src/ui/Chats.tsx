@@ -179,7 +179,7 @@ export function ChatList(props: {
               <Icon name="plus" size={15} />
               Invite
             </button>
-            <button className="icon-btn" title="Settings" onClick={props.onSettings}>
+            <button className="icon-btn" title="Settings" aria-label="Settings" onClick={props.onSettings}>
               <Icon name="settings" />
             </button>
           </div>
