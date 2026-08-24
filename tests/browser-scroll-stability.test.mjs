@@ -124,6 +124,9 @@ try {
   // --- 1. A message arriving while the reader is scrolled up ---------------
   await page.evaluate(() => {
     const el = document.querySelector('.messages');
+    // Match a real reader taking control from an app-owned smooth follow before
+    // changing position. The component clears its follow latch on user intent.
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     el.scrollTop = Math.round(el.scrollHeight / 2);
     el.dispatchEvent(new Event('scroll', { bubbles: true }));
   });
