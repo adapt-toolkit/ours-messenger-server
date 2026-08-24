@@ -13,7 +13,7 @@ import {
 import { ChatList, Conversation } from './ui/Chats.js';
 import type { ChatMessage } from './ui/chatTypes.js';
 import { clearMediaRecords, configureMediaProvider, filePreviewLabel, registerMediaRecords } from './ui/fileStore.js';
-import { fmtWhen, initials, type ContactVM, type RootMetaVM, shortCid } from './ui/viewmodel.js';
+import { contactName, fmtWhen, initials, type ContactVM, type RootMetaVM, shortCid } from './ui/viewmodel.js';
 // @ts-ignore -- canonical pure-JS helper is typed at this seam.
 import { timeMs as timeMsJs } from './ui/timelineCore.mjs';
 import { Icon } from './ui/icons.js';
@@ -87,11 +87,12 @@ function contactViews(state: AppState, media: Record<string, readonly MediaRecor
     const page = pageFor(state, contact.container_id);
     const items = timeline(page, media[contact.container_id] ?? []);
     const last = items.at(-1);
+    const name = contactName(contact);
     return {
       id: contact.container_id,
-      name: contact.name,
+      name,
       announcedName: contact.name,
-      initials: initials(contact.name),
+      initials: initials(name),
       when: last ? fmtWhen(last.date) : '',
       activityAt: last?.date ?? '',
       // A file row is labelled from its own metadata; everything else takes the
@@ -111,11 +112,14 @@ function contactViews(state: AppState, media: Record<string, readonly MediaRecor
       kind: root ? 'agent' as const : 'person' as const,
     };
   });
-  return [...active, ...state.contacts.pending.map((pending) => ({
-    id: `pending:${pending.container_id}`, name: pending.name, announcedName: pending.name,
-    initials: initials(pending.name), when: '', activityAt: '', last: `${pending.queued} queued · approval required`, unread: 0,
-    status: 'pending' as const, root: null, sub: '', roleId: null, rootName: null, mine: false, kind: 'person' as const,
-  }))];
+  return [...active, ...state.contacts.pending.map((pending) => {
+    const name = contactName(pending);
+    return {
+      id: `pending:${pending.container_id}`, name, announcedName: pending.name,
+      initials: initials(name), when: '', activityAt: '', last: `${pending.queued} queued · approval required`, unread: 0,
+      status: 'pending' as const, root: null, sub: '', roleId: null, rootName: null, mine: false, kind: 'person' as const,
+    };
+  })];
 }
 
 export function App() { return <AppShell />; }
@@ -372,7 +376,9 @@ export function AppShell() {
         if (event.type === 'file_received') {
           await convergeFile(event.contact_id, event.wire_id);
           const contact = stateRef.current.contacts.contacts.find((item) => item.container_id === event.contact_id);
-          if (selectedContactCid(stateRef.current) !== event.contact_id && contact) pushToast(event.contact_id, contact.name, 'New file');
+          if (selectedContactCid(stateRef.current) !== event.contact_id && contact) {
+            pushToast(event.contact_id, contactName(contact), 'New file');
+          }
           return;
         }
         if (event.type === 'message_received') {
@@ -383,7 +389,7 @@ export function AppShell() {
             `message:${event.wire_id}`,
           );
           if (selectedContactCid(stateRef.current) === event.contact_id) await markVisibleRead(event.contact_id);
-          else if (contact) pushToast(event.contact_id, contact.name, 'New message');
+          else if (contact) pushToast(event.contact_id, contactName(contact), 'New message');
           return;
         }
         // APPLY IT NOW, from the payload the event already carries. The poll
@@ -527,7 +533,7 @@ export function AppShell() {
         {worker.offline && <div className="banner warn">Offline — reconnecting to the network…</div>}
         {state.connection !== 'live' && <div className="banner warn">{state.connection === 'retrying' ? 'Live updates interrupted — reconnecting…' : 'Connecting to live updates…'}</div>}
         {worker.updateAvailable && <div className="banner info">A new version is available.<span className="banner-actions"><button className="linkbtn" onClick={() => { if (worker.registration) void activateWorkerUpdate(worker.registration); }}>Restart now</button></span></div>}
-        {state.contacts.pending.map((pending) => <div className="banner info" key={pending.container_id}>Introduction from {pending.name} · {pending.queued} queued<span className="banner-actions"><button className="linkbtn" onClick={() => void api.respondToIntroduction(pending.container_id, 'approve').then(refreshSnapshot).catch(showError)}>Approve</button><button className="linkbtn quiet" onClick={() => void api.respondToIntroduction(pending.container_id, 'reject').then(refreshSnapshot).catch(showError)}>Reject</button></span></div>)}
+        {state.contacts.pending.map((pending) => <div className="banner info" key={pending.container_id}>Introduction from {contactName(pending)} · {pending.queued} queued<span className="banner-actions"><button className="linkbtn" onClick={() => void api.respondToIntroduction(pending.container_id, 'approve').then(refreshSnapshot).catch(showError)}>Approve</button><button className="linkbtn quiet" onClick={() => void api.respondToIntroduction(pending.container_id, 'reject').then(refreshSnapshot).catch(showError)}>Reject</button></span></div>)}
         <MessageToasts items={toasts} onDismiss={dismissToast} onOpen={(cid) => void selectContact(cid)} />
       </div>
       {menuOpen && <><div className="pop-backdrop" onClick={() => setMenuOpen(false)} /><div className="menu command-menu"><div className="menu-head"><div className="avatar accent lg">{initials(identity.name)}</div><div><strong>{identity.name}</strong><div className="faint mono">@{shortCid(identity.cid)}</div></div></div><button className="menu-item" onClick={() => { setMenuOpen(false); openInvites(); }}><Icon name="plus" />Invite a contact</button><button className="menu-item" onClick={() => { setMenuOpen(false); setModal('settings'); }}><Icon name="settings" />Settings</button></div></>}

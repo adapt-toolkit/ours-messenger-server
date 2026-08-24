@@ -56,6 +56,12 @@ export const LEGACY_ROOM_IDENTITY_PREFIX = 'cowork-room-';
 // contract; accepting case folds or ambiguous i/l/o/u characters would let an
 // ordinary look-alike name cross the room-contact trust boundary.
 const LOWER_CROCKFORD_ULID = /^[0-7][0-9a-hjkmnp-tv-z]{25}$/;
+// Cowork's configured friendly mode freezes a bounded ASCII reconstruction of
+// the creation-time room_name into the identity. The original Unicode spelling
+// and later mutable room_name are not protocol metadata, so Messenger can only
+// render this authenticated slug rather than claim to recover either one.
+const FRIENDLY_ROOM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_FRIENDLY_ROOM_SLUG_LENGTH = 25;
 
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isNonEmptyString = (value) => typeof value === 'string' && value.length > 0;
@@ -178,10 +184,19 @@ function legacyRoomId(announced) {
   return LOWER_CROCKFORD_ULID.test(roomId) ? roomId : null;
 }
 
-function currentRoomId(announced) {
+function currentRoomMetadata(announced) {
   if (typeof announced !== 'string' || !announced.startsWith(CURRENT_ROOM_IDENTITY_PREFIX)) return null;
   const suffix = announced.slice(CURRENT_ROOM_IDENTITY_PREFIX.length);
-  return LOWER_CROCKFORD_ULID.test(suffix) ? suffix : null;
+  if (LOWER_CROCKFORD_ULID.test(suffix)) return { roomId: suffix, slug: null };
+
+  // Parse from the full ULID suffix. A slug can contain hyphens, and splitting
+  // from the left would either truncate it or make the stable form ambiguous.
+  const roomId = suffix.slice(-26);
+  const separator = suffix.at(-27);
+  const slug = suffix.slice(0, -27);
+  if (separator !== '-' || !LOWER_CROCKFORD_ULID.test(roomId)) return null;
+  if (slug.length < 1 || slug.length > MAX_FRIENDLY_ROOM_SLUG_LENGTH) return null;
+  return FRIENDLY_ROOM_SLUG.test(slug) ? { roomId, slug } : null;
 }
 
 /** True only for a current or exact legacy server-announced room identity. */
@@ -189,7 +204,9 @@ export function isCoworkRoomContact(announced) {
   const identity = String(announced ?? '').trim();
   const v04 = identity.startsWith(ROOM_IDENTITY_PREFIX)
     && identity.slice(ROOM_IDENTITY_PREFIX.length).trim().length > 0;
-  return v04 || currentRoomId(announced) !== null || legacyRoomId(announced) !== null;
+  // v0.4 historically tolerated outer whitespace. Current and legacy ULID
+  // grammars are exact protocol identities and must parse the raw announcement.
+  return v04 || currentRoomMetadata(announced) !== null || legacyRoomId(announced) !== null;
 }
 
 /** Safe contact-row/toast preview: ordinary contacts always keep raw content. */
@@ -239,8 +256,17 @@ export function roomContactLabel(announced) {
     const shortName = identity.slice(ROOM_IDENTITY_PREFIX.length).trim();
     return shortName || null;
   }
-  const v05Id = currentRoomId(announced);
-  if (v05Id !== null) return `Room ${v05Id.slice(0, 8)}`;
+  const current = currentRoomMetadata(announced);
+  if (current?.slug) {
+    const readable = current.slug.replace(/-/g, ' ');
+    return readable.replace(/[a-z]/, (letter) => letter.toUpperCase());
+  }
+  if (current) return `Room ${current.roomId.slice(0, 8)}`;
   const roomId = legacyRoomId(announced);
   return roomId === null ? null : `Room ${roomId.slice(0, 8)}`;
+}
+
+/** Render a room label when authenticated naming metadata exists; otherwise preserve the contact name. */
+export function contactDisplayName(announced) {
+  return roomContactLabel(announced) ?? String(announced ?? '');
 }

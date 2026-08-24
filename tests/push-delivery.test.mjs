@@ -140,6 +140,12 @@ try {
 
   const policyDir = mkdtempSync(join(tmpdir(), 'messenger-push-delivery-policy-'));
   try {
+    const roomIdentity = 'ours-cowork-release-2-room-01hzyk8m0000000000000000aa';
+    const roomBody = JSON.stringify({
+      version: 1, kind: 'room_msg', room_id: '01hzyk8m0000000000000000aa', message_id: 'ROOM-MESSAGE',
+      author: { identity: 'CID-AUTHOR-MUST-NOT-RENDER', display_name: 'Builder', role: 'builder' },
+      text: 'Room deploy is green', signature: 'SIG',
+    });
     const delivered = [];
     const policyStore = PushStore.open(policyDir, 'CID-ME', env, {
       sendNotification: async (target, payload) => {
@@ -159,8 +165,11 @@ try {
       store: policyStore,
       client: {
         async getHistoryItem({ wire_id }) {
-          return wire_id === 'MESSAGE-1'
-            ? { direction: 'in', wire_id, text: 'full message text', peer: { id: 'CID-A', name: 'Alice' } }
+          if (wire_id === 'MESSAGE-1') {
+            return { direction: 'in', wire_id, text: 'full message text', peer: { id: 'CID-A', name: 'Alice' } };
+          }
+          return wire_id === 'MESSAGE-ROOM'
+            ? { direction: 'in', wire_id, text: roomBody, peer: { id: 'CID-A', name: roomIdentity } }
             : null;
         },
         async getFileInfo({ wire_id }) {
@@ -171,15 +180,21 @@ try {
       identityCid: 'CID-ME', log: { info() {}, warn() {} }, now: () => now, random: () => 0, autoStart: false,
     });
     policyQueue.enqueue({ event: 'message_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'MESSAGE-1' });
+    policyQueue.enqueue({ event: 'message_received', sender_id: 'CID-A', sender_name: roomIdentity, wire_id: 'MESSAGE-ROOM' });
     policyQueue.enqueue({ event: 'file_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'FILE-1' });
     policyQueue.enqueue({ event: 'file_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'PHOTO-1' });
     policyQueue.enqueue({ event: 'file_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'VOICE-1' });
     await policyQueue.drainDue();
     const full = delivered.filter((row) => row.endpoint.endsWith('/full')).map((row) => row.event);
-    assert.deepEqual(full.map((event) => event.kind).sort(), ['file', 'message', 'photo', 'voice'],
+    assert.deepEqual(full.map((event) => event.kind).sort(), ['file', 'message', 'message', 'photo', 'voice'],
       'message/file/photo/voice projection policies remain distinct');
     assert.ok(full.some((event) => event.body === 'full message text'));
     assert.ok(full.some((event) => event.body === 'Photo: photo.png'));
+    const roomPush = full.find((event) => event.wire_id === 'MESSAGE-ROOM');
+    assert.equal(roomPush.title, 'Release 2 room', 'durable push renders the configured friendly room label');
+    assert.equal(roomPush.body, 'Builder · Room deploy is green', 'durable push renders the shared room preview, never raw JSON');
+    assert.ok(!JSON.stringify(roomPush).includes(roomIdentity), 'durable push leaks no generated room identity label');
+    assert.ok(!JSON.stringify(roomPush).includes('CID-AUTHOR-MUST-NOT-RENDER'), 'durable push preserves room anonymity');
     assert.ok(full.every((event) => event.contact_id === 'CID-A' && event.wire_id),
       'every payload preserves authenticated CID and wire correlation');
     assert.ok(full.every((event) => event.url === `/chats/CID-A#chat-message-${encodeURIComponent(event.wire_id)}`),

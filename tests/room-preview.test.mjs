@@ -20,12 +20,15 @@ import { counter } from './harness.mjs';
 import { projectPage } from '../src/conversation.ts';
 import { startWatcher } from '../src/watch.ts';
 import { MessengerEventBus } from '../src/events.ts';
-import { isCoworkRoomContact, roomContactLabel } from '../shared/roomMessageCore.mjs';
+import { contactDisplayName, isCoworkRoomContact, roomContactLabel } from '../shared/roomMessageCore.mjs';
+import { presentContacts } from '../src/api.ts';
+import { contactName, displayName } from '../web/src/ui/viewmodel.ts';
 
 const t = counter();
 
 const ROOM = 'ours-cowork-room:atelier';
 const ROOM_V051 = 'ours-cowork-01hzyk8m0000000000000000aa';
+const ROOM_FRIENDLY = 'ours-cowork-release-2-room-01hzyk8m0000000000000000aa';
 const ROOM_LEGACY = 'cowork-room-01hzyk8m0000000000000000aa';
 const PERSON = 'Alice';
 
@@ -76,6 +79,7 @@ t.ok(true, 'INV-R3: no preview exposes author.identity');
 // ordinary contacts — a false positive would reinterpret a person's messages.
 t.ok(isCoworkRoomContact(ROOM), 'a named room identity (ours-cowork-room:<name>) is a room');
 t.ok(isCoworkRoomContact(ROOM_V051), 'a ULID room identity (ours-cowork-<ulid>) is a room');
+t.ok(isCoworkRoomContact(ROOM_FRIENDLY), 'a configured friendly room identity is a room');
 t.ok(isCoworkRoomContact(ROOM_LEGACY), 'a legacy room identity (cowork-room-<ulid>) is a room');
 t.ok(!isCoworkRoomContact('ours-cowork-'), 'the bare ULID prefix alone is not a room');
 t.ok(!isCoworkRoomContact('ours-cowork-not-a-ulid'), 'a ULID-prefixed name with an invalid ULID is not a room');
@@ -84,8 +88,56 @@ t.ok(!isCoworkRoomContact(PERSON), 'an ordinary contact is not a room');
 
 t.eq(roomContactLabel(ROOM), 'atelier', 'a named room labels as its name');
 t.eq(roomContactLabel(ROOM_V051), 'Room 01hzyk8m', 'a ULID room labels as Room <8chars>');
+t.eq(roomContactLabel(ROOM_FRIENDLY), 'Release 2 room', 'a friendly identity reconstructs its authenticated slug readably');
 t.eq(roomContactLabel(ROOM_LEGACY), 'Room 01hzyk8m', 'a legacy room labels as Room <8chars>');
 t.eq(roomContactLabel(PERSON), null, 'an ordinary contact has no room label');
+
+const ROOM_ID = '01hzyk8m0000000000000000aa';
+for (const [slug, label] of [
+  ['a', 'A'],
+  ['a'.repeat(25), 'A' + 'a'.repeat(24)],
+  ['2fa-release-7', '2Fa release 7'],
+]) {
+  const identity = `ours-cowork-${slug}-${ROOM_ID}`;
+  t.ok(isCoworkRoomContact(identity), `friendly slug boundary is accepted: ${slug}`);
+  t.eq(roomContactLabel(identity), label, `friendly slug boundary labels readably: ${slug}`);
+}
+
+for (const identity of [
+  `ours-cowork--${ROOM_ID}`,
+  `ours-cowork-${'a'.repeat(26)}-${ROOM_ID}`,
+  `ours-cowork-Release-${ROOM_ID}`,
+  `ours-cowork-release_room-${ROOM_ID}`,
+  `ours-cowork-release--room-${ROOM_ID}`,
+  `ours-cowork--release-${ROOM_ID}`,
+  `ours-cowork-release--${ROOM_ID}`,
+  `ours-cowork-release-${ROOM_ID.toUpperCase()}`,
+  `ours-cowork-release-${ROOM_ID.slice(1)}`,
+  `ours-cowork-release-${ROOM_ID}-junk`,
+  `junk-${ROOM_FRIENDLY}`,
+]) t.ok(!isCoworkRoomContact(identity), `friendly grammar rejects near-miss: ${identity}`);
+
+for (const identity of [ROOM_FRIENDLY, ROOM_V051, ROOM_LEGACY]) {
+  for (const wrapped of [` ${identity}`, `${identity} `]) {
+    t.ok(!isCoworkRoomContact(wrapped), `ULID identity grammar rejects outer whitespace: ${wrapped}`);
+    t.eq(roomContactLabel(wrapped), null, `outer-whitespace near-miss has no room label: ${wrapped}`);
+  }
+}
+
+t.eq(contactDisplayName(ROOM_FRIENDLY), 'Release 2 room', 'the shared presentation helper uses the strict parser');
+t.eq(displayName(ROOM_FRIENDLY), 'Release 2 room', 'the browser view model uses the same room label');
+t.eq(displayName(ROOM_FRIENDLY, 'Local alias'), 'Local alias', 'an explicit local alias remains authoritative for presentation');
+
+const contacts = presentContacts({
+  contacts: [{ name: ROOM_FRIENDLY, container_id: 'CID-FRIENDLY' }, { name: PERSON, container_id: 'CID-PERSON' }],
+  pending: [{ name: ROOM_FRIENDLY, container_id: 'CID-PENDING', queued: 1 }],
+  roots: {}, degraded: [], renames: {},
+});
+t.eq(contacts.contacts[0].name, ROOM_FRIENDLY, 'the API preserves the authenticated room identity for trust scoping');
+t.eq(contacts.contacts[0].display_name, 'Release 2 room', 'the API exposes the intended presentation label additively');
+t.eq(contacts.contacts[1].display_name, PERSON, 'the API leaves ordinary contact labels unchanged');
+t.eq(contacts.pending[0].display_name, 'Release 2 room', 'the API presents pending friendly rooms consistently');
+t.eq(contactName(contacts.pending[0]), 'Release 2 room', 'the shared browser helper keeps introduction banners off the raw identity');
 
 // A message relayed under the v0.5.1 identity renders through the same funnel.
 const v051 = pageFor(ROOM_V051, [msg(roomBody({ kind: 'room_msg', text: 'pushed the branch' }), 1)]);
@@ -130,7 +182,7 @@ const watcher = startWatcher(
   events,
   {
     watch: async function* () {
-      yield { event: 'message_received', sender_id: 'CID-ROOM', sender_name: ROOM, wire_id: 'W1', date: 'D1' };
+      yield { event: 'message_received', sender_id: 'CID-ROOM', sender_name: ROOM_FRIENDLY, wire_id: 'W1', date: 'D1' };
       await new Promise((resolve) => setTimeout(resolve, 50));
     },
     wait: async () => {},
@@ -145,6 +197,8 @@ t.eq(pushed[0].body, 'Mallory · the deploy is green',
 t.ok(!pushed[0].body.includes('{'), 'the notification carries no JSON');
 t.ok(!JSON.stringify(pushed[0]).includes('CID-THAT-MUST-NEVER-BE-SHOWN'),
      'INV-R3 holds on the notification too — nothing in the payload names the author identity');
+t.eq(pushed[0].title, 'Release 2 room', 'the immediate push title uses the configured friendly room label');
+t.ok(!JSON.stringify(pushed[0]).includes(ROOM_FRIENDLY), 'the immediate push leaks no generated room identity label');
 
-console.log(`\nroom-preview OK (${t.count} checks) — one recogniser, three surfaces, no raw JSON and no leaked identity`);
+console.log(`\nroom-preview OK (${t.count} checks) — one recogniser across presentation surfaces, no raw JSON and no leaked identity`);
 process.exit(0);
