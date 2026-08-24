@@ -395,6 +395,7 @@ body {
 }
 .messages {
   background: var(--surface);
+  overflow-anchor: none;
 }
 .e2e-note {
   margin: 0 auto 20px;
@@ -610,12 +611,14 @@ body {
   .theme-dark .app.signal-app {
     grid-template: minmax(0, 1fr) 62px / minmax(0, 1fr);
   }
-  .commandbar {
+  .commandbar,
+  .theme-dark .commandbar {
     display: none;
   }
   .signal-stage,
   .theme-dark .signal-stage {
     grid-row: 1;
+    grid-column: 1;
     position: relative;
     display: grid;
     grid-template: minmax(0, 1fr) / minmax(0, 1fr);
@@ -738,6 +741,7 @@ body {
   .mobile-tabbar {
     z-index: 25;
     grid-row: 2;
+    grid-column: 1;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     min-height: 62px;
