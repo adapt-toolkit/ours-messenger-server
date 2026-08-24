@@ -1,6 +1,7 @@
 import { CSSProperties, ComponentType } from 'react';
 import {
   ArrowLeft,
+  Bell,
   Bolt,
   Bot,
   Boxes,
@@ -40,6 +41,7 @@ import {
 const ICONS: Record<string, ComponentType<LucideProps>> = {
   app: Grid2X2,
   back: ArrowLeft,
+  bell: Bell,
   bolt: Bolt,
   chat: MessageSquareText,
   check: Check,

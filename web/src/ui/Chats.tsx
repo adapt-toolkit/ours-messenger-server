@@ -179,7 +179,7 @@ export function ChatList(props: {
               <Icon name="plus" size={15} />
               Invite
             </button>
-            <button className="icon-btn" title="Settings" onClick={props.onSettings}>
+            <button className="icon-btn" title="Settings" aria-label="Settings" onClick={props.onSettings}>
               <Icon name="settings" />
             </button>
           </div>
@@ -448,6 +448,7 @@ export function Conversation(props: {
   const followTargetRef = useRef<number | null>(null);
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
+  const messageHeightRef = useRef(0);
 
   useEffect(() => {
     setDraft('');
@@ -517,7 +518,10 @@ export function Conversation(props: {
   const followBottom = (smooth: boolean) => {
     const scroller = messageScrollRef.current;
     if (!scroller) return;
-    const target = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    // Aim slightly past the mathematical end so subpixel layout and late
+    // rounding clamp to the browser's true maximum instead of settling a few
+    // pixels short of it.
+    const target = Math.max(0, scroller.scrollHeight - scroller.clientHeight + 8);
     if (Math.abs(scroller.scrollTop - target) < 1) {
       followTargetRef.current = null;
       followTopRef.current = null;
@@ -527,7 +531,18 @@ export function Conversation(props: {
     followTargetRef.current = animate ? target : null;
     followTopRef.current = animate ? scroller.scrollTop : null;
     if (animate) scroller.scrollTo({ top: target, behavior: 'smooth' });
-    else scroller.scrollTop = target;
+    else {
+      scroller.scrollTop = target;
+      const settle = () => {
+        const current = messageScrollRef.current;
+        if (current === scroller && pinnedToBottomRef.current) {
+          current.scrollTop = current.scrollHeight - current.clientHeight + 8;
+        }
+      };
+      requestAnimationFrame(settle);
+      window.setTimeout(settle, 50);
+      window.setTimeout(settle, 200);
+    }
   };
 
   // The custom timeline owns its scroll behavior. Every opened/switched thread
@@ -538,13 +553,26 @@ export function Conversation(props: {
       previousContactRef.current = null;
       pinnedToBottomRef.current = true;
       messageCountRef.current = 0;
+      messageHeightRef.current = 0;
       return;
     }
     const scroller = messageScrollRef.current;
     if (!scroller) return;
     const switched = previousContactRef.current !== contact.id;
     const grew = displayMessages.length !== messageCountRef.current;
+    const previousHeight = messageHeightRef.current;
     messageCountRef.current = displayMessages.length;
+    // The DOM already includes the new row by the time this layout effect
+    // runs. Recover the reader's distance from the old bottom using the last
+    // committed scroll height instead of trusting a possibly delayed scroll
+    // event to have updated the cached pin state.
+    if (!switched && grew && previousHeight > 0) {
+      const currentDistance =
+        scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+      pinnedToBottomRef.current =
+        previousHeight - scroller.clientHeight - scroller.scrollTop <= 48
+        || currentDistance <= 160;
+    }
     // When nothing was added the scroller itself is the authority on where the
     // reader is. Scroll events arrive a frame late, and this component
     // re-renders on every refresh, so a stale "pinned" left over from before
@@ -556,6 +584,7 @@ export function Conversation(props: {
       followBottom(grew && !switched && previousContactRef.current !== null);
       pinnedToBottomRef.current = true;
     }
+    messageHeightRef.current = scroller.scrollHeight;
     previousContactRef.current = contact.id;
   }, [contact, displayMessages.length]);
 
@@ -591,10 +620,25 @@ export function Conversation(props: {
     if (!scroller || typeof ResizeObserver === 'undefined') return;
     const content = scroller.firstElementChild;
     if (!content) return;
-    const observer = new ResizeObserver(() => {
+    const observer = new ResizeObserver((entries) => {
       // Content that grows on its own (an image finishing, a bubble reflowing)
-      // is not a new message: follow it instantly, unless an animated follow is
-      // already running, in which case retarget it instead of cutting it off.
+      // is not a new message. Reconcile an already-pinned reader exactly;
+      // repeatedly retargeting a smooth scroll can leave it a few pixels short.
+      if (entries.some((entry) => entry.target === content)) {
+        const previousHeight = messageHeightRef.current;
+        if (previousHeight > 0) {
+          const currentDistance =
+            scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+          pinnedToBottomRef.current =
+            previousHeight - scroller.clientHeight - scroller.scrollTop <= 48
+            || currentDistance <= 160;
+        }
+        messageHeightRef.current = scroller.scrollHeight;
+        if (pinnedToBottomRef.current) {
+          followBottom(false);
+        }
+        return;
+      }
       if (pinnedToBottomRef.current) followBottom(followTargetRef.current !== null);
     });
     observer.observe(content);
