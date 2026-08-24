@@ -13,14 +13,13 @@
 //
 // Passing the cursor across the reconnect is not available to us — `r.cursor`
 // never leaves the SDK generator and the yielded records carry no cursor field.
-// So we reconcile from canonical state, which also covers the wider gap of the
-// messenger process having been DOWN (twice in 24h on a WASM heap ceiling), a
-// window no in-memory cursor could ever have closed.
+// So we reconcile from canonical state, which also covers the wider gap while
+// the messenger process is down, a window no in-memory cursor could close.
 //
 // The second case is the one that matters most on review: the reconcile runs on
-// every reconnect, so without `enqueueJob`'s dedupe it would re-push every
-// unread message 16 times a night to a real phone. That dedupe is load-bearing
-// for correctness, and this test pins it from the caller's side.
+// every reconnect, so without `enqueueJob`'s dedupe it would repeatedly push
+// every unread message. That dedupe is load-bearing for correctness, and this
+// test pins it from the caller's side.
 import assert from 'node:assert/strict';
 import { MessengerEventBus } from '../src/events.ts';
 import { startWatcher } from '../src/watch.ts';

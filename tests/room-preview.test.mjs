@@ -154,7 +154,7 @@ t.ok(!v051.preview.includes('{'), 'and carries no JSON');
 // A person typing JSON into the composer keeps seeing what they typed.
 const typed = '{"version":1,"kind":"room_msg","text":"look what I can type"}';
 t.eq(pageFor(PERSON, [msg(typed, 1)]).preview, typed,
-     'an ORDINARY contact\'s message is never reinterpreted — contact scoping is the trust boundary');
+     'a non-room-shaped contact name remains literal; name scoping does not authenticate room provenance');
 t.eq(pageFor(ROOM, [msg('{"version":1,"kind":"room_msg"', 1)]).preview, '{"version":1,"kind":"room_msg"',
      'and a malformed body in a room is left as the text it is, rather than half-parsed');
 t.eq(pageFor(ROOM, [msg('just a sentence', 1)]).preview, 'just a sentence',

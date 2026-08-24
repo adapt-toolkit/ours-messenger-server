@@ -53,8 +53,8 @@ export const LEGACY_ROOM_IDENTITY_PREFIX = 'cowork-room-';
 
 // A ULID is 26 Crockford base32 characters and its 128-bit range constrains
 // the first character to 0-7. Lowercase is part of the legacy producer
-// contract; accepting case folds or ambiguous i/l/o/u characters would let an
-// ordinary look-alike name cross the room-contact trust boundary.
+// contract; accepting case folds or ambiguous i/l/o/u characters would broaden
+// the room-shaped name grammar to ordinary look-alikes.
 const LOWER_CROCKFORD_ULID = /^[0-7][0-9a-hjkmnp-tv-z]{25}$/;
 // Cowork's configured friendly mode freezes a bounded ASCII reconstruction of
 // the creation-time room_name into the identity. The original Unicode spelling
@@ -170,8 +170,9 @@ export function renderRoomMessage(body) {
 /**
  * Render a room envelope in a contact whose name matches a supported room grammar.
  *
- * Contact scoping is the trust boundary; body shape and the envelope's opaque
- * signature string are not client-side proof by themselves.
+ * Selection is scoped only by the mutable contact name. This helper does not
+ * authenticate room provenance; body shape and the envelope's opaque signature
+ * string are not client-side proof by themselves.
  */
 export function roomLineForContact(announcedContact, text) {
   if (!isCoworkRoomContact(announcedContact)) return null;
