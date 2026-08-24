@@ -32,6 +32,11 @@ assert.ok(built.includes('/read') && built.includes('/api/messages/send'), 'buil
 assert.ok(source.includes("'X-Ours-Messenger-CSRF': '1'"), 'every web mutation carries the fixed CSRF intent header');
 assert.ok(!source.includes("from '../storage/") && !source.includes('indexedDB'), 'server state is authoritative; browser packet/file stores are absent');
 assert.ok(source.includes('Raw HTML is never enabled'), 'message Markdown keeps raw HTML disabled');
+assert.ok(source.includes("new Set(['http:', 'https:', 'mailto:'])"), 'message links use an explicit safe-protocol allowlist');
+assert.ok(source.includes('MAX_MARKDOWN_INPUT_LENGTH = 50_000'), 'message Markdown parsing has a documented input bound');
+assert.ok(source.includes('data-render-mode="plaintext"'), 'oversized messages have a lossless plaintext render mode');
+assert.ok(source.includes('className="room-system-text message-markdown"'), 'Fleet/room system bodies use the shared renderer');
+assert.ok(source.includes('rel="noopener noreferrer"'), 'outbound message links isolate their new tab');
 assert.ok(source.includes('aria-label={`${content} ${presentation.label}`}'), 'receipt marks have accessible labels');
 assert.ok(
   (css.includes('min-width:861px') || css.includes('min-width: 861px')) && css.includes('prefers-reduced-motion'),

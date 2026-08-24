@@ -1026,7 +1026,7 @@ export function Conversation(props: {
                   >
                     <div className="room-system" role="note">
                       {room.label && <span className="room-system-label">{room.label}</span>}
-                      <span className="room-system-text">{room.text}</span>
+                      <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
                       <span className="room-system-at">{fmtTime(m.date)}</span>
                     </div>
                   </motion.div>

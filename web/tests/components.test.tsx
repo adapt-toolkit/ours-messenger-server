@@ -76,7 +76,7 @@ registerMediaRecords([
 const conversation = renderToStaticMarkup(<Conversation
   contact={{ id: 'ALICE-CID', name: 'Alice', announcedName: 'Alice', initials: 'A', when: '', activityAt: '', last: '', unread: 0, status: 'active', root: null, sub: '', roleId: null, rootName: null, mine: false, kind: 'person' }}
   messages={[
-    { dir: 'in', text: 'original', date: '2026-08-15T00:00:00Z', read: true, wireId: 'WIRE-0', replyTo: null },
+    { dir: 'in', text: '**original source**', date: '2026-08-15T00:00:00Z', read: true, wireId: 'WIRE-0', replyTo: null },
     { dir: 'in', text: '', date: '2026-08-15T00:00:30Z', read: true, wireId: 'WIRE-MEDIA-IN', replyTo: { wireId: 'WIRE-0' }, kind: 'file', filename: 'voice-message-now.webm', mime: 'audio/webm;codecs=opus;x-ours-kind=voice-message' },
     { dir: 'out', text: '<img src=x onerror=alert(1)> **safe**', date: '2026-08-15T00:01:00Z', read: true, wireId: 'WIRE-1', replyTo: { wireId: 'WIRE-0' }, receipt: 'read' },
     { dir: 'out', text: '', date: '2026-08-15T00:01:30Z', read: true, wireId: 'WIRE-MEDIA-OUT', replyTo: null, kind: 'file', filename: 'photo.png', mime: 'image/png' },
@@ -98,5 +98,47 @@ assert.ok(conversation.indexOf('chat-message-WIRE-0') < conversation.indexOf('ch
 assert.ok(conversation.indexOf('chat-message-WIRE-MEDIA-IN') < conversation.indexOf('chat-message-WIRE-1'));
 assert.ok(conversation.indexOf('chat-message-WIRE-1') < conversation.indexOf('chat-message-WIRE-MEDIA-OUT'));
 assert.match(conversation, /<strong>safe<\/strong>/, 'safe GFM renders without raw HTML');
+assert.match(conversation, /quote-text[^>]*>\*\*original source\*\*</,
+  'reply snippets preserve the canonical source instead of renderer-normalized markup');
 
-console.log('components OK — canonical timeline renders text/media chronology, replies, receipts, and safe content');
+const roomEnvelope = (kind: string, text: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+  version: 1,
+  kind,
+  room_id: '01hzyk8m0000000000000000aa',
+  message_id: `MESSAGE-${kind}`,
+  signature: 'SIGNED-BY-ROOM',
+  at: '2026-08-15T00:00:00Z',
+  author: {
+    identity: 'CID-NEVER-DISPLAYED',
+    display_name: kind === 'room_msg' ? 'Secretary' : 'Room',
+    role: kind === 'room_msg' ? 'Secretary' : 'room',
+  },
+  text,
+  ...extra,
+});
+
+const roomConversation = renderToStaticMarkup(<Conversation
+  contact={{ id: 'ROOM-CID', name: 'Release room', announcedName: 'ours-cowork-room:release', initials: 'R', when: '', activityAt: '', last: '', unread: 0, status: 'active', root: null, sub: '', roleId: null, rootName: null, mine: false, kind: 'person' }}
+  messages={[
+    { dir: 'in', text: roomEnvelope('room_msg', '## Pair result\n**approved**\n1. evidence'), date: '2026-08-15T00:00:00Z', read: true, wireId: 'ROOM-CHAT', replyTo: null },
+    { dir: 'in', text: roomEnvelope('room_role_briefing', '# Fleet task\n- audit\n- ship', { briefing_role: 'Secretary', briefing_version: 2 }), date: '2026-08-15T00:01:00Z', read: true, wireId: 'ROOM-SYSTEM', replyTo: null },
+  ]}
+  onBack={() => {}} onSend={async () => {}} onRemove={() => {}} onRename={() => {}}
+/>);
+
+assert.match(roomConversation, /room-author-name[^>]*>Secretary<\//,
+  'a signed room_msg attributes the pair result to its room alias');
+assert.match(roomConversation, /<h2>Pair result<\/h2>/,
+  'a signed room_msg tool/result body uses the shared Markdown renderer');
+assert.match(roomConversation, /<strong>approved<\/strong>/);
+assert.match(roomConversation, /class="room-system" role="note"/,
+  'Fleet system output keeps the accessible room-note wrapper');
+assert.match(roomConversation, /room-system-label[^>]*>Role briefing · Secretary · v2<\//,
+  'the authenticated Fleet label remains separate from body Markdown');
+assert.match(roomConversation, /room-system-text message-markdown[^>]*data-render-mode="markdown"/,
+  'only the room system text child enters the shared renderer');
+assert.match(roomConversation, /<h1>Fleet task<\/h1>/);
+assert.match(roomConversation, /room-system-at/, 'the system timestamp remains a separate child');
+assert.doesNotMatch(roomConversation, /CID-NEVER-DISPLAYED/, 'room rendering never exposes author.identity');
+
+console.log('components OK — canonical timeline and ordinary/room/Fleet Markdown paths preserve source and accessibility');
