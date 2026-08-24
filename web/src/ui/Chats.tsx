@@ -531,7 +531,18 @@ export function Conversation(props: {
     followTargetRef.current = animate ? target : null;
     followTopRef.current = animate ? scroller.scrollTop : null;
     if (animate) scroller.scrollTo({ top: target, behavior: 'smooth' });
-    else scroller.scrollTop = target;
+    else {
+      scroller.scrollTop = target;
+      const settle = () => {
+        const current = messageScrollRef.current;
+        if (current === scroller && pinnedToBottomRef.current) {
+          current.scrollTop = current.scrollHeight - current.clientHeight + 8;
+        }
+      };
+      requestAnimationFrame(settle);
+      window.setTimeout(settle, 50);
+      window.setTimeout(settle, 200);
+    }
   };
 
   // The custom timeline owns its scroll behavior. Every opened/switched thread
@@ -556,8 +567,11 @@ export function Conversation(props: {
     // committed scroll height instead of trusting a possibly delayed scroll
     // event to have updated the cached pin state.
     if (!switched && grew && previousHeight > 0) {
+      const currentDistance =
+        scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
       pinnedToBottomRef.current =
-        previousHeight - scroller.clientHeight - scroller.scrollTop <= 48;
+        previousHeight - scroller.clientHeight - scroller.scrollTop <= 48
+        || currentDistance <= 160;
     }
     // When nothing was added the scroller itself is the authority on where the
     // reader is. Scroll events arrive a frame late, and this component
@@ -613,17 +627,15 @@ export function Conversation(props: {
       if (entries.some((entry) => entry.target === content)) {
         const previousHeight = messageHeightRef.current;
         if (previousHeight > 0) {
+          const currentDistance =
+            scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
           pinnedToBottomRef.current =
-            previousHeight - scroller.clientHeight - scroller.scrollTop <= 48;
+            previousHeight - scroller.clientHeight - scroller.scrollTop <= 48
+            || currentDistance <= 160;
         }
         messageHeightRef.current = scroller.scrollHeight;
         if (pinnedToBottomRef.current) {
           followBottom(false);
-          // ResizeObserver fires before some nested layout work has fully
-          // settled. One post-layout correction closes any residual gap.
-          requestAnimationFrame(() => {
-            if (pinnedToBottomRef.current) followBottom(false);
-          });
         }
         return;
       }
