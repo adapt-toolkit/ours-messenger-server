@@ -56,6 +56,13 @@ t.ok(!chat.preview.includes('{'), 'and carries no JSON');
 const briefing = pageFor(ROOM, [msg(roomBody({ kind: 'room_briefing', briefing_version: 2, text: 'Ship on Friday.' }), 1)]);
 t.eq(briefing.preview, 'Room briefing · v2 · Ship on Friday.', 'a system notice is labelled as one, not mistaken for someone talking');
 
+const markdownResult = '# Result\n\n- **passed**\n- `evidence`';
+const resultPage = pageFor(ROOM, [msg(roomBody({ kind: 'room_msg', text: markdownResult }), 1)]);
+t.eq(resultPage.messages[0].text, roomBody({ kind: 'room_msg', text: markdownResult }),
+  'the server preserves the signed room/Fleet envelope and canonical Markdown body exactly');
+t.eq(resultPage.preview, 'Mallory · # Result - **passed** - `evidence`',
+  'the plaintext preview collapses but does not render or discard Markdown syntax');
+
 // INV-R6: a kind this build has never seen.
 const future = pageFor(ROOM, [msg(roomBody({ kind: 'room_something_new', text: 'a kind from a newer server' }), 1)]);
 t.eq(future.preview, 'Mallory · a kind from a newer server',

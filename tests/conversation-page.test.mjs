@@ -40,6 +40,21 @@ t.eq(first.nextBefore, null, 'and offers no cursor');
 t.eq(projectPage('Peer', [], noReceipts, {}).messages.length, 0, 'an empty conversation is an empty page, not an error');
 t.eq(projectPage('Peer', [], noReceipts, {}).nextBefore, null, 'and has no cursor');
 
+// The server contract is plaintext. Markdown is a web projection only: Fleet
+// final answers, direct peer messages, reply snippets, and copy paths all keep
+// the exact authenticated history text, including oversized bodies that the
+// browser intentionally renders through its lossless plaintext fallback.
+const canonicalMarkdown = '# Tool result\n\n- **first**\n- `second`\n';
+const oversizedMarkdown = `# Direct peer message\n${'x'.repeat(60_000)}`;
+const canonicalPage = projectPage('Peer', [
+  msg(0, { text: canonicalMarkdown, wire_id: 'W-MARKDOWN' }),
+  msg(1, { text: oversizedMarkdown, wire_id: 'W-OVERSIZED' }),
+], noReceipts, {});
+t.eq(canonicalPage.messages[0].text, canonicalMarkdown,
+  'the server returns Fleet/tool-result Markdown byte-for-byte rather than rendering or normalizing it');
+t.eq(canonicalPage.messages[1].text, oversizedMarkdown,
+  'the server never truncates an oversized peer message before the lossless browser fallback');
+
 // ---- THE CURSOR THAT MUST NOT SILENTLY RESET --------------------------------
 // A frontend paging past a GC'd message would otherwise get the NEWEST page back
 // and render it as older history: an infinite scrollback of the same messages,
