@@ -277,7 +277,7 @@ function publicFetchedFiles(value: unknown): Readonly<Record<string, unknown>> {
   };
 }
 
-/** Preserve the authenticated SDK name and add the label presentation surfaces should render. */
+/** Preserve the SDK contact name and add the label presentation surfaces should render. */
 export function presentContacts(value: Awaited<ReturnType<OursClient['listContacts']>>) {
   return {
     ...value,

@@ -1,5 +1,5 @@
-// Server-media adapter for the canonical control-plane file UI. The standalone
-// server is authoritative; browser IndexedDB persistence is intentionally absent.
+// Server-media adapter for the messenger file UI. The server is authoritative;
+// browser IndexedDB persistence is intentionally absent.
 import type { MediaRecord } from '../types.js';
 
 export const OURS_VOICE_PARAM = 'x-ours-kind=voice-message';

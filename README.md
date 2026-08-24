@@ -110,9 +110,9 @@ The focused client does not persist messages, identities, receipts, or API
 responses in browser storage. Its service worker caches only the application
 shell and static assets for offline launch; all `/api/*` requests bypass it.
 
-The web UI is the messenger-only port of the canonical ours-control-plane
-interface at commit `bc0183c80e9ee0ea2dd5adecb58460b0564e90d5`; its exact source inventory and
-transport exclusions are recorded in `web/src/CANONICAL_UI_PROVENANCE.md`. It
+The web UI and its same-origin transport adapter are maintained together in
+this repository; their presentation scope and transport exclusions are recorded
+in `web/src/CANONICAL_UI_PROVENANCE.md`. The interface
 includes grouped identity-root contacts; contact add, approval, rename and
 removal; one-time/public invite creation and revocation; public bio editing;
 message and attachment replies; drag/drop/paste and picker uploads with bounded

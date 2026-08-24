@@ -164,7 +164,6 @@ try {
     });
     measurements.push({ mode: dark ? 'dark' : 'light', ...facts, fullscreenLuminance });
 
-    await page.screenshot({ path: `/tmp/ours-messenger-mermaid-${dark ? 'dark' : 'light'}.png`, fullPage: true });
     await context.close();
   }
 
@@ -255,7 +254,6 @@ try {
   assert.ok(transitionedText.length > 15, 'fullscreen transition fixture exposes its body labels');
   assert.ok(transitionedText.every((entry) => entry.luminance > 0.25),
     `theme-switched sequence labels must remain readable: ${JSON.stringify(transitionedText)}`);
-  await page.screenshot({ path: '/tmp/ours-messenger-mermaid-theme-transition.png', fullPage: true });
   await context.close();
 
   console.log('browser-mermaid-theme OK — generated SVG and canvases follow light/dark messenger themes');

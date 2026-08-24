@@ -1,10 +1,9 @@
-# Canonical messenger UI provenance
+# Messenger UI scope
 
 The messenger presentation, shared CSS cascade, icons, QR surfaces, message/media
-renderers, Markdown/HTML viewers, image compression, and pure UI helpers were
-copied or adapted from `adapt-toolkit/ours-control-plane` commit
-`bc0183c80e9ee0ea2dd5adecb58460b0564e90d5`.
+renderers, Markdown/HTML viewers, image compression, and pure UI helpers are
+maintained in this repository as the standalone messenger interface.
 
-The standalone transport is not copied: all browser state and mutations continue
-through this repository's same-origin REST/SSE adapter. Fleet/control, browser SDK,
-WASM, seed/backup, monitoring, agent-management, and MCP code are excluded.
+All browser state and mutations go through this repository's same-origin REST/SSE
+adapter. Browser SDK runtimes, identity backup, fleet monitoring, agent management,
+and MCP surfaces are outside the messenger interface's scope.

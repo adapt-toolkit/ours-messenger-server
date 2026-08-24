@@ -194,7 +194,7 @@ export function AppShell() {
 
   useEffect(() => startUpdateCheck({
     onUpdateAvailable: () => setWorker((current) => ({ ...current, updateAvailable: true })),
-    // Messenger state is server-owned, so the control-plane recovery can run
+    // Messenger state is server-owned, so automatic recovery can run
     // automatically without risking local identity or message data.
     onStuck: (remoteSha) => { void forceRecover(remoteSha); },
   }), []);

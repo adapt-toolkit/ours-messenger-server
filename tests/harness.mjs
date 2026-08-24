@@ -33,9 +33,9 @@ export function counter() {
 /**
  * Poll until `fn` returns something other than `undefined`.
  *
- * THE DEADLINE IS GENEROUS ON PURPOSE. This box swings between ~350 MB and
- * ~1.6 GB available, and a tight bound turns a slow machine into a red test that
- * reads as a regression. If this times out, check `free -m` before believing it.
+ * THE DEADLINE IS GENEROUS ON PURPOSE. Integration hosts can be resource
+ * constrained, and a tight bound turns a slow machine into a red test that reads
+ * as a regression. If this times out, inspect host load before diagnosing it.
  */
 export async function until(label, fn, ms = 120_000) {
   const deadline = Date.now() + ms;
@@ -120,7 +120,7 @@ export async function startHarnessDaemon(tag) {
   };
 }
 
-/** Report memory around a suite, per the fleet's load-sensitivity rule. */
+/** Report advisory host memory around a resource-sensitive integration suite. */
 export function memSample(label) {
   try {
     const meminfo = readFileSync('/proc/meminfo', 'utf8');

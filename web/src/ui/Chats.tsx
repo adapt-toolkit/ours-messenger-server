@@ -4,7 +4,7 @@ import { ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, use
 import { Icon } from './icons';
 import { ContactVM, RootMetaVM, fmtTime } from './viewmodel';
 import type { ChatMessage } from './chatTypes';
-import { FileRecord, MAX_FILE_BYTES, fileRecord, fmtSize, getFileBytes, isVoiceNote } from './fileStore';
+import { FileRecord, MAX_FILE_BYTES, fileRecord, fmtSize, isVoiceNote } from './fileStore';
 import { FileBubble, AttachPreview, VoiceComposer, PendingAttachment } from './FileBubbles';
 import { MarkdownPreview } from './MarkdownPreview';
 import { HtmlPreview } from './HtmlPreview';
@@ -29,59 +29,7 @@ import {
   type RoomLine,
 } from '../../../shared/roomMessageCore.mjs';
 
-// DEBUG (marker-gated, iOS received-file render investigation). Build with
-// VITE_FILES_DEBUG=1 to show a per-row readout of the RAW extraction facts so
-// the owner's iPhone screenshot reveals exactly why a received file takes the
-// text branch on iOS WebKit (kind/filename derivation + inbound bytes presence).
-// Removed once the iOS bug is closed.
-const FILES_DEBUG = false;
 const TEXT_SEND_TIMEOUT_MS = 15_000;
-
-function FileDebugLine({ m, idx }: { m: ChatMessage; idx: number }) {
-  const [bytes, setBytes] = useState<string>('…');
-  useEffect(() => {
-    let live = true;
-    if (!m.wireId) {
-      setBytes('no-wid');
-      return;
-    }
-    void getFileBytes(m.wireId)
-      .then((b) => {
-        if (live) setBytes(b ? `Y:${b.length}` : 'N');
-      })
-      .catch((e) => {
-        if (live) setBytes('err:' + String(e).slice(0, 16));
-      });
-    return () => {
-      live = false;
-    };
-  }, [m.wireId]);
-  const d = m._dbg;
-  const line =
-    `#${idx} ${m.dir} branch=${m.kind === 'file' ? 'FILE' : 'TEXT'} src=${d?.src} ` +
-    `fn=${m.filename ?? '∅'} mime=${m.mime ?? '∅'} ` +
-    `kindNil=${d?.kindNil} fnNil=${d?.fnNil} mimeNil=${d?.mimeNil} ` +
-    `wid=${(m.wireId || '∅').slice(0, 8)} bytes=${bytes} txt="${d?.textHead}"`;
-  return (
-    <div
-      style={{
-        fontSize: '10px',
-        lineHeight: 1.3,
-        fontFamily: 'monospace',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all',
-        background: '#fff4c2',
-        color: '#222',
-        border: '1px solid #d4b106',
-        borderRadius: 4,
-        padding: '2px 5px',
-        margin: '2px 0',
-      }}
-    >
-      {line}
-    </div>
-  );
-}
 
 function ContactRow(props: {
   c: ContactVM;
@@ -666,8 +614,8 @@ export function Conversation(props: {
   // room conversation stops being a wall of JSON: the body becomes an author +
   // role + what they said, and the room's own notices become system lines. Any
   // message that is not a room body renders exactly as it did before.
-  // #57 bounds the mounted window; keep room decoding bounded too by parsing
-  // each visible message once per page refresh, not once at every call site.
+  // The mounted message window is bounded; keep room decoding bounded too by
+  // parsing each visible message once per page refresh, not at every call site.
   const roomLines = useMemo(() => {
     const lines = new Map<ChatMessage, RoomLine | null>();
     for (const message of displayMessages) {
@@ -1052,7 +1000,6 @@ export function Conversation(props: {
                     exit={{ opacity: 0, scale: 0.98 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                   >
-                    {FILES_DEBUG && <FileDebugLine m={m} idx={i} />}
                     <SwipeReplyRow
                       dir={m.dir === 'out' ? 'out' : 'in'}
                       rowClass={grpCls}
@@ -1079,7 +1026,6 @@ export function Conversation(props: {
                   exit={{ opacity: 0, scale: 0.98 }}
                   transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  {FILES_DEBUG && <FileDebugLine m={m} idx={i} />}
                   <SwipeReplyRow
                     dir={m.dir === 'out' ? 'out' : 'in'}
                     rowClass={grpCls}

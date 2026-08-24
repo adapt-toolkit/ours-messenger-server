@@ -14,24 +14,19 @@
 //   4. nothing is left watching for the receipt.
 //
 // On a fast link the receipt lands AFTER the send resolves, the send's
-// convergence starts first, and the ordering is harmless — which is why this
-// hid on this host and not on the owner's phone. tests/browser-receipt-render
-// emits the receipt after the send has settled and so exercises the harmless
-// order; this test forces the harmful one by HOLDING the send response until
-// the receipt event has been delivered.
+// convergence starts first, and the ordering is harmless. The render gate emits
+// the receipt after the send has settled and therefore exercises that harmless
+// order; this test forces the harmful one by HOLDING the send response until the
+// receipt event has been delivered.
 //
 // What is asserted is the WATCHER, not the tick: /page GETs must keep arriving
 // on the receipt convergence's schedule after the send's convergence has been
-// satisfied and stopped. Measured before the fix, the client issued its last
-// request 94ms after the receipt reached it and then went silent for thirteen
-// and a half seconds against a schedule that should have fired six times.
+// satisfied and stopped.
 //
 // The tick is then checked as the consequence: the receipt is released into
 // /page LATE, after the send's convergence has long since stopped, and with no
-// further event. Only a watcher that is still alive can render it. That is the
-// owner's case exactly — the receipt is real and the event was on time, but
-// canonical state catches up on the slow link some seconds later, and by then
-// there has to be something still asking.
+// further event. Only a watcher that is still alive can render it: the receipt
+// event may arrive on time while canonical state catches up seconds later.
 
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';

@@ -95,7 +95,7 @@ try {
     return { keys, urls: requests.map((request) => new URL(request.url).pathname).sort() };
   });
   assert.deepEqual(cacheFacts, { keys: [], urls: [] },
-    'control-plane lifecycle purges every legacy app-shell cache and caches nothing itself');
+    'the service-worker lifecycle purges every legacy app-shell cache and caches nothing itself');
 
   const cdp = await context.newCDPSession(page);
   const appManifest = await cdp.send('Page.getAppManifest');
@@ -189,7 +189,6 @@ try {
   await appPage.locator('.voice-bubble audio').waitFor({ state: 'attached' });
   assert.equal(await appPage.getByText('Voice fixture transcript').isVisible(), true,
     'voice transcription remains visible beside the canonical player');
-  await appPage.screenshot({ path: '/tmp/ours-messenger-desktop-dark.png' });
   await appPage.locator('.chat-load-earlier').scrollIntoViewIfNeeded();
   const scrollBefore = await appPage.locator('.messages').evaluate((node) => ({ height: node.scrollHeight, top: node.scrollTop }));
   await appPage.getByRole('button', { name: /Load earlier messages/ }).click();
@@ -223,15 +222,14 @@ try {
   const notificationsCopy = await notificationsHeading.locator('..').innerText();
   assert.match(notificationsCopy, /requires a current secure browser|requires a secure browser|allow notifications.*choose Repair/is,
     'mobile reaches Settings → notifications and clearly explains why push is unavailable');
-  await appPage.screenshot({ path: '/tmp/ours-messenger-mobile-dark.png' });
   await appContext.close();
 
   assert.deepEqual(await page.evaluate(() => caches.keys()), [],
-    'control-plane update lifecycle leaves no stale app-shell cache behind');
+    'the update lifecycle leaves no stale app-shell cache behind');
   const closingServer = new Promise((resolveClose, rejectClose) =>
     server.close((error) => error ? rejectClose(error) : resolveClose()));
-  // Chromium may retain an otherwise-idle HTTP connection after the mobile
-  // screenshot. Close it explicitly so the offline reload gate is deterministic.
+  // Chromium may retain an otherwise-idle HTTP connection after its app context
+  // closes. Close it explicitly so the offline reload gate is deterministic.
   server.closeAllConnections?.();
   await closingServer;
 

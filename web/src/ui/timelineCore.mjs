@@ -7,16 +7,14 @@
 //       ISO 8601.
 //   • file/voice dates: JS `new Date().toISOString()` — strict ISO 8601.
 //
-// The trap (owner's device bug): `new Date(messageDate)` is ENGINE-DEPENDENT for
-// non-ISO strings. Node/V8 parses the MUFL form leniently (so headless tests
-// passed), but iOS Safari's JavaScriptCore is strict and returns `Invalid Date`.
-// A plain `new Date().getTime()` therefore NaN'd every message on device; the
-// NaN guard pinned them all to epoch 0 (top), leaving the ISO-dated files below —
-// reproducing the exact "attachments stuck at the bottom" bug the fix meant to
-// remove. (The earlier localeCompare bug and this one look identical on screen.)
+// The trap: `new Date(messageDate)` is ENGINE-DEPENDENT for non-ISO strings.
+// V8 parses the MUFL form leniently, while stricter engines can return
+// `Invalid Date`. A plain `new Date().getTime()` then yields NaN; an epoch
+// fallback would pin messages above the ISO-dated files and leave attachments
+// grouped at the bottom.
 //
 // Fix: normalize BOTH forms to a strict ISO-8601 UTC string OURSELVES and parse
-// that — strict ISO parses identically on every engine, iOS included.
+// that — strict ISO parses identically across supported engines.
 
 // Returns a strict "YYYY-MM-DDTHH:MM:SS.mmmZ" (always UTC — both our sources are
 // UTC), or null if the string isn't a date we recognise.
@@ -31,7 +29,7 @@ export function toIsoUtc(dateStr) {
 export function timeMs(dateStr) {
   const iso = toIsoUtc(dateStr);
   if (iso) {
-    const t = Date.parse(iso); // strict ISO — parses on every engine incl. iOS JSC
+    const t = Date.parse(iso); // strict ISO parses consistently across engines
     if (!Number.isNaN(t)) return t;
   }
   // Last-resort fallback (unreachable for our two formats); never NaN the sort.

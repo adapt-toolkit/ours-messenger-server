@@ -11,8 +11,6 @@
 // notification, which is exactly the "it was there when I opened the app but
 // nobody told me" report.
 //
-// Measured on the live messenger: 16 reconnects in ~7.5 hours, on an idle fleet.
-//
 // Passing the cursor across the reconnect is not available to us — `r.cursor`
 // never leaves the SDK generator and the yielded records carry no cursor field.
 // So we reconcile from canonical state, which also covers the wider gap of the

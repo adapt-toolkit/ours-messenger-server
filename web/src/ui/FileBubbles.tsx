@@ -459,7 +459,7 @@ const fmtClock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 6
 // to LOCK (hands-free, finger can lift) and slide LEFT past a threshold to
 // cancel. A live waveform (Web Audio analyser) runs during hold and lock.
 // Gesture is Pointer Events + a window move/up capture so the finger can leave
-// the button — verified on Chromium; owner's iPhone is the WebKit gate.
+// the button. Browser gates cover both Chromium and WebKit behavior.
 const LOCK_DIST = 84; // px upward to lock hands-free
 const CANCEL_DIST = 120; // px leftward to cancel
 const MIN_MS = 550; // shorter than this on release = a mis-tap, discarded

@@ -168,7 +168,7 @@ export function renderRoomMessage(body) {
 }
 
 /**
- * Render a room envelope in one authenticated contact's conversation.
+ * Render a room envelope in a contact whose name matches a supported room grammar.
  *
  * Contact scoping is the trust boundary; body shape and the envelope's opaque
  * signature string are not client-side proof by themselves.
@@ -266,7 +266,7 @@ export function roomContactLabel(announced) {
   return roomId === null ? null : `Room ${roomId.slice(0, 8)}`;
 }
 
-/** Render a room label when authenticated naming metadata exists; otherwise preserve the contact name. */
+/** Render a room label when the contact name matches a supported room grammar; otherwise preserve it. */
 export function contactDisplayName(announced) {
   return roomContactLabel(announced) ?? String(announced ?? '');
 }
