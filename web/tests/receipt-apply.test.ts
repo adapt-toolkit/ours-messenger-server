@@ -75,8 +75,8 @@ const receipt = (kind: 'delivered' | 'read', wireIds: string[]) =>
 }
 
 // 3. read THEN a late delivered event must NOT walk it back.
-//    Live events are not ordered, and this is the sequence the owner sees when
-//    the two receipts arrive together from a slow link.
+//    Live events are not ordered, and slow links can deliver the two receipts
+//    in this sequence.
 {
   let state = withPage([message('W1')]);
   state = appReducer(state, receipt('read', ['W1']));

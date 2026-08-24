@@ -1,5 +1,5 @@
-// Ported from ours-control-plane's proven updater. build.mjs replaces this
-// stamp on every release so browsers always see different service-worker bytes.
+// build.mjs replaces this stamp on every release so browsers always see
+// different service-worker bytes.
 // This worker deliberately caches no application shell: keeping an old HTML
 // document and hashed JS chunks in Cache Storage can strand an installed PWA
 // on a blank screen during a deployment.
@@ -90,8 +90,8 @@ function safeText(value, fallback, max) {
   return typeof value === 'string' && value.trim() ? value.slice(0, max) : fallback;
 }
 
-// Exact ours-control-plane lifecycle: activate immediately, claim existing
-// windows, and purge every legacy app-shell cache. HTML and hashed bundles then
+// Activate immediately, claim existing windows, and purge every legacy
+// app-shell cache. HTML and hashed bundles then
 // always come from the server's current immutable release.
 self.addEventListener('install', () => {
   self.skipWaiting();

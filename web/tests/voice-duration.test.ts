@@ -76,10 +76,9 @@ assert.equal(shown(bare), '·:··', 'AND AN UNMEASURED ONE READS UNKNOWN, NOT Z
 assert.equal(shown('audio/mp4;x-ours-duration=0'), '·:··', 'as does the zero a container lies with');
 
 // ---- and the element is not allowed to reintroduce the zero ----------------
-// The bubble also reads the <audio> element's own duration, which is where the
-// owner's 0:00 came from: the old guard accepted any FINITE value, and the iOS
-// container reports a finite 0. Asserted against the source, in the style of
-// web-contract, because the alternative is an iOS engine this host does not have.
+// The bubble also reads the <audio> element's own duration. Some fragmented MP4
+// containers report a finite 0, which the old guard accepted. Assert the source
+// contract here because this unit suite does not run a WebKit recording engine.
 const bubbleSource = readFileSync(new URL('../src/ui/FileBubbles.tsx', import.meta.url), 'utf8');
 assert.match(bubbleSource, /isFinite\(d\) && d > 0/,
   'the element duration is accepted only when finite AND positive — a container reporting 0 must not become 0:00');

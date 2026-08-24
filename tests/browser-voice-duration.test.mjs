@@ -9,10 +9,9 @@
 // injected — not a copy of its logic re-typed into the page, which would pass
 // forever after the source changed.
 //
-// WHAT THIS DOES NOT COVER, stated rather than implied: iOS Safari, whose
-// fragmented MP4 is the container that reports 0 and produces the owner's actual
-// symptom. There is no iOS engine on this host. The mp4 branch is exercised only
-// through the unit test's parsing of a zero, not through a real mp4 recording.
+// WHAT THIS DOES NOT COVER, stated rather than implied: WebKit recordings whose
+// fragmented MP4 container can report 0. This Chromium gate exercises that case
+// only through the unit test's parsing of a zero, not a real MP4 recording.
 
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';

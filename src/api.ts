@@ -29,6 +29,8 @@ import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
 import { publicEngineError, publicInternalError } from './security.js';
+// @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
+import { contactDisplayName } from '../shared/roomMessageCore.mjs';
 
 interface ReplyReference {
   readonly wire_id: string;
@@ -272,6 +274,21 @@ function publicFetchedFiles(value: unknown): Readonly<Record<string, unknown>> {
     files,
     ...(result.mode === 'all_unread' || result.mode === 'selected' ? { mode: result.mode } : {}),
     ...(Array.isArray(result.requested) || result.requested === null ? { requested: result.requested } : {}),
+  };
+}
+
+/** Preserve the SDK contact name and add the label presentation surfaces should render. */
+export function presentContacts(value: Awaited<ReturnType<OursClient['listContacts']>>) {
+  return {
+    ...value,
+    contacts: value.contacts.map((contact) => ({
+      ...contact,
+      display_name: contactDisplayName(contact.name) as string,
+    })),
+    pending: value.pending.map((contact) => ({
+      ...contact,
+      display_name: contactDisplayName(contact.name) as string,
+    })),
   };
 }
 
@@ -555,7 +572,7 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/messages/incoming': async ({ client }) => client.listIncomingMessages(),
 
   // ---- contacts ------------------------------------------------------------
-  'GET /api/contacts': async ({ client }) => client.listContacts(),
+  'GET /api/contacts': async ({ client }) => presentContacts(await client.listContacts()),
 
   // The old browser surface called this `listContactRoots`. It is not a separate
   // operation: roots ride along on the contacts view.

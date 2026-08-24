@@ -43,3 +43,4 @@ export function contactMessagePreview(announcedContact: string, text: string): s
 export function roomMessagePreview(line: RoomLine | null): string;
 export function humanizeRoomKind(kind: string): string;
 export function roomContactLabel(announced: string): string | null;
+export function contactDisplayName(announced: string): string;

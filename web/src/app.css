@@ -427,8 +427,7 @@
 }
 .file-offdevice-bubble .voice-transcript { margin-top: 7px; }
 
-/* Messenger-only selector extracted from canonical control-plane.css. The
-   operational stylesheet itself is intentionally not part of this bundle. */
+/* Conversation-list controls used only by the standalone messenger. */
 .conversation-list-modes {
   display: grid;
   grid-template-columns: 1fr 1fr;

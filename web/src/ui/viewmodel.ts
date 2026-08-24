@@ -1,5 +1,4 @@
-// Messenger-only view model ported from adapt-toolkit/ours-control-plane
-// bc0183c80e9ee0ea2dd5adecb58460b0564e90d5. Fleet/control models are excluded.
+// Messenger-only presentation models for contacts and conversations.
 // @ts-ignore -- canonical pure-JS helper is typed at this seam.
 import { toDate as toDateJs } from './timelineCore.mjs';
 import { roomContactLabel } from '../../../shared/roomMessageCore.mjs';
@@ -73,4 +72,9 @@ export function displayName(announced: string, alias?: string | null, roleName?:
   const role = roleName?.trim();
   if (role && !isCidLike(role)) return role;
   return name ? shortCid(name) : 'Unnamed';
+}
+
+/** One API-contact presentation path for rows, toasts, and introduction banners. */
+export function contactName(contact: { name: string; display_name?: string }): string {
+  return contact.display_name?.trim() || displayName(contact.name);
 }

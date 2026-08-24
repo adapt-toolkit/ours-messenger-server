@@ -21,11 +21,14 @@ export interface IdentityTreeRow {
 
 export interface ContactView {
   name: string;
+  /** Presentation label derived by the server; name remains the SDK contact name. */
+  display_name?: string;
   container_id: string;
 }
 
 export interface PendingContactView {
   name: string;
+  display_name?: string;
   container_id: string;
   queued: number;
 }

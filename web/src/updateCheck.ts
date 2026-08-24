@@ -1,6 +1,6 @@
-// Deployment-independent update check and last-resort recovery, ported from
-// ours-control-plane. It remains useful even when the service worker is the
-// broken component because version.json is always fetched with no-store.
+// Deployment-independent update check and last-resort recovery. It remains
+// useful even when the service worker is the broken component because
+// version.json is always fetched with no-store.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore -- injected by build.mjs for production builds.
 declare const __MESSENGER_WEB_BUILD_SHA__: string;

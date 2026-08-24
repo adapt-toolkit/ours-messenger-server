@@ -1,6 +1,8 @@
 import type { OursClient } from '@ours.network/sdk';
 import type { PushEvent, PushJob, PushKind, PushStore } from './push.js';
 import { reportFailure } from './security.js';
+// @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
+import { contactDisplayName, contactMessagePreview } from '../shared/roomMessageCore.mjs';
 
 export interface PushDeliveryLog {
   info(message: string): void;
@@ -50,8 +52,10 @@ async function projectFromSdk(
     if (!message || message.direction !== 'in' || message.peer.id !== job.contactId) {
       throw new Error('canonical message projection is not ready');
     }
+    const announcedSender = job.senderName ?? message.peer.name ?? 'New message';
     return {
-      v: 1, kind: 'message', title: job.senderName ?? 'New message', body: message.text,
+      v: 1, kind: 'message', title: contactDisplayName(announcedSender) as string,
+      body: contactMessagePreview(announcedSender, message.text) as string,
       contact_id: job.contactId, wire_id: job.wireId, url,
     };
   }
@@ -65,7 +69,8 @@ async function projectFromSdk(
     ? 'voice' : file.mime.toLowerCase().startsWith('image/') ? 'photo' : 'file';
   const label = kind === 'voice' ? 'Voice message' : kind === 'photo' ? 'Photo' : 'File';
   return {
-    v: 1, kind, title: file.from.name || job.senderName || label, body: `${label}: ${file.filename}`,
+    v: 1, kind, title: contactDisplayName(file.from.name || job.senderName || label) as string,
+    body: `${label}: ${file.filename}`,
     contact_id: job.contactId, wire_id: job.wireId, url,
   };
 }
