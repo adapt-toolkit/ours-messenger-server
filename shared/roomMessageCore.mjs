@@ -59,7 +59,7 @@ const LOWER_CROCKFORD_ULID = /^[0-7][0-9a-hjkmnp-tv-z]{25}$/;
 // Cowork's configured friendly mode freezes a bounded ASCII reconstruction of
 // the creation-time room_name into the identity. The original Unicode spelling
 // and later mutable room_name are not protocol metadata, so Messenger can only
-// render this authenticated slug rather than claim to recover either one.
+// render this protocol-shaped slug. This helper does not authenticate it.
 const FRIENDLY_ROOM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_FRIENDLY_ROOM_SLUG_LENGTH = 25;
 
@@ -70,10 +70,11 @@ const isNonEmptyString = (value) => typeof value === 'string' && value.length > 
  * Recognize a relayed room body in a message's raw text.
  *
  * Deliberately strict: a member could type a JSON object into the composer, and
- * that must keep rendering as the text they typed. Every relayed body is signed
- * and room-scoped, so version + `room_`-prefixed kind + room_id + signature is
- * required before this claims a message. Returns null for anything else — the
- * caller then renders the message exactly as it does today.
+ * that must keep rendering as the text they typed. Expected relay envelopes
+ * carry version + `room_`-prefixed kind + room_id + a signature string, so this
+ * parser requires that shape but does not verify the signature or provenance.
+ * Returns null for anything else — the caller then renders the message exactly
+ * as it does today.
  */
 export function parseRoomBody(text) {
   if (typeof text !== 'string') return null;
