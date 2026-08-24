@@ -74,3 +74,8 @@ export function displayName(announced: string, alias?: string | null, roleName?:
   if (role && !isCidLike(role)) return role;
   return name ? shortCid(name) : 'Unnamed';
 }
+
+/** One API-contact presentation path for rows, toasts, and introduction banners. */
+export function contactName(contact: { name: string; display_name?: string }): string {
+  return contact.display_name?.trim() || displayName(contact.name);
+}
