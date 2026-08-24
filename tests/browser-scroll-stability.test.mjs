@@ -124,10 +124,20 @@ try {
   // --- 1. A message arriving while the reader is scrolled up ---------------
   await page.evaluate(() => {
     const el = document.querySelector('.messages');
+    // Match a real reader taking control from an app-owned smooth follow before
+    // changing position. The component clears its follow latch on user intent.
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     el.scrollTop = Math.round(el.scrollHeight / 2);
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
   });
   await page.waitForTimeout(120);
-  const anchoredTop = await page.evaluate(() => document.querySelector('.messages').scrollTop);
+  const anchor = await page.evaluate(() => {
+    const el = document.querySelector('.messages');
+    return { top: el.scrollTop, distanceFromBottom: el.scrollHeight - el.clientHeight - el.scrollTop };
+  });
+  assert.ok(anchor.distanceFromBottom > 48,
+    `arrival gate requires a reader scrolled up (${anchor.distanceFromBottom}px from bottom)`);
+  const anchoredTop = anchor.top;
   await startTrace('arriving while reading history');
   conversationMessages.push({
     dir: 'in', text: 'arriving while reading history', date: '2026-08-15T02:00:00.000Z',

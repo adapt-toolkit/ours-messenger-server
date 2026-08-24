@@ -21,7 +21,7 @@ export interface IdentityTreeRow {
 
 export interface ContactView {
   name: string;
-  /** Presentation label derived by the server; name remains the authenticated SDK contact name. */
+  /** Presentation label derived by the server; name remains the SDK contact name. */
   display_name?: string;
   container_id: string;
 }

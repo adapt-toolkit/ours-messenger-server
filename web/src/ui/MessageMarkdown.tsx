@@ -5,8 +5,8 @@ import remarkGfm from 'remark-gfm';
 /**
  * Parsing cost is bounded per mounted message. Larger peer messages remain
  * complete and selectable, but deliberately fall back to literal plaintext.
- * Fleet final answers are losslessly chunked at 8,000 code points upstream,
- * well below this direct-message guard.
+ * The high threshold keeps normal messages on the Markdown path while placing
+ * a deterministic ceiling on parser work for untrusted peer input.
  */
 export const MAX_MARKDOWN_INPUT_LENGTH = 50_000;
 

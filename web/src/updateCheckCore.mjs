@@ -1,4 +1,4 @@
-// Pure update decision logic ported from ours-control-plane.
+// Pure update decision logic shared by the browser update paths.
 export function assessUpdate(localSha, remote, state, now, stuckAfterMs = 60_000) {
   if (!remote || !remote.sha) return 'current';
   if (remote.sha === localSha) {

@@ -12,11 +12,11 @@ assert.match(sw, /const SW_BUILD = '__MESSENGER_BUILD_SHA__'/, 'service-worker b
 assert.match(sw, /self\.skipWaiting\(\)/, 'new workers activate without waiting for installed-PWA windows to close');
 assert.match(sw, /self\.clients\.claim\(\)/, 'new workers immediately control existing installed-PWA windows');
 assert.match(sw, /keys\.map\(\(key\) => caches\.delete\(key\)\)/, 'activation purges every legacy app-shell cache');
-assert.doesNotMatch(sw, /addEventListener\('fetch'/, 'control-plane updater never caches HTML or hashed application assets');
+assert.doesNotMatch(sw, /addEventListener\('fetch'/, 'the updater never caches HTML or hashed application assets');
 assert.doesNotMatch(sw, /client\.navigate/, 'activation never navigates a client from inside its own lifecycle promise');
 assert.match(sw, /addEventListener\('push'/);
 assert.match(sw, /showNotification/);
 assert.match(sw, /notificationclick/);
 assert.match(sw, /openWindow\(url\)/);
 
-console.log('pwa-contract OK — install manifest, control-plane update lifecycle, push display, and dialog click-through');
+console.log('pwa-contract OK — install manifest, update lifecycle, push display, and dialog click-through');

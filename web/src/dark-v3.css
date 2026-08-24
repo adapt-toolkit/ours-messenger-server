@@ -620,8 +620,7 @@
 .message-markdown ul, .message-markdown ol { margin: 0.35em 0 0.7em; padding-left: 1.45em; }
 /* RESTORE THE LIST MARKER. Tailwind's preflight ships `ol,ul,menu{list-style:none}`
    and it is the ONLY list-style rule in the bundle, so a message list kept the
-   indentation from the padding above and lost its bullet or number entirely —
-   the owner saw indented lines with nothing in front of them.
+   indentation from the padding above and lost its bullet or number entirely.
    `revert` rather than an explicit `disc`/`decimal`: it rolls the author reset
    back to the user-agent default, which restores ordered lists and per-depth
    nesting (disc/circle/square) at the same time instead of freezing one marker

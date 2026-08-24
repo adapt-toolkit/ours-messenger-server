@@ -1,5 +1,5 @@
-// Contextual first-visit explainer for messenger invites. The control-plane's
-// agent-management slides are deliberately excluded from this standalone port.
+// Contextual first-visit explainer for messenger invites. Agent-management
+// workflows are outside this standalone interface.
 import { useState } from 'react';
 import { Icon } from './icons';
 

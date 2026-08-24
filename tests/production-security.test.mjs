@@ -4,7 +4,7 @@ import { MAX_INLINE_FILE_BYTES, serveApi } from '../src/api.ts';
 import { loadConfig } from '../src/config.ts';
 import { MessengerEventBus } from '../src/events.ts';
 
-const PUBLIC_ORIGIN = 'https://messenger.shakhmatov.me';
+const PUBLIC_ORIGIN = 'https://messenger.example';
 const BUILD = {
   name: '@ours.network/messenger-server',
   version: '0.1.0',
@@ -92,7 +92,7 @@ async function call(deps, { method = 'GET', url = '/', headers = {}, rawHeaders,
 assert.throws(() => loadConfig({ OURS_MESSENGER_IDENTITY: 'Me' }), /OURS_MESSENGER_PUBLIC_ORIGIN/);
 assert.throws(() => loadConfig({
   OURS_MESSENGER_IDENTITY: 'Me',
-  OURS_MESSENGER_PUBLIC_ORIGIN: 'https://messenger.shakhmatov.me/path',
+  OURS_MESSENGER_PUBLIC_ORIGIN: 'https://messenger.example/path',
 }), /OURS_MESSENGER_PUBLIC_ORIGIN/);
 assert.equal(loadConfig({
   OURS_MESSENGER_IDENTITY: 'Me',
@@ -110,7 +110,7 @@ assert.equal(good.status, 200);
 assert.equal(sends, 1);
 
 const rejected = [
-  ['sibling origin', { ...mutationHeaders, Origin: 'https://fleet.shakhmatov.me' }, undefined, 403],
+  ['sibling origin', { ...mutationHeaders, Origin: 'https://sibling.example' }, undefined, 403],
   ['null origin', { ...mutationHeaders, Origin: 'null' }, undefined, 403],
   ['absent origin', { 'Content-Type': 'application/json', 'X-Ours-Messenger-CSRF': '1' }, undefined, 403],
   ['duplicate origin', mutationHeaders, [

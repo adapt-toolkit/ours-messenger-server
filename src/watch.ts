@@ -74,9 +74,8 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
     // A COWORK ROOM RELAYS SIGNED JSON, and a notification is the one surface a
     // user cannot scroll past. `contactMessagePreview` is the same recogniser the
     // conversation renders with, so an unknown-but-additive kind degrades to its
-    // readable text here exactly as it does in the chat (INV-R6), and the author
-    // identity is never read for display (INV-R3). An ordinary contact's text is
-    // returned untouched.
+    // readable text here exactly as it does in the chat, and the author identity
+    // is never read for display. An ordinary contact's text is returned untouched.
     const body = contactMessagePreview(announcedSender, message.text) as string;
     return { v: 1, kind: 'message', title: sender, body, contact_id: contactId, wire_id: wireId, url };
   }
@@ -121,8 +120,6 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
 // REST); only the notification is lost, which is exactly the "it was there when
 // I opened the app, but nobody told me" report.
 //
-// Measured on the live messenger: 16 reconnects in ~7.5 hours on an idle fleet.
-//
 // PASSING THE CURSOR IS NOT AVAILABLE TO US. `r.cursor` lives inside the SDK
 // generator's own loop and is never yielded; the records carry no cursor field.
 // The messenger cannot remember what it was never told. (Surfacing it is a
@@ -131,8 +128,7 @@ async function pushEventFor(client: OursClient, record: Record<string, unknown>)
 //
 // So we reconcile from canonical state instead, which is strictly stronger: it
 // also recovers notifications lost while the messenger process was entirely
-// DOWN — this one has died twice in 24h on a 2 GiB WASM ceiling — a window no
-// cursor held in memory could ever have covered.
+// down, a window no cursor held only in process memory could cover.
 //
 // *** THE DEDUPE IN PushStore.enqueueJob IS LOAD-BEARING FOR CORRECTNESS. ***
 // It keys on `${identityCid}:${wireId}:${kind}` and returns false for a job that
