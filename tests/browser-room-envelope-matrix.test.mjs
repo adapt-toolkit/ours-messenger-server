@@ -79,10 +79,12 @@ try {
   const future = page.locator('#chat-message-ROOM-room_future_status .room-system-card');
   assert.equal(await future.locator('.room-system-text').textContent(), 'Future status from the room.');
   const wholeRoom = await page.locator('.messages').textContent();
-  assert.equal(wholeRoom.includes('CID-MUST-NOT-RENDER'), false, 'author identity bytes are never rendered');
   assert.equal(wholeRoom.includes('future-secret-shape'), false, 'future metadata is not stringified');
   for (const { kind } of fixture.cases) {
-    assert.equal((await page.locator(`#chat-message-ROOM-${kind}`).textContent()).includes('{"version"'), false,
+    const rendered = await page.locator(`#chat-message-ROOM-${kind}`).textContent();
+    assert.equal(rendered.includes('CID-MUST-NOT-RENDER'), false,
+      `${kind} never renders authenticated author identity bytes`);
+    assert.equal(rendered.includes('{"version"'), false,
       `${kind} received from the authenticated room never renders as raw JSON`);
   }
   assert.equal(await page.locator('#chat-message-ROOM-OUTGOING-JSON .message-markdown').textContent(),
