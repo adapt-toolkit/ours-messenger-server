@@ -31,7 +31,7 @@ assert.equal(future.text, 'Future status from the room.');
 assert.ok(!JSON.stringify(future).includes('future-secret-shape'), 'future fallback does not stringify unknown metadata');
 
 const mismatch = JSON.stringify({ ...fixture.cases[0].body, room_id: '01hzyk8m0000000000000000zz' });
-const rejected = roomLineForContact(fixture.announced_contact, mismatch);
+const rejected = roomLineForContact('ours-cowork-01hzyk8m0000000000000000aa', mismatch);
 assert.equal(rejected?.text, 'This room envelope could not be displayed safely.',
   'a provenance mismatch becomes a bounded notice instead of leaking raw JSON');
 assert.deepEqual(rejected?.details, ['Status: Room provenance mismatch']);

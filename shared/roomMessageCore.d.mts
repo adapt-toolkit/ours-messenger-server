@@ -44,6 +44,7 @@ export interface RoomLine {
 export const KNOWN_ROOM_KINDS: string[];
 export const ROOM_VOICE_ROLE: 'room';
 export const ROOM_IDENTITY_PREFIX: 'ours-cowork-room:';
+export const NAMED_ROOM_IDENTITY_PREFIX: 'ours-cowork:';
 export const CURRENT_ROOM_IDENTITY_PREFIX: 'ours-cowork-';
 export const LEGACY_ROOM_IDENTITY_PREFIX: 'cowork-room-';
 

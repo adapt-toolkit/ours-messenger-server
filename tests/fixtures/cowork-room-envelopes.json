@@ -1,5 +1,5 @@
 {
-  "announced_contact": "ours-cowork-01hzyk8m0000000000000000aa",
+  "announced_contact": "ours-cowork:Fix room message rendering in Messenger",
   "room_id": "01hzyk8m0000000000000000aa",
   "cases": [
     { "kind": "room_msg", "body": { "version": 1, "kind": "room_msg", "room_id": "01hzyk8m0000000000000000aa", "room_name": "Комната релиза", "message_id": "01hzyk8m0000000000000000ab", "author": { "identity": "CID-MUST-NOT-RENDER", "display_name": "Секретарь", "role": "Reviewer" }, "text": "Проверка завершена.", "at": "2026-08-25T10:00:00.000Z" } },

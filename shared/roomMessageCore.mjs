@@ -47,6 +47,8 @@ export const ROOM_VOICE_ROLE = 'room';
 const ROOM_KIND_PREFIX = 'room_';
 /** Prefix used by the server-announced contact identity (cowork 0.4.x). */
 export const ROOM_IDENTITY_PREFIX = 'ours-cowork-room:';
+/** Prefix currently announced by named Cowork room contacts. */
+export const NAMED_ROOM_IDENTITY_PREFIX = 'ours-cowork:';
 /** Prefix emitted by ours-cowork >= 0.5.1 room identities (ULID-based). */
 export const CURRENT_ROOM_IDENTITY_PREFIX = 'ours-cowork-';
 /** Exact prefix emitted by ours-cowork <= 0.3.3 room identities. */
@@ -227,7 +229,8 @@ export function roomLineForContact(announcedContact, text) {
   if (!isCoworkRoomContact(announcedContact)) return null;
   const expectedRoomId = currentRoomMetadata(announcedContact)?.roomId ?? null;
   const expectedLegacyRoomId = legacyRoomId(announcedContact);
-  const body = parseRoomBodyShape(text, expectedRoomId === null);
+  const namedRoom = namedRoomLabel(announcedContact);
+  const body = parseRoomBodyShape(text, expectedRoomId === null && namedRoom === null);
   if (body !== null && expectedRoomId !== null && body.room_id !== expectedRoomId) {
     return rejectedEnvelopeLine('Room provenance mismatch');
   }
@@ -248,6 +251,11 @@ function legacyRoomId(announced) {
   if (typeof announced !== 'string' || !announced.startsWith(LEGACY_ROOM_IDENTITY_PREFIX)) return null;
   const roomId = announced.slice(LEGACY_ROOM_IDENTITY_PREFIX.length);
   return LOWER_CROCKFORD_ULID.test(roomId) ? roomId : null;
+}
+
+function namedRoomLabel(announced) {
+  if (typeof announced !== 'string' || !announced.startsWith(NAMED_ROOM_IDENTITY_PREFIX)) return null;
+  return normalizedRoomName(announced.slice(NAMED_ROOM_IDENTITY_PREFIX.length));
 }
 
 function currentRoomMetadata(announced) {
@@ -272,7 +280,8 @@ export function isCoworkRoomContact(announced) {
     && identity.slice(ROOM_IDENTITY_PREFIX.length).trim().length > 0;
   // v0.4 historically tolerated outer whitespace. Current and legacy ULID
   // grammars are exact protocol identities and must parse the raw announcement.
-  return v04 || currentRoomMetadata(announced) !== null || legacyRoomId(announced) !== null;
+  return v04 || namedRoomLabel(announced) !== null
+    || currentRoomMetadata(announced) !== null || legacyRoomId(announced) !== null;
 }
 
 /** Safe contact-row/toast preview: ordinary contacts always keep raw content. */
@@ -350,6 +359,8 @@ export function roomContactLabel(announced) {
     const shortName = identity.slice(ROOM_IDENTITY_PREFIX.length).trim();
     return shortName || null;
   }
+  const named = namedRoomLabel(announced);
+  if (named !== null) return named;
   const current = currentRoomMetadata(announced);
   if (current?.slug) {
     const readable = current.slug.replace(/-/g, ' ');
