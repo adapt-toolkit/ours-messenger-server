@@ -37,6 +37,7 @@ export const KNOWN_ROOM_KINDS = [
   'room_briefing',
   'room_role_briefing',
   'room_membership',
+  'room_file',
   'room_not_member',
 ];
 
@@ -46,6 +47,8 @@ export const ROOM_VOICE_ROLE = 'room';
 const ROOM_KIND_PREFIX = 'room_';
 /** Prefix used by the server-announced contact identity (cowork 0.4.x). */
 export const ROOM_IDENTITY_PREFIX = 'ours-cowork-room:';
+/** Prefix currently announced by named Cowork room contacts. */
+export const NAMED_ROOM_IDENTITY_PREFIX = 'ours-cowork:';
 /** Prefix emitted by ours-cowork >= 0.5.1 room identities (ULID-based). */
 export const CURRENT_ROOM_IDENTITY_PREFIX = 'ours-cowork-';
 /** Exact prefix emitted by ours-cowork <= 0.3.3 room identities. */
@@ -62,6 +65,9 @@ const LOWER_CROCKFORD_ULID = /^[0-7][0-9a-hjkmnp-tv-z]{25}$/;
 // render this protocol-shaped slug. This helper does not authenticate it.
 const FRIENDLY_ROOM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_FRIENDLY_ROOM_SLUG_LENGTH = 25;
+const MAX_ROOM_NAME_CHARACTERS = 64;
+const MAX_FUTURE_KIND_CHARACTERS = 80;
+const MAX_FUTURE_TEXT_CHARACTERS = 1_000;
 
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isNonEmptyString = (value) => typeof value === 'string' && value.length > 0;
@@ -76,7 +82,7 @@ const isNonEmptyString = (value) => typeof value === 'string' && value.length > 
  * Returns null for anything else — the caller then renders the message exactly
  * as it does today.
  */
-export function parseRoomBody(text) {
+function parseRoomBodyShape(text, requireSignature) {
   if (typeof text !== 'string') return null;
   const trimmed = text.trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
@@ -90,8 +96,13 @@ export function parseRoomBody(text) {
   if (parsed.version !== 1) return null;
   if (!isNonEmptyString(parsed.kind) || !parsed.kind.startsWith(ROOM_KIND_PREFIX)) return null;
   if (!isNonEmptyString(parsed.room_id)) return null;
-  if (!isNonEmptyString(parsed.signature)) return null;
+  if (requireSignature && !isNonEmptyString(parsed.signature)) return null;
   return parsed;
+}
+
+/** Legacy/custom room packets require their application signature. */
+export function parseRoomBody(text) {
+  return parseRoomBodyShape(text, true);
 }
 
 /** The author envelope, reduced to what may be shown. Never the identity. */
@@ -105,7 +116,8 @@ function authorOf(body) {
 
 /** 'room_role_briefing' -> 'Role briefing'; used to label a kind we don't know. */
 export function humanizeRoomKind(kind) {
-  const words = String(kind).replace(/^room_/, '').split('_').filter(Boolean);
+  const boundedKind = Array.from(String(kind)).slice(0, MAX_FUTURE_KIND_CHARACTERS).join('');
+  const words = boundedKind.replace(/^room_/, '').split('_').filter(Boolean);
   if (words.length === 0) return 'Room notice';
   return words.join(' ').replace(/^./, (c) => c.toUpperCase());
 }
@@ -126,30 +138,67 @@ export function renderRoomMessage(body) {
   const version = Number.isSafeInteger(body.briefing_version) && body.briefing_version > 0
     ? body.briefing_version
     : null;
+  const common = {
+    roomName: normalizedRoomName(body.room_name) ?? '',
+    authoredAt: isNonEmptyString(body.at) ? body.at : '',
+  };
 
   switch (kind) {
     case 'room_msg':
       // A room may also speak in the plain chat kind (operator postMessage),
       // and that is a system line, not a participant talking.
       return author.role === ROOM_VOICE_ROLE
-        ? systemLine(kind, 'Room', text || 'Room notice')
-        : { variant: 'chat', kind, author: author.name || 'Unknown member', role: author.role, label: '', text };
+        ? systemLine(kind, 'Room message', text || 'Room notice', { ...common, authoredBy: author.name })
+        : { variant: 'chat', kind, author: author.name || 'Unknown member', role: author.role, label: '', text, ...common };
 
     case 'room_briefing':
-      return systemLine(kind, version === null ? 'Room briefing' : `Room briefing · v${version}`, text || 'The room briefing was updated.');
+      return systemLine(
+        kind,
+        version === null ? 'Room briefing' : `Room briefing · v${version}`,
+        text || 'The room briefing was updated.',
+        { ...common, authoredBy: author.name, presentation: 'briefing' },
+      );
 
     case 'room_role_briefing': {
       const role = isNonEmptyString(body.briefing_role) ? body.briefing_role : '';
       const label = ['Role briefing', role, version === null ? '' : `v${version}`].filter(Boolean).join(' · ');
-      return systemLine(kind, label, text || 'Your role briefing was updated.');
+      return systemLine(kind, label, text || 'Your role briefing was updated.', {
+        ...common, authoredBy: author.name, presentation: 'role',
+        details: role ? [`Role: ${role}`] : [],
+      });
     }
 
-    case 'room_membership':
-      return systemLine(kind, 'Membership', text || membershipFallback(body.membership));
+    case 'room_membership': {
+      const membership = isObject(body.membership) ? body.membership : {};
+      const details = [
+        isNonEmptyString(membership.action) ? `Status: ${humanizeValue(membership.action)}` : '',
+        isNonEmptyString(membership.alias) ? `Member: ${membership.alias}` : '',
+        isNonEmptyString(membership.role) ? `Role: ${membership.role}` : '',
+        Number.isSafeInteger(membership.epoch) && membership.epoch >= 0 ? `Epoch: ${membership.epoch}` : '',
+      ].filter(Boolean);
+      return systemLine(kind, 'Membership', text || membershipFallback(membership), {
+        ...common, authoredBy: author.name, presentation: 'membership', details,
+      });
+    }
+
+    case 'room_file': {
+      const filename = isNonEmptyString(body.filename) ? body.filename : 'Shared file';
+      const details = [
+        isNonEmptyString(body.mime) ? `Type: ${body.mime}` : '',
+        Number.isSafeInteger(body.size) && body.size >= 0 ? `Size: ${formatBytes(body.size)}` : '',
+        isNonEmptyString(body.sha256) ? `SHA-256: ${boundedToken(body.sha256)}` : '',
+      ].filter(Boolean);
+      return systemLine(kind, 'Room file', filename, {
+        ...common, authoredBy: author.name, role: author.role,
+        presentation: 'file', details,
+      });
+    }
 
     case 'room_not_member':
       // The content-free bounce: there is no text field on the wire at all.
-      return systemLine(kind, 'Room', 'You are no longer a member of this room.');
+      return systemLine(kind, 'Room access', 'You are no longer a member of this room.', {
+        ...common, presentation: 'lifecycle', details: ['Status: Removed'],
+      });
 
     default:
       // A kind from a newer server than this build: show its text. Only
@@ -162,9 +211,10 @@ export function renderRoomMessage(body) {
             author: author.role && author.role !== ROOM_VOICE_ROLE ? author.name || 'Unknown member' : '',
             role: author.role && author.role !== ROOM_VOICE_ROLE ? author.role : '',
             label: author.role && author.role !== ROOM_VOICE_ROLE ? '' : humanizeRoomKind(kind),
-            text,
+            text: boundedFutureText(text),
+            ...common,
           }
-        : systemLine(kind, humanizeRoomKind(kind), `${humanizeRoomKind(kind)} from the room.`);
+        : systemLine(kind, humanizeRoomKind(kind), `${humanizeRoomKind(kind)} from the room.`, common);
   }
 }
 
@@ -177,13 +227,35 @@ export function renderRoomMessage(body) {
  */
 export function roomLineForContact(announcedContact, text) {
   if (!isCoworkRoomContact(announcedContact)) return null;
-  return renderRoomMessage(parseRoomBody(text));
+  const expectedRoomId = currentRoomMetadata(announcedContact)?.roomId ?? null;
+  const expectedLegacyRoomId = legacyRoomId(announcedContact);
+  const namedRoom = namedRoomLabel(announcedContact);
+  const body = parseRoomBodyShape(text, expectedRoomId === null && namedRoom === null);
+  if (body !== null && expectedRoomId !== null && body.room_id !== expectedRoomId) {
+    return rejectedEnvelopeLine('Room provenance mismatch');
+  }
+  if (body !== null && expectedLegacyRoomId !== null && body.room_id !== expectedLegacyRoomId) {
+    return rejectedEnvelopeLine('Room provenance mismatch');
+  }
+  return renderRoomMessage(body);
+}
+
+function normalizedRoomName(value) {
+  if (typeof value !== 'string' || /[\p{Cc}\p{Cf}]/u.test(value)) return null;
+  const name = value.trim().normalize('NFC');
+  const length = Array.from(name).length;
+  return length >= 1 && length <= MAX_ROOM_NAME_CHARACTERS ? name : null;
 }
 
 function legacyRoomId(announced) {
   if (typeof announced !== 'string' || !announced.startsWith(LEGACY_ROOM_IDENTITY_PREFIX)) return null;
   const roomId = announced.slice(LEGACY_ROOM_IDENTITY_PREFIX.length);
   return LOWER_CROCKFORD_ULID.test(roomId) ? roomId : null;
+}
+
+function namedRoomLabel(announced) {
+  if (typeof announced !== 'string' || !announced.startsWith(NAMED_ROOM_IDENTITY_PREFIX)) return null;
+  return normalizedRoomName(announced.slice(NAMED_ROOM_IDENTITY_PREFIX.length));
 }
 
 function currentRoomMetadata(announced) {
@@ -208,7 +280,8 @@ export function isCoworkRoomContact(announced) {
     && identity.slice(ROOM_IDENTITY_PREFIX.length).trim().length > 0;
   // v0.4 historically tolerated outer whitespace. Current and legacy ULID
   // grammars are exact protocol identities and must parse the raw announcement.
-  return v04 || currentRoomMetadata(announced) !== null || legacyRoomId(announced) !== null;
+  return v04 || namedRoomLabel(announced) !== null
+    || currentRoomMetadata(announced) !== null || legacyRoomId(announced) !== null;
 }
 
 /** Safe contact-row/toast preview: ordinary contacts always keep raw content. */
@@ -217,8 +290,36 @@ export function contactMessagePreview(announcedContact, text) {
   return line ? roomMessagePreview(line) : String(text ?? '');
 }
 
-function systemLine(kind, label, text) {
-  return { variant: 'system', kind, author: '', role: '', label, text };
+function systemLine(kind, label, text, extra = {}) {
+  return { variant: 'system', kind, author: '', role: '', label, text, ...extra };
+}
+
+function humanizeValue(value) {
+  return String(value).replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
+}
+
+function formatBytes(value) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function boundedToken(value) {
+  const token = String(value);
+  return token.length <= 20 ? token : `${token.slice(0, 12)}…${token.slice(-6)}`;
+}
+
+function boundedFutureText(value) {
+  const characters = Array.from(String(value));
+  return characters.length <= MAX_FUTURE_TEXT_CHARACTERS
+    ? characters.join('')
+    : `${characters.slice(0, MAX_FUTURE_TEXT_CHARACTERS).join('')}…`;
+}
+
+function rejectedEnvelopeLine(reason) {
+  return systemLine('room_invalid', 'Room notice', 'This room envelope could not be displayed safely.', {
+    presentation: 'lifecycle', details: [`Status: ${reason}`],
+  });
 }
 
 function membershipFallback(membership) {
@@ -258,6 +359,8 @@ export function roomContactLabel(announced) {
     const shortName = identity.slice(ROOM_IDENTITY_PREFIX.length).trim();
     return shortName || null;
   }
+  const named = namedRoomLabel(announced);
+  if (named !== null) return named;
   const current = currentRoomMetadata(announced);
   if (current?.slug) {
     const readable = current.slug.replace(/-/g, ' ');

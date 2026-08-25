@@ -74,8 +74,8 @@ const roomBody = (kind, text, extra = {}) => JSON.stringify({
   version: 1,
   kind,
   room_id: '01hzyk8m0000000000000000aa',
+  room_name: 'Постоянные инвайты должны сохраняться',
   message_id: `MESSAGE-${kind}`,
-  signature: 'SIGNED-BY-ROOM',
   at: '2026-08-15T00:00:00.000Z',
   author: {
     identity: 'CID-NEVER-DISPLAYED',
@@ -106,6 +106,26 @@ const conversations = {
       ),
       date: '2026-08-15T00:03:00.000Z', read: true, wire_id: 'ROOM-SYSTEM', receipt: null,
     },
+    {
+      dir: 'in',
+      text: roomBody('room_briefing', 'Проверьте, что постоянные инвайты сохраняются после перезапуска комнаты.', { briefing_version: 7 }),
+      date: '2026-08-15T00:04:00.000Z', read: true, wire_id: 'ROOM-BRIEFING', receipt: null,
+    },
+    {
+      dir: 'in',
+      text: roomBody('room_membership', 'Рецензент покинул комнату.', { membership: { action: 'remove', alias: 'Рецензент', role: 'Reviewer', epoch: 7 } }),
+      date: '2026-08-15T00:05:00.000Z', read: true, wire_id: 'ROOM-MEMBERSHIP', receipt: null,
+    },
+    {
+      dir: 'in',
+      text: roomBody('room_file', undefined, { filename: 'отчёт.pdf', mime: 'application/pdf', size: 1536, sha256: 'a'.repeat(64), author: { identity: 'CID-NEVER-DISPLAYED', display_name: 'Builder', role: 'Builder' } }),
+      date: '2026-08-15T00:06:00.000Z', read: true, wire_id: 'ROOM-FILE', receipt: null,
+    },
+    {
+      dir: 'in',
+      text: roomBody('room_not_member', undefined, { author: undefined, at: undefined }),
+      date: '2026-08-15T00:07:00.000Z', read: true, wire_id: 'ROOM-NOT-MEMBER', receipt: null,
+    },
   ],
 };
 
@@ -119,7 +139,7 @@ try {
     if (url.pathname === '/api/build-info') return json({ name: '@ours.network/messenger-server', version: '0.1.2', sha: 'fixture' });
     if (url.pathname === '/api/contacts') return json({ contacts: [
       { name: 'Peer', container_id: 'PEER' },
-      { name: 'ours-cowork-room:release', display_name: 'Release', container_id: 'ROOM' },
+      { name: 'ours-cowork-01hzyk8m0000000000000000aa', display_name: 'Release', container_id: 'ROOM' },
     ], pending: [] });
     const pageMatch = /^\/api\/conversations\/(PEER|ROOM)\/page$/.exec(url.pathname);
     if (pageMatch) {
@@ -229,6 +249,19 @@ try {
   assert.equal(await system.locator('.room-system-at').count(), 1, 'the timestamp remains separate from rendered body content');
   assert.equal((await system.textContent()).includes('CID-NEVER-DISPLAYED'), false);
   assert.equal(await page.evaluate(() => globalThis.roomPwned), undefined, 'room-system raw HTML never executes');
+  const roomMatrix = page.locator('[id^="chat-message-ROOM-"]');
+  assert.equal(await roomMatrix.count(), 6, 'browser fixture covers every Cowork wire kind');
+  for (const id of ['ROOM-CHAT', 'ROOM-SYSTEM', 'ROOM-BRIEFING', 'ROOM-MEMBERSHIP', 'ROOM-FILE', 'ROOM-NOT-MEMBER']) {
+    const rendered = page.locator(`#chat-message-${id}`);
+    assert.equal((await rendered.textContent()).includes('{"'), false, `${id} never renders its JSON envelope`);
+    assert.equal((await rendered.textContent()).includes('CID-NEVER-DISPLAYED'), false, `${id} withholds author identity`);
+  }
+  assert.equal(await page.locator('#chat-message-ROOM-BRIEFING .room-card-name').textContent(), 'Постоянные инвайты должны сохраняться');
+  assert.equal(await page.locator('#chat-message-ROOM-BRIEFING .room-system-text').textContent(), 'Проверьте, что постоянные инвайты сохраняются после перезапуска комнаты.');
+  assert.deepEqual(await page.locator('#chat-message-ROOM-MEMBERSHIP .room-card-details li').allTextContents(),
+    ['Status: Remove', 'Member: Рецензент', 'Role: Reviewer', 'Epoch: 7']);
+  assert.equal(await page.locator('#chat-message-ROOM-FILE .room-system-text').textContent(), 'отчёт.pdf');
+  assert.equal(await page.locator('#chat-message-ROOM-NOT-MEMBER .room-system-text').textContent(), 'You are no longer a member of this room.');
   assert.equal(remoteImageRequests, 0, 'remote Markdown images never issue a request');
 
   await context.close();

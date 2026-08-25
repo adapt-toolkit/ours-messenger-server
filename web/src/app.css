@@ -344,6 +344,10 @@
   padding: 1px 5px; border-radius: var(--r-xs);
   background: var(--accent-soft); color: var(--text-2);
 }
+.room-message-room {
+  margin-bottom: 3px; color: var(--text-3); font-size: 0.66rem;
+  font-weight: 650; overflow-wrap: anywhere;
+}
 .ours-message--out .room-author-name,
 .ours-message--out .room-author-role { color: var(--on-accent); }
 .ours-message--out .room-author-role { background: color-mix(in oklab, var(--on-accent) 16%, transparent); }
@@ -365,6 +369,33 @@
 }
 .room-system-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .room-system-at { font-size: 0.64rem; color: var(--text-3); white-space: nowrap; }
+.room-briefing-card,
+.room-role-card,
+.room-membership-card,
+.room-file-card,
+.room-lifecycle-card {
+  display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 6px 12px;
+  width: min(86%, 620px); padding: 12px 14px; border-style: solid;
+  text-align: left; box-shadow: 0 8px 24px color-mix(in oklab, var(--text-1) 7%, transparent);
+}
+.room-card-name {
+  grid-column: 1 / -1; color: var(--text-1); font-family: var(--serif);
+  font-size: 1rem; line-height: 1.3; overflow-wrap: anywhere;
+}
+.room-briefing-card .room-system-text,
+.room-role-card .room-system-text,
+.room-membership-card .room-system-text,
+.room-file-card .room-system-text,
+.room-lifecycle-card .room-system-text { grid-column: 1 / -1; }
+.room-card-details {
+  grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin: 0; padding: 0; list-style: none; color: var(--text-3); font-size: 0.68rem;
+}
+.room-card-provenance {
+  grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px;
+  color: var(--text-3); font-size: 0.68rem;
+}
+.room-card-author { overflow-wrap: anywhere; }
 
 /* ============================================================
    Files, photos & voice notes (Phase A)
