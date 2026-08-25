@@ -10,7 +10,6 @@ import './onboarding.css';
 import './redesign.css';
 import './dark-v3.css';
 import './layout-v4.css';
-import './pencil-messenger.css';
 import { stripRecoveryParam } from './updateCheck.js';
 
 stripRecoveryParam();

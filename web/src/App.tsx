@@ -473,11 +473,8 @@ export function AppShell() {
   return <div className={dark ? 'theme-dark' : ''} style={{ height: '100%' }}>
     <div className="app signal-app">
       <header className="commandbar">
-        <div className="command-brand" aria-label="ours network"><span className="command-mark" aria-hidden>o</span><span>ours</span></div>
-        <div className="command-copy"><strong>Messenger</strong><span className="command-kicker">Private conversations on ours</span></div>
-        <div className={'command-health ' + (state.connection === 'live' ? 'is-live' : 'is-connecting')} role="status">
-          <span aria-hidden />{state.connection === 'live' ? 'Connected' : 'Connecting'}
-        </div>
+        <div className="command-brand" aria-label="ours network"><span>Ours</span></div>
+        <div className="command-copy"><span className="command-kicker">ours / encrypted network</span><strong>Chats</strong></div>
         <div className="command-actions">
           {installPrompt && <button className="command-action" onClick={() => void installPrompt.prompt().then(() => setInstallPrompt(null))}>Install app</button>}
           <button className="command-action" onClick={openInvites}><Icon name="plus" /><span>New chat</span></button>
@@ -532,11 +529,6 @@ export function AppShell() {
           onRemove={() => { if (selectedCid && confirm(`Remove “${selected?.name ?? 'contact'}”?`)) void api.removeContact(selectedCid).then(() => { go({ name: 'chats', contactCid: null }, chatPath(), false); return refreshSnapshot(); }).catch(showError); }}
         />
       </main>
-      <nav className="mobile-tabbar" aria-label="Primary navigation">
-        <button className="mobile-tab active" aria-current="page"><Icon name="chat" /><span>Chats</span></button>
-        <button className="mobile-tab" onClick={() => setModal('settings')}><Icon name="bell" /><span>Alerts</span></button>
-        <button className="mobile-tab" onClick={() => setModal('settings')}><Icon name="settings" /><span>Settings</span></button>
-      </nav>
       <div className="app-banners">
         {worker.offline && <div className="banner warn">Offline — reconnecting to the network…</div>}
         {state.connection !== 'live' && <div className="banner warn">{state.connection === 'retrying' ? 'Live updates interrupted — reconnecting…' : 'Connecting to live updates…'}</div>}
