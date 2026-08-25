@@ -122,6 +122,10 @@ const roomConversation = renderToStaticMarkup(<Conversation
   messages={[
     { dir: 'in', text: roomEnvelope('room_msg', '## Pair result\n**approved**\n1. evidence'), date: '2026-08-15T00:00:00Z', read: true, wireId: 'ROOM-CHAT', replyTo: null },
     { dir: 'in', text: roomEnvelope('room_role_briefing', '# Fleet task\n- audit\n- ship', { briefing_role: 'Secretary', briefing_version: 2 }), date: '2026-08-15T00:01:00Z', read: true, wireId: 'ROOM-SYSTEM', replyTo: null },
+    { dir: 'in', text: roomEnvelope('room_briefing', 'Проверьте, что постоянные инвайты сохраняются после перезапуска комнаты.', { room_name: 'Постоянные инвайты должны сохраняться', briefing_version: 7 }), date: '2026-08-15T00:02:00Z', read: true, wireId: 'ROOM-BRIEFING', replyTo: null },
+    { dir: 'in', text: roomEnvelope('room_membership', 'Рецензент покинул комнату.', { membership: { action: 'remove', alias: 'Рецензент', role: 'Reviewer', epoch: 7 } }), date: '2026-08-15T00:03:00Z', read: true, wireId: 'ROOM-MEMBERSHIP', replyTo: null },
+    { dir: 'in', text: roomEnvelope('room_file', '', { filename: 'отчёт.pdf', mime: 'application/pdf', size: 1536, sha256: 'a'.repeat(64) }), date: '2026-08-15T00:04:00Z', read: true, wireId: 'ROOM-FILE', replyTo: null },
+    { dir: 'in', text: roomEnvelope('room_not_member', '', { author: undefined, at: undefined }), date: '2026-08-15T00:05:00Z', read: true, wireId: 'ROOM-NOT-MEMBER', replyTo: null },
   ]}
   onBack={() => {}} onSend={async () => {}} onRemove={() => {}} onRename={() => {}}
 />);
@@ -131,7 +135,7 @@ assert.match(roomConversation, /room-author-name[^>]*>Secretary<\//,
 assert.match(roomConversation, /<h2>Pair result<\/h2>/,
   'a signed room_msg tool/result body uses the shared Markdown renderer');
 assert.match(roomConversation, /<strong>approved<\/strong>/);
-assert.match(roomConversation, /class="room-system" role="note"/,
+assert.match(roomConversation, /class="room-system room-role-card" role="note"/,
   'Fleet system output keeps the accessible room-note wrapper');
 assert.match(roomConversation, /room-system-label[^>]*>Role briefing · Secretary · v2<\//,
   'the authenticated Fleet label remains separate from body Markdown');
@@ -140,5 +144,18 @@ assert.match(roomConversation, /room-system-text message-markdown[^>]*data-rende
 assert.match(roomConversation, /<h1>Fleet task<\/h1>/);
 assert.match(roomConversation, /room-system-at/, 'the system timestamp remains a separate child');
 assert.doesNotMatch(roomConversation, /CID-NEVER-DISPLAYED/, 'room rendering never exposes author.identity');
+assert.match(roomConversation, /room-briefing-card/, 'common briefing has its dedicated card');
+assert.match(roomConversation, /Постоянные инвайты должны сохраняться/, 'exact Unicode room_name is retained');
+assert.match(roomConversation, /Проверьте, что постоянные инвайты сохраняются после перезапуска комнаты\./,
+  'Russian room_briefing payload is retained exactly');
+assert.match(roomConversation, /room-membership-card/);
+assert.match(roomConversation, /Status: Remove/);
+assert.match(roomConversation, /Epoch: 7/);
+assert.match(roomConversation, /room-file-card/);
+assert.match(roomConversation, /отчёт\.pdf/);
+assert.match(roomConversation, /Size: 1\.5 KiB/);
+assert.match(roomConversation, /room-lifecycle-card/);
+assert.match(roomConversation, /You are no longer a member of this room\./);
+assert.doesNotMatch(roomConversation, /\{&quot;kind&quot;/, 'no supported room envelope renders as JSON');
 
 console.log('components OK — canonical timeline and ordinary/room/Fleet Markdown paths preserve source and accessibility');

@@ -1006,6 +1006,7 @@ export function Conversation(props: {
               // change, an operator notice. Centred, unbubbled, unmistakably
               // not a person talking, and never replied to.
               if (room && room.variant === 'system') {
+                const presentation = room.presentation ?? 'system';
                 return (
                   <motion.div
                     className="message-motion"
@@ -1016,10 +1017,19 @@ export function Conversation(props: {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                   >
-                    <div className="room-system" role="note">
+                    <div className={`room-system room-${presentation}-card`} role="note">
                       {room.label && <span className="room-system-label">{room.label}</span>}
+                      {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
                       <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
-                      <span className="room-system-at">{fmtTime(m.date)}</span>
+                      {!!room.details?.length && (
+                        <ul className="room-card-details" aria-label="Room event details">
+                          {room.details.map((detail) => <li key={detail}>{detail}</li>)}
+                        </ul>
+                      )}
+                      <span className="room-card-provenance">
+                        {room.authoredBy && <span className="room-card-author">{room.authoredBy}</span>}
+                        <span className="room-system-at">{fmtTime(room.authoredAt || m.date)}</span>
+                      </span>
                     </div>
                   </motion.div>
                 );
@@ -1090,14 +1100,17 @@ export function Conversation(props: {
                           ALIAS the server put on the wire — the real identity
                           never reaches the client. */}
                       {room && !contTop && (
-                        <div className="room-author">
-                          <span className="room-author-name">{room.author}</span>
-                          {room.role && <span className="room-author-role">{room.role}</span>}
-                        </div>
+                        <>
+                          {room.roomName && <div className="room-message-room">{room.roomName}</div>}
+                          <div className="room-author">
+                            <span className="room-author-name">{room.author}</span>
+                            {room.role && <span className="room-author-role">{room.role}</span>}
+                          </div>
+                        </>
                       )}
                       <MessageMarkdown text={room ? room.text : m.text} />
                       <div className="bubble-at">
-                        {fmtTime(m.date)}
+                        {fmtTime(room?.authoredAt || m.date)}
                         {m.dir === 'out' && <MessageReceipt receipt={m.receipt} receiptless={m.receiptless} />}
                       </div>
                     </div>
