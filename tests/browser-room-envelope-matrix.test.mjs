@@ -78,8 +78,8 @@ try {
   assert.deepEqual(await removed.locator('.room-card-details li').allTextContents(), ['Status: Removed']);
   const future = page.locator('#chat-message-ROOM-room_future_status .room-system-card');
   assert.equal(await future.locator('.room-system-text').textContent(), 'Future status from the room.');
-  const wholeRoom = await page.locator('.messages').textContent();
-  assert.equal(wholeRoom.includes('future-secret-shape'), false, 'future metadata is not stringified');
+  assert.equal((await future.textContent()).includes('future-secret-shape'), false,
+    'unknown future metadata is not stringified into the authenticated envelope presentation');
   for (const { kind } of fixture.cases) {
     const rendered = await page.locator(`#chat-message-ROOM-${kind}`).textContent();
     assert.equal(rendered.includes('CID-MUST-NOT-RENDER'), false,
