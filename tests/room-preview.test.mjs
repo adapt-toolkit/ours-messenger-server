@@ -159,6 +159,9 @@ t.eq(pageFor(ROOM, [msg('{"version":1,"kind":"room_msg"', 1)]).preview, '{"versi
      'and a malformed body in a room is left as the text it is, rather than half-parsed');
 t.eq(pageFor(ROOM, [msg('just a sentence', 1)]).preview, 'just a sentence',
      'a plain sentence in a room stays a plain sentence');
+const outgoingRoomShape = { ...msg(roomBody({ kind: 'room_msg', text: 'typed by me' }), 1), dir: 'out' };
+t.eq(pageFor(ROOM, [outgoingRoomShape]).preview, outgoingRoomShape.text,
+     'outgoing room-shaped JSON stays literal because it has no authenticated room authorship');
 
 // ---- 3. the preview tracks the NEWEST entry, not the page window ------------
 const many = Array.from({ length: 60 }, (_, i) => msg(roomBody({ kind: 'room_msg', text: `line ${i}` }), i));

@@ -143,6 +143,9 @@ export function projectPage(
 
 function previewOf(announcedContact: string, newest: ConversationMessage | undefined): string {
   if (!newest) return '';
+  // Only inbound history is authenticated as authored by the room contact.
+  // A user may type JSON to a room; it remains their literal outgoing text.
+  if (newest.dir !== 'in') return newest.text;
   return contactMessagePreview(announcedContact, newest.text) as string;
 }
 

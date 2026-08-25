@@ -667,7 +667,9 @@ export function Conversation(props: {
         message,
         message.kind === 'file'
           ? null
-          : roomLineForContact(contact?.announcedName ?? '', message.text),
+          : message.dir === 'in'
+            ? roomLineForContact(contact?.announcedName ?? '', message.text)
+            : null,
       );
     }
     return lines;

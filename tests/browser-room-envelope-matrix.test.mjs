@@ -24,6 +24,10 @@ const roomMessages = fixture.cases.map(({ kind, body }, index) => ({
   dir: 'in', text: JSON.stringify(body), date: `2026-08-25T11:${String(index).padStart(2, '0')}:00.000Z`,
   read: true, wire_id: `ROOM-${kind}`, receipt: null,
 }));
+roomMessages.push({
+  dir: 'out', text: JSON.stringify({ ...fixture.cases[0].body, text: 'typed by me' }),
+  date: '2026-08-25T11:08:00.000Z', read: true, wire_id: 'ROOM-OUTGOING-JSON', receipt: null,
+});
 const ordinaryJson = JSON.stringify(fixture.cases[0].body);
 
 const browser = await chromium.launch({ headless: true });
@@ -77,7 +81,12 @@ try {
   const wholeRoom = await page.locator('.messages').textContent();
   assert.equal(wholeRoom.includes('CID-MUST-NOT-RENDER'), false, 'author identity bytes are never rendered');
   assert.equal(wholeRoom.includes('future-secret-shape'), false, 'future metadata is not stringified');
-  assert.equal(wholeRoom.includes('{"version"'), false, 'no room envelope renders as raw JSON');
+  for (const { kind } of fixture.cases) {
+    assert.equal((await page.locator(`#chat-message-ROOM-${kind}`).textContent()).includes('{"version"'), false,
+      `${kind} received from the authenticated room never renders as raw JSON`);
+  }
+  assert.equal(await page.locator('#chat-message-ROOM-OUTGOING-JSON .message-markdown').textContent(),
+    roomMessages.at(-1).text, 'outgoing JSON remains literal and cannot impersonate authenticated room provenance');
 
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('#chat-message-PEER-JSON .message-markdown').textContent(), ordinaryJson, 'ordinary 1:1 JSON remains ordinary message text');
