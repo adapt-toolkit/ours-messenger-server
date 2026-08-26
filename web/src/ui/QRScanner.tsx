@@ -123,13 +123,21 @@ export function QRScanner(props: {
   };
 
   return (
-    <div data-testid="qr-scanner" className="qr-scanner">
+    <div
+      data-testid="qr-scanner"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        padding: '12px 0',
+      }}
+    >
       {(state === 'requesting' || state === 'scanning') && (
         <>
-          <p className="muted qr-scanner-note">
+          <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
             {state === 'requesting' ? 'Requesting camera…' : 'Point your camera at the QR code.'}
           </p>
-          <div className="qr-scanner-viewport">
+          <div style={{ position: 'relative', borderRadius: 8, overflow: 'hidden', background: '#000', minHeight: 200 }}>
             {/* Hidden canvas for frame capture — not shown to the user */}
             <canvas
               ref={canvasRef}
@@ -142,11 +150,18 @@ export function QRScanner(props: {
               data-testid="scanner-video"
               muted
               playsInline
-              className="qr-scanner-video"
+              style={{ width: '100%', display: 'block', borderRadius: 8 }}
             />
             {state === 'scanning' && (
-              <div className="qr-scanner-guide">
-                <div className="qr-scanner-target" />
+              <div style={{
+                position: 'absolute', inset: 0, pointerEvents: 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <div style={{
+                  width: 160, height: 160, borderRadius: 12,
+                  border: '2px solid var(--accent)',
+                  boxShadow: '0 0 0 9999px rgba(0,0,0,0.4)',
+                }} />
               </div>
             )}
           </div>
@@ -180,7 +195,7 @@ export function QRScanner(props: {
 
       {state === 'error' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <p className="qr-scanner-error">
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--danger, #e53)' }}>
             Camera error: {errMsg || 'unknown error'}. Paste the invite text below instead.
           </p>
         </div>

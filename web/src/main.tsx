@@ -5,7 +5,9 @@ import '@fontsource-variable/jetbrains-mono';
 import './theme.css';
 import './motion.css';
 import './app.css';
+import './onboarding.css';
 import './redesign.css';
+import './dark-v3.css';
 import './layout-v4.css';
 import { stripRecoveryParam } from './updateCheck.js';
 

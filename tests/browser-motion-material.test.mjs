@@ -10,6 +10,7 @@ assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the
 const motionSource = readFileSync(join(repo, 'web/src/motion.css'), 'utf8');
 const chatsSource = readFileSync(join(repo, 'web/src/ui/Chats.tsx'), 'utf8');
 const themeSource = readFileSync(join(repo, 'web/src/theme.css'), 'utf8');
+const darkSource = readFileSync(join(repo, 'web/src/dark-v3.css'), 'utf8');
 const layoutSource = readFileSync(join(repo, 'web/src/layout-v4.css'), 'utf8');
 const redesignSource = readFileSync(join(repo, 'web/src/redesign.css'), 'utf8');
 assert.doesNotMatch(motionSource, /listcol-scroll\s*>|animation-delay/, 'contact rows have no mount/filter/live-update stagger');
@@ -17,8 +18,9 @@ assert.match(themeSource, /--ease-soft:\s*var\(--ease-interface\)/);
 assert.match(themeSource, /--dur-1:\s*var\(--dur-immediate\)/);
 assert.match(themeSource, /--dur-2:\s*var\(--dur-standard\)/);
 assert.match(themeSource, /--dur-3:\s*var\(--dur-emphasis\)/);
+assert.match(darkSource, /--v3-ease:\s*var\(--ease-interface\)/);
 assert.doesNotMatch(motionSource, /var\(--(?:ease-soft|dur-[123])\)/, 'motion utilities consume the canonical timing family directly');
-assert.doesNotMatch(`${layoutSource}\n${redesignSource}`, /\b(?:160|170|180|220|280)ms\b/, 'primary Messenger surfaces contain no independent legacy timing values');
+assert.doesNotMatch(`${darkSource}\n${layoutSource}\n${redesignSource}`, /\b(?:160|170|180|220|280)ms\b/, 'primary Messenger surfaces contain no independent legacy timing values');
 const jumpRule = layoutSource.match(/\.jump-latest\s*\{([^}]*)\}/)?.[1] ?? '';
 assert.doesNotMatch(jumpRule, /background:|backdrop-filter:|blur\(14px\)/, 'Jump latest consumes the centralized named material owner without a later override');
 assert.match(chatsSource, /transition=\{interfaceSpring\}/, 'Framer transform owners use the exported interface spring');

@@ -51,14 +51,7 @@ function renderMermaid(id: string, source: string, theme: MermaidTheme) {
       theme,
       fontFamily: 'var(--sans)',
     });
-    try {
-      return await mermaid.render(id, source);
-    } finally {
-      // Mermaid mounts a temporary `d<id>` node while parsing. On a syntax
-      // error v11 can leave its large error artifact attached to the body.
-      document.getElementById(id)?.remove();
-      document.getElementById(`d${id}`)?.remove();
-    }
+    return mermaid.render(id, source);
   });
   mermaidRenderQueue = render.then(() => undefined, () => undefined);
   return render;
@@ -201,7 +194,6 @@ function MermaidFullscreen(props: { svg: string; theme: MermaidTheme; onClose: (
 
 function MermaidDiagram({ source }: { source: string }) {
   const rawId = useId();
-  const expandRef = useRef<HTMLButtonElement>(null);
   const [svg, setSvg] = useState('');
   const [error, setError] = useState('');
   const [renderedTheme, setRenderedTheme] = useState<MermaidTheme>('default');
@@ -235,7 +227,6 @@ function MermaidDiagram({ source }: { source: string }) {
     <>
       <div className="markdown-mermaid" data-mermaid-theme={renderedTheme}>
         <button
-          ref={expandRef}
           className="icon-btn markdown-mermaid-expand"
           aria-label="View diagram fullscreen"
           title="View diagram fullscreen"
@@ -246,10 +237,7 @@ function MermaidDiagram({ source }: { source: string }) {
         <div className="markdown-mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
       </div>
       {fullscreen && (
-        <MermaidFullscreen svg={svg} theme={renderedTheme} onClose={() => {
-          setFullscreen(false);
-          requestAnimationFrame(() => expandRef.current?.focus());
-        }} />
+        <MermaidFullscreen svg={svg} theme={renderedTheme} onClose={() => setFullscreen(false)} />
       )}
     </>
   );

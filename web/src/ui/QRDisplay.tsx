@@ -15,7 +15,7 @@ export function QRDisplay(props: { text: string; size?: number }) {
     void import('qrcode').then((QRCode) => {
       void QRCode.toCanvas(canvas, text, {
         width: size,
-        margin: 4,
+        margin: 2,
         errorCorrectionLevel: 'M',
         color: { dark: '#000000', light: '#ffffff' },
       });
@@ -23,14 +23,24 @@ export function QRDisplay(props: { text: string; size?: number }) {
   }, [text, size]);
 
   return (
-    <div className="qr-display">
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        margin: '8px 0',
+      }}
+    >
       <canvas
         ref={canvasRef}
         data-testid="qr-canvas"
         data-invite={text}
         width={size}
         height={size}
-        className="qr-canvas"
+        style={{
+          borderRadius: 8,
+          border: '1px solid var(--line)',
+          imageRendering: 'pixelated',
+        }}
       />
     </div>
   );
