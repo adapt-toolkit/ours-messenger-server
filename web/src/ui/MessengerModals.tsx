@@ -6,6 +6,7 @@ import { Icon } from './icons.js';
 import { QRDisplay } from './QRDisplay.js';
 import { QRScanner } from './QRScanner.js';
 import { fmtFull, shortCid } from './viewmodel.js';
+import { Tabs } from './Tabs.js';
 
 export function InviteModal(props: {
   identity: IdentityView;
@@ -40,15 +41,19 @@ export function InviteModal(props: {
     finally { busyRef.current = false; setBusy(false); }
   };
 
-  const tabs = (
-    <div className="modal-tabs" role="tablist" aria-label="Invite mode">
-      <button type="button" role="tab" aria-selected={tab === 'generate'} className={'btn sm' + (tab === 'generate' ? ' primary' : '')} onClick={() => setTab('generate')}>Generate invite</button>
-      <button type="button" role="tab" aria-selected={tab === 'accept'} className={'btn sm' + (tab === 'accept' ? ' primary' : '')} onClick={() => setTab('accept')}>Accept invite</button>
-    </div>
-  );
+  const tabs = <Tabs
+    className="modal-tabs"
+    label="Invite mode"
+    options={[{ id: 'generate', label: 'Generate invite' }, { id: 'accept', label: 'Accept invite' }] as const}
+    value={tab}
+    onChange={setTab}
+    idPrefix="invite-tab"
+    panelId="invite-panel"
+  />;
 
   return (
     <DialogShell title={tab === 'generate' ? 'Invite a contact' : 'Accept an invite'} onClose={() => { if (!busyRef.current) props.onClose(); }} tabs={tabs}>
+      <div id="invite-panel" role="tabpanel" aria-labelledby={`invite-tab-${tab}`}>
       {tab === 'generate' && !inviteText && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
           <p className="muted" data-testid="invite-identity" style={{ margin: 0, fontSize: '0.85rem' }}>Creating as <strong>{props.identity.name}</strong> · <span className="mono">@{shortCid(props.identity.cid)}</span></p>
@@ -89,6 +94,7 @@ export function InviteModal(props: {
         <button className="btn primary" type="submit" disabled={busy || !pasted.trim()}>{busy ? 'Connecting…' : 'Add contact'}</button>
         {note && <p className="muted">{note}</p>}{error && <p className="onb-error">{error}</p>}
       </form>}
+      </div>
     </DialogShell>
   );
 }

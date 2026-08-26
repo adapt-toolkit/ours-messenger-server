@@ -119,6 +119,7 @@
   right: var(--deck-gutter);
   left: auto;
   bottom: auto;
+  transform-origin: top right;
 }
 
 /* ----- shared decks ----- */
@@ -355,7 +356,7 @@
     opacity: 0.72;
     border: 0;
     border-radius: 0;
-    transition: transform 280ms var(--v3-ease), opacity 220ms ease;
+    transition: transform var(--dur-emphasis) var(--ease-interface), opacity var(--dur-standard) var(--ease-interface);
   }
 
   .signal-stage.show-detail > .detail,
@@ -364,7 +365,9 @@
     opacity: 1;
   }
 
-  .signal-stage .detail-head { min-height: 58px; padding: 7px 10px; }
+  /* Reserve the header's syncing-status height so refresh feedback never
+     pushes the conversation viewport down for a single frame. */
+  .signal-stage .detail-head { min-height: 82px; padding: 7px 10px; }
   .signal-stage .detail-back { display: inline-grid; }
   .signal-stage .messages-inner { padding: 17px 10px 14px; }
   .signal-stage .composer { margin: 8px; }
@@ -669,4 +672,243 @@
   .shared-media-list.photos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .conv-actions .btn { padding-inline: 8px; }
   .conv-actions .btn:first-child { font-size: 0; gap: 0; }
+}
+
+/* Pointer-down feedback is immediate and shared. Contact rows deliberately use
+   this CSS path instead of Framer whileTap so transform ownership is singular. */
+:is(.btn, .icon-btn, .rail-btn, .contact-row:not(.pending), .tab, .voice-play, .command-me):active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 0s;
+}
+
+:is(.btn:not(.primary), .icon-btn, .rail-btn, .contact-row:not(.pending), .tab, .command-me):active:not(:disabled) {
+  background-color: var(--surface-3);
+}
+
+:is(.btn.primary, .voice-play):active:not(:disabled) {
+  background-color: var(--accent-deep);
+}
+
+@media (pointer: coarse) {
+  :is(.btn, .btn.sm, .icon-btn, .rail-btn, .command-me, .tab, .voice-play, .composer .voice-btn, .pending-actions .linkbtn) {
+    /* Accessibility invariant: late theme-specific width declarations must
+       not shrink coarse-pointer hit boxes below the platform target. */
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
+  /* The seek control owns a comfortable box while its visible rail remains
+     thin. Waveforms retain their 34px drawing area inside the same hit box. */
+  .voice-track.seekable {
+    height: 44px;
+    background: transparent;
+  }
+
+  .voice-track.seekable::before {
+    content: '';
+    position: absolute;
+    inset: 19px 0;
+    border-radius: 99px;
+    background: color-mix(in oklab, currentColor 18%, transparent);
+  }
+
+  .voice-track.seekable .voice-track-fill {
+    position: absolute;
+    z-index: 1;
+    top: 19px;
+    height: 6px;
+  }
+
+  .voice-track.seekable.has-wave::before { display: none; }
+  .voice-track.seekable.has-wave .voice-wave { inset-block: 5px; }
+  .voice-track.seekable.has-wave .voice-track-fill { top: 5px; height: 34px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.btn, .icon-btn, .rail-btn, .contact-row:not(.pending), .tab, .voice-play, .command-me):active:not(:disabled) {
+    transform: none;
+    transition: none;
+  }
+
+  html { scroll-behavior: auto; }
+
+  :is(.anim-rise, .anim-scale, .listcol-scroll > *, .modal, .modal-backdrop, .menu) {
+    animation: none !important;
+  }
+
+  .attachment-processing::before,
+  .conv-sync-dot,
+  .dot.on,
+  .presence-dot {
+    animation: none !important;
+  }
+
+  :is(
+    .signal-stage > .detail, .section > .detail, .command-menu,
+    .bubble-wrap, .swipe-cue, .message-motion, .contact-row,
+    .modal, .modal-backdrop, .idcard, .banner
+  ) {
+    transition-duration: 0.01ms !important;
+  }
+
+  :is(.contact-row, .message-motion) { transform: none !important; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :is(.commandbar, .detail-head, .composer, .command-menu, .modal, .idcard, .banner, .pop-backdrop, .modal-backdrop) {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .commandbar,
+  .composer,
+  .command-menu,
+  .modal,
+  .idcard { background: var(--surface) !important; }
+
+  .detail-head { background: var(--surface-2) !important; }
+  .banner { background: var(--surface-2) !important; }
+  .pop-backdrop,
+  .modal-backdrop { background: color-mix(in srgb, var(--bg) 72%, var(--text) 28%) !important; }
+}
+
+@media (prefers-contrast: more) {
+  :is(.commandbar, .detail-head, .composer, .command-menu, .modal, .idcard) {
+    background: var(--surface) !important;
+    border-color: var(--text) !important;
+  }
+
+  :is(.btn, .icon-btn, .tab, .field, .contact-row, .banner) {
+    border-color: currentColor !important;
+  }
+
+  :is(.tab[aria-selected='true'], .contact-row.active) {
+    outline: 2px solid currentColor;
+    outline-offset: -2px;
+  }
+}
+
+@media (forced-colors: active) {
+  :is(.commandbar, .detail-head, .composer, .command-menu, .modal, .idcard, .btn, .icon-btn, .tab, .field, .contact-row, .banner) {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  :is(.tab[aria-selected='true'], .contact-row.active) {
+    border: 2px solid Highlight;
+    font-weight: 750;
+  }
+
+  :is(.banner, .conv-sync) {
+    border-left: 4px solid CanvasText !important;
+    padding-left: 0.65rem;
+  }
+
+  :is(button, [role='button'], [role='tab'], input, textarea):focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  :is(.contact-unread, .rail-badge, .count) {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+    border: 1px solid HighlightText;
+  }
+}
+
+/* Platform typography: semantic roles own their tracking and leading while the
+   browser remains in control of the root text size. */
+:is(.command-copy strong, .listcol-title, .conv-peer-name, .modal-head h3, .summary-title, .onb-h) {
+  font-family: var(--font);
+  font-optical-sizing: auto;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+:is(.contact-time, .bubble-at, .voice-dur, .idchip, .conv-sync, .chip) {
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+}
+
+:is(.bubble-text, .message-markdown, .room-card-body, .modal-description) {
+  font-family: var(--font);
+  font-optical-sizing: auto;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+/* These labels are interface navigation, not protocol/code material. */
+:is(.command-kicker, .group-label) { font-family: var(--font); }
+
+/* Named material owners only. Materials are static; motion belongs to
+   compositor-friendly opacity/transform entrance rules. */
+:is(.commandbar, .detail-head, .composer) {
+  background: var(--material-chrome);
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(115%);
+  backdrop-filter: blur(var(--material-blur)) saturate(115%);
+}
+
+:is(.command-menu, .idcard, .jump-latest) {
+  background: var(--material-chrome);
+  -webkit-backdrop-filter: blur(var(--material-blur));
+  backdrop-filter: blur(var(--material-blur));
+}
+
+.modal { background: var(--material-solid); transform-origin: center; }
+.modal-backdrop { background: var(--material-overlay); }
+.idcard { transform-origin: top left; }
+
+@media (hover: hover) and (pointer: fine) {
+  .contact-row:not(.pending):hover { background-color: var(--surface-2); }
+}
+
+@media (max-width: 640px) {
+  .modal { transform-origin: bottom center; }
+}
+
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 14px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.unread-divider::before,
+.unread-divider::after { content: ''; height: 1px; flex: 1; background: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+.signal-stage > .detail { position: relative; }
+.jump-latest {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: calc(var(--composer-h, 76px) + 18px);
+  transform: translateX(-50%);
+  border-color: var(--line);
+  box-shadow: var(--shadow-md);
+}
+
+.jump-latest:active:not(:disabled) { transform: translateX(-50%) scale(0.97); }
+.jump-latest-count {
+  display: inline-grid;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
+  place-items: center;
+  padding-inline: 0.3rem;
+  border-radius: 99px;
+  background: var(--accent);
+  color: var(--accent-contrast, white);
+}
+
+.messages:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .jump-latest { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
 }

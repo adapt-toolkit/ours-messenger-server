@@ -16,6 +16,8 @@ import { MessageReceipt } from './MessageReceipt';
 import { MessageMarkdown } from './MessageMarkdown';
 import { ApiError } from '../api';
 import { AnimatePresence, motion } from 'framer-motion';
+import DialogShell from './DialogShell';
+import { interfaceSpring } from './motionSystem';
 import {
   groupConversationsByIdentity,
   readConversationListMode,
@@ -36,36 +38,54 @@ function ContactRow(props: {
   active: boolean;
   grouped?: boolean;
   onClick: () => void;
+  onApprove?: () => Promise<boolean>;
+  onReject?: () => Promise<boolean>;
 }) {
   const { c, active, grouped } = props;
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const decide = async (action: (() => Promise<boolean>) | undefined, target: HTMLButtonElement) => {
+    if (!action || decisionBusy) return;
+    setDecisionBusy(true);
+    try {
+      const removed = await action();
+      requestAnimationFrame(() => {
+        if (removed) document.getElementById('chat-list-title')?.focus();
+        else target.focus();
+      });
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+  const contents = <>
+    <span className="contact-avatar" aria-hidden>{c.initials}</span>
+    <span className="contact-copy">
+      <span className="contact-row-topline">
+        <span className="contact-name">{c.name}</span>
+        {c.when && <span className="contact-time">{c.when}</span>}
+      </span>
+      <span className="contact-row-bottomline">
+        <span className="contact-last">{c.last}</span>
+        {c.status === 'pending' && <span className="chip">pending approval</span>}
+        {!!c.unread && <span className="contact-unread">{c.unread}</span>}
+      </span>
+    </span>
+    {c.status === 'pending' && <span className="pending-actions" role="group" aria-label={`Decide whether to accept ${c.name}`}>
+      <button type="button" className="linkbtn" disabled={decisionBusy} onClick={(event) => void decide(props.onApprove, event.currentTarget)}>Approve</button>
+      <button type="button" className="linkbtn quiet" disabled={decisionBusy} onClick={(event) => void decide(props.onReject, event.currentTarget)}>Reject</button>
+    </span>}
+    {active && <motion.span className="contact-active-glow" layoutId="active-contact" transition={interfaceSpring} />}
+  </>;
+  const className = 'contact-row' + (active ? ' active' : '') + (grouped ? ' grouped' : '') + (c.status === 'pending' ? ' pending' : '');
+  if (c.status === 'pending') {
+    return <div className={className}>{contents}</div>;
+  }
   return (
     <motion.button
       type="button"
-      layout
-      className={
-        'contact-row' +
-        (active ? ' active' : '') +
-        (grouped ? ' grouped' : '') +
-        (c.status === 'pending' ? ' pending' : '')
-      }
+      className={className}
       onClick={props.onClick}
-      whileHover={{ x: 3 }}
-      whileTap={{ scale: 0.985 }}
-      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
     >
-      <span className="contact-avatar" aria-hidden>{c.initials}</span>
-      <span className="contact-copy">
-        <span className="contact-row-topline">
-          <span className="contact-name">{c.name}</span>
-          {c.when && <span className="contact-time">{c.when}</span>}
-        </span>
-        <span className="contact-row-bottomline">
-          <span className="contact-last">{c.last}</span>
-          {c.status === 'pending' && <span className="chip">invited</span>}
-          {!!c.unread && <span className="contact-unread">{c.unread}</span>}
-        </span>
-      </span>
-      {active && <motion.span className="contact-active-glow" layoutId="active-contact" />}
+      {contents}
     </motion.button>
   );
 }
@@ -77,6 +97,8 @@ export function ChatList(props: {
   onSelect: (id: string) => void;
   onInvite: () => void;
   onSettings: () => void;
+  onApprovePending: (cid: string) => Promise<boolean>;
+  onRejectPending: (cid: string) => Promise<boolean>;
 }) {
   const { contacts, roots, selected } = props;
   const [q, setQ] = useState('');
@@ -121,7 +143,7 @@ export function ChatList(props: {
     <div className="listcol">
       <div className="listcol-head">
         <div className="listcol-titlebar">
-          <h2 className="listcol-title">Chats</h2>
+          <h2 id="chat-list-title" className="listcol-title" tabIndex={-1}>Chats</h2>
           <div className="listcol-actions">
             <button className="btn sm primary" onClick={props.onInvite}>
               <Icon name="plus" size={15} />
@@ -202,7 +224,14 @@ export function ChatList(props: {
             </div>
             <div className="conversation-group">
               {pending.map((c) => (
-                <ContactRow key={c.id} c={c} active={false} onClick={() => {}} />
+                <ContactRow
+                  key={c.id}
+                  c={c}
+                  active={false}
+                  onClick={() => {}}
+                  onApprove={() => props.onApprovePending(c.id.slice('pending:'.length))}
+                  onReject={() => props.onRejectPending(c.id.slice('pending:'.length))}
+                />
               ))}
             </div>
           </div>
@@ -243,8 +272,11 @@ function SwipeReplyRow(props: {
   rowClass?: string; // full msg-row modifier string (dir + grouping); defaults to dir
 }) {
   const { dir, canReply, onReply } = props;
+  const row = useRef<HTMLDivElement>(null);
   const slider = useRef<HTMLDivElement>(null);
   const cue = useRef<HTMLDivElement>(null);
+  const onReplyRef = useRef(onReply);
+  onReplyRef.current = onReply;
   const toCenter = dir === 'out' ? -1 : 1; // sign of a valid (toward-centre) drag
   const ACTIVATE = 8; // px of travel before we commit to horizontal vs vertical
   const THRESH = 56; // px to arm the reply
@@ -262,8 +294,38 @@ function SwipeReplyRow(props: {
     }
   };
 
+  const clearGesture = (pointerId: number, commit: boolean) => {
+    const s = st.current;
+    if (s.id !== pointerId) return;
+    const fire = commit && s.mode === 'drag' && s.armed;
+    // Clear ownership before releasePointerCapture: releasing can synchronously
+    // dispatch lostpointercapture, whose cleanup must remain idempotent.
+    st.current = { id: -1, x0: 0, y0: 0, mode: 'idle', armed: false };
+    slider.current?.classList.remove('swiping');
+    cue.current?.classList.remove('armed');
+    paint(0);
+    const owner = row.current;
+    if (owner?.hasPointerCapture?.(pointerId)) owner.releasePointerCapture(pointerId);
+    if (fire) onReplyRef.current();
+  };
+
+  useEffect(() => {
+    const owner = row.current;
+    if (!owner) return;
+    // React's synthetic lost-capture event is not delivered consistently by
+    // every touch/pen path. Listen at the capture owner as the native source of
+    // truth; the React handler below is a harmless idempotent fallback.
+    const lost = (event: PointerEvent) => clearGesture(event.pointerId, false);
+    owner.addEventListener('lostpointercapture', lost);
+    return () => {
+      owner.removeEventListener('lostpointercapture', lost);
+      const pointerId = st.current.id;
+      if (pointerId !== -1) clearGesture(pointerId, false);
+    };
+  }, []);
+
   const onDown = (e: React.PointerEvent) => {
-    if (!canReply || e.pointerType === 'mouse') return;
+    if (!canReply || e.pointerType === 'mouse' || st.current.id !== -1) return;
     st.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', armed: false };
   };
   const onMove = (e: React.PointerEvent) => {
@@ -277,6 +339,7 @@ function SwipeReplyRow(props: {
       // else (vertical, or a wrong-way drag) releases the gesture back to scroll.
       if (Math.abs(dxr) > Math.abs(dyr) && Math.sign(dxr) === toCenter) {
         s.mode = 'drag';
+        e.currentTarget.setPointerCapture?.(e.pointerId);
         slider.current?.classList.add('swiping');
       } else {
         s.mode = 'idle';
@@ -298,24 +361,19 @@ function SwipeReplyRow(props: {
     paint(dx);
   };
   const onUp = (e: React.PointerEvent) => {
-    const s = st.current;
-    if (s.id !== e.pointerId) return;
-    const fire = s.mode === 'drag' && s.armed;
-    st.current = { id: -1, x0: 0, y0: 0, mode: 'idle', armed: false };
-    slider.current?.classList.remove('swiping');
-    cue.current?.classList.remove('armed');
-    paint(0); // spring back (transition re-enabled with .swiping removed)
-    if (fire) onReply();
+    clearGesture(e.pointerId, true);
   };
 
   return (
     <div
+      ref={row}
       className={'msg-row ' + (props.rowClass ?? dir)}
       style={canReply ? { touchAction: 'pan-y' } : undefined}
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
-      onPointerCancel={onUp}
+      onPointerCancel={(e) => clearGesture(e.pointerId, false)}
+      onLostPointerCapture={(e) => clearGesture(e.pointerId, false)}
     >
       {canReply && (
         <span className="swipe-cue" ref={cue} aria-hidden>
@@ -335,6 +393,7 @@ export function Conversation(props: {
   // A bounded page of the history, newest-last. `hiddenEarlier` is how many
   // older entries exist above the page; onLoadEarlier widens the window.
   messages: ChatMessage[];
+  unreadOpen?: { wireId: string; count: number } | null;
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
   onBack: () => void;
@@ -370,6 +429,8 @@ export function Conversation(props: {
   // header: inline rename + the verified-identity popover
   const [editingName, setEditingName] = useState<string | null>(null);
   const [showIdCard, setShowIdCard] = useState(false);
+  const idChipRef = useRef<HTMLButtonElement>(null);
+  const idCardRef = useRef<HTMLDivElement>(null);
   // attachments: picked/recorded file awaiting send; active voice recording
   const [pendingAtt, setPendingAtt] = useState<PendingAttachment | null>(null);
   const [voiceActive, setVoiceActive] = useState(false); // hold-to-record in progress
@@ -381,6 +442,10 @@ export function Conversation(props: {
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const sendingRef = useRef(false);
   const messageScrollRef = useRef<HTMLDivElement>(null);
+  const unreadPlacedRef = useRef(false);
+  const [jumpLatest, setJumpLatest] = useState(false);
+  const [newSinceAway, setNewSinceAway] = useState(0);
+  const jumpMeasureFrameRef = useRef<number | null>(null);
   const pinnedToBottomRef = useRef(true);
   const previousContactRef = useRef<string | null>(null);
   const fileReadGenerationRef = useRef(0);
@@ -396,6 +461,24 @@ export function Conversation(props: {
   const followTargetRef = useRef<number | null>(null);
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
+  const newestMessageRef = useRef<string | null>(null);
+  const identityDetailsAsDialog = typeof window !== 'undefined' && window.matchMedia('(max-width: 860px)').matches;
+
+  const closeIdentityDetails = (restoreFocus = false) => {
+    setShowIdCard(false);
+    if (restoreFocus) requestAnimationFrame(() => idChipRef.current?.focus());
+  };
+  useEffect(() => {
+    if (!showIdCard || identityDetailsAsDialog) return;
+    idCardRef.current?.querySelector<HTMLButtonElement>('.idcard-close')?.focus();
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeIdentityDetails(true);
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [showIdCard, identityDetailsAsDialog]);
 
   useEffect(() => {
     setDraft('');
@@ -478,6 +561,18 @@ export function Conversation(props: {
     else scroller.scrollTop = target;
   };
 
+  const measureJumpLatest = () => {
+    if (jumpMeasureFrameRef.current !== null) return;
+    jumpMeasureFrameRef.current = requestAnimationFrame(() => {
+      jumpMeasureFrameRef.current = null;
+      const scroller = messageScrollRef.current;
+      if (!scroller) return;
+      const away = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 48;
+      setJumpLatest(away);
+      if (!away) setNewSinceAway(0);
+    });
+  };
+
   // The custom timeline owns its scroll behavior. Every opened/switched thread
   // starts at the newest message. Subsequent messages follow only while the
   // reader is already near the bottom, so reading history is never interrupted.
@@ -491,8 +586,13 @@ export function Conversation(props: {
     const scroller = messageScrollRef.current;
     if (!scroller) return;
     const switched = previousContactRef.current !== contact.id;
-    const grew = displayMessages.length !== messageCountRef.current;
+    const previousCount = messageCountRef.current;
+    const grew = displayMessages.length !== previousCount;
+    const newestMessage = displayMessages.at(-1);
+    const newestKey = newestMessage ? (newestMessage.wireId || `${newestMessage.date}:${newestMessage.text}`) : null;
+    const previousNewest = newestMessageRef.current;
     messageCountRef.current = displayMessages.length;
+    newestMessageRef.current = newestKey;
     // When nothing was added the scroller itself is the authority on where the
     // reader is. Scroll events arrive a frame late, and this component
     // re-renders on every refresh, so a stale "pinned" left over from before
@@ -503,9 +603,25 @@ export function Conversation(props: {
     if (switched || pinnedToBottomRef.current) {
       followBottom(grew && !switched && previousContactRef.current !== null);
       pinnedToBottomRef.current = true;
+    } else if (grew && displayMessages.length > previousCount && newestKey !== previousNewest) {
+      const previousIndex = previousNewest === null ? -1 : displayMessages.findIndex((message) =>
+        (message.wireId || `${message.date}:${message.text}`) === previousNewest);
+      setNewSinceAway((count) => count + Math.max(1, displayMessages.length - Math.max(0, previousIndex + 1)));
     }
     previousContactRef.current = contact.id;
+    measureJumpLatest();
   }, [contact, displayMessages.length]);
+
+  useLayoutEffect(() => {
+    if (unreadPlacedRef.current || !props.unreadOpen || window.location.hash.startsWith('#chat-message-')) return;
+    const scroller = messageScrollRef.current;
+    const target = document.getElementById(`unread-${timelineMessageId(props.unreadOpen.wireId)}`);
+    if (!scroller || !target) return;
+    scroller.scrollTop = Math.max(0, target.offsetTop - 16);
+    pinnedToBottomRef.current = false;
+    unreadPlacedRef.current = true;
+    measureJumpLatest();
+  }, [props.unreadOpen, displayMessages.length]);
 
   useLayoutEffect(() => {
     const hash = window.location.hash;
@@ -544,13 +660,17 @@ export function Conversation(props: {
       // is not a new message: follow it instantly, unless an animated follow is
       // already running, in which case retarget it instead of cutting it off.
       if (pinnedToBottomRef.current) followBottom(followTargetRef.current !== null);
+      measureJumpLatest();
     });
     observer.observe(content);
     // Composer/reply rows and mobile browser chrome resize the viewport without
     // changing the timeline content. Observe both boxes so an intentionally
     // pinned reader stays on the newest message through those interactions.
     observer.observe(scroller);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (jumpMeasureFrameRef.current !== null) cancelAnimationFrame(jumpMeasureFrameRef.current);
+    };
   }, [contact?.id]);
 
   const acceptFile = async (f: File) => {
@@ -808,13 +928,13 @@ export function Conversation(props: {
                 full story. The raw 'role X of Y' subtitle read like a broken
                 name; it is actually the anti-impersonation proof. */}
             {!props.syncing && (contact.roleId ? (
-              <button className="idchip" onClick={() => setShowIdCard(true)}>
+              <button ref={idChipRef} className="idchip" aria-haspopup="dialog" aria-expanded={showIdCard} aria-controls="identity-details" onClick={() => setShowIdCard(true)}>
                 <Icon name="shield" size={11} />
                 verified role of {contact.rootName}
               </button>
             ) : (
               contact.status !== 'pending' && (
-                <button className="idchip quiet" onClick={() => setShowIdCard(true)}>
+                <button ref={idChipRef} className="idchip quiet" aria-haspopup="dialog" aria-expanded={showIdCard} aria-controls="identity-details" onClick={() => setShowIdCard(true)}>
                   <Icon name="lock" size={11} />
                   verified identity
                 </button>
@@ -822,27 +942,23 @@ export function Conversation(props: {
             ))}
           </div>
         </div>
-        {showIdCard && (
+        {showIdCard && (identityDetailsAsDialog ? (
+          <DialogShell title="Verified identity" onClose={() => closeIdentityDetails(true)} className="identity-details-modal" contentId="identity-details">
+            {contact.roleId && <p>This is the role <strong>“{contact.roleId}”</strong> of <strong>{contact.rootName}</strong> — the link is cryptographically signed, not self-declared.</p>}
+            <div className="idcard-fp mono">{contact.id}</div>
+            <p className="idcard-note">This id is the fingerprint of their key. Names are what people show you; the fingerprint is what guarantees you&apos;re always talking to the same identity — no one can impersonate it. Renaming only changes how they appear to you.</p>
+          </DialogShell>
+        ) : (
           <>
-            <div className="pop-backdrop" onClick={() => setShowIdCard(false)} />
-            <div className="idcard anim-scale">
-              <h4>Verified identity</h4>
-              {contact.roleId && (
-                <p>
-                  This is the role <strong>“{contact.roleId}”</strong> of{' '}
-                  <strong>{contact.rootName}</strong> — the link is cryptographically signed, not
-                  self-declared.
-                </p>
-              )}
+            <div className="pop-backdrop" aria-hidden="true" onClick={() => closeIdentityDetails(true)} />
+            <div id="identity-details" ref={idCardRef} className="idcard anim-scale" role="dialog" aria-modal="false" aria-labelledby="identity-details-title">
+              <div className="idcard-head"><h4 id="identity-details-title">Verified identity</h4><button className="icon-btn idcard-close" aria-label="Close verified identity" onClick={() => closeIdentityDetails(true)}><Icon name="close" size={16} /></button></div>
+              {contact.roleId && <p>This is the role <strong>“{contact.roleId}”</strong> of <strong>{contact.rootName}</strong> — the link is cryptographically signed, not self-declared.</p>}
               <div className="idcard-fp mono">{contact.id}</div>
-              <p className="idcard-note">
-                This id is the fingerprint of their key. Names are what people show you; the
-                fingerprint is what guarantees you&apos;re always talking to the same identity — no
-                one can impersonate it. Renaming only changes how they appear to you.
-              </p>
+              <p className="idcard-note">This id is the fingerprint of their key. Names are what people show you; the fingerprint is what guarantees you&apos;re always talking to the same identity — no one can impersonate it. Renaming only changes how they appear to you.</p>
             </div>
           </>
-        )}
+        ))}
         <div className="conv-actions">
           <button className="btn sm" title="Shared photos, files, and links" onClick={() => setShowSharedMedia(true)}>
             <Icon name="paperclip" size={14} />
@@ -858,6 +974,8 @@ export function Conversation(props: {
         key={contact.id}
         className="messages"
         ref={messageScrollRef}
+        tabIndex={-1}
+        aria-label="Conversation timeline"
         onScroll={(e) => {
           const el = e.currentTarget;
           const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
@@ -880,6 +998,7 @@ export function Conversation(props: {
             followTopRef.current = null;
           }
           pinnedToBottomRef.current = distance <= 48;
+          measureJumpLatest();
         }}
         // Any deliberate gesture hands scrolling back to the reader, even
         // mid-animation, so an interrupted follow can never latch.
@@ -973,8 +1092,9 @@ export function Conversation(props: {
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
-                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    transition={interfaceSpring}
                   >
+                    {m.wireId === props.unreadOpen?.wireId && <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>}
                     <div className={`room-system room-${presentation}-card`} role="note">
                       {room.label && <span className="room-system-label">{room.label}</span>}
                       {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
@@ -1010,8 +1130,9 @@ export function Conversation(props: {
                     initial={{ opacity: 0, y: 12, scale: 0.985 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    transition={interfaceSpring}
                   >
+                    {m.wireId === props.unreadOpen?.wireId && <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>}
                     <SwipeReplyRow
                       dir={m.dir === 'out' ? 'out' : 'in'}
                       rowClass={grpCls}
@@ -1036,8 +1157,9 @@ export function Conversation(props: {
                   initial={{ opacity: 0, y: 12, scale: 0.985 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.98 }}
-                  transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                  transition={interfaceSpring}
                 >
+                  {m.wireId === props.unreadOpen?.wireId && <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>}
                   <SwipeReplyRow
                     dir={m.dir === 'out' ? 'out' : 'in'}
                     rowClass={grpCls}
@@ -1080,6 +1202,22 @@ export function Conversation(props: {
           <div className="thread-end" aria-hidden />
         </div>
       </div>
+      {jumpLatest && (
+        <button
+          type="button"
+          className="jump-latest btn sm"
+          aria-label={newSinceAway ? `Jump to latest, ${newSinceAway} new messages` : 'Jump to latest'}
+          onClick={(event) => {
+            const restoreFocus = event.currentTarget === document.activeElement;
+            setNewSinceAway(0);
+            followBottom(true);
+            if (restoreFocus) requestAnimationFrame(() => messageScrollRef.current?.focus({ preventScroll: true }));
+          }}
+        >
+          <span>Jump to latest</span>
+          {!!newSinceAway && <span className="jump-latest-count" aria-live="polite">{newSinceAway}</span>}
+        </button>
+      )}
       {error && (
         <div className="banner error" role="alert">
           {error}
@@ -1206,7 +1344,7 @@ export function Conversation(props: {
             setPreviewRec(rec);
           }}
           onJump={(key) => {
-            document.getElementById(timelineMessageId(key))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.getElementById(timelineMessageId(key))?.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
             setShowSharedMedia(false);
           }}
         />

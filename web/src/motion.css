@@ -1,6 +1,6 @@
 /* ============================================================
    ours — motion system
-   One easing family (--ease-soft), three speeds (--dur-1/2/3).
+   One canonical CSS family (--ease-interface, --dur-immediate/standard/emphasis).
    Everything here is decorative: it must all collapse cleanly
    under prefers-reduced-motion.
    ============================================================ */
@@ -49,24 +49,13 @@
   }
 
   /* shared utilities */
-  .anim-rise  { animation: rise-in var(--dur-2) var(--ease-soft) both; }
-  .anim-scale { animation: scale-in var(--dur-1) var(--ease-soft) both; }
+  .anim-rise  { animation: rise-in var(--dur-standard) var(--ease-interface) both; }
+  .anim-scale { animation: scale-in var(--dur-immediate) var(--ease-interface) both; }
 
-  /* list rows settle in with a light stagger on first paint */
-  .listcol-scroll > * { animation: rise-in var(--dur-2) var(--ease-soft) both; }
-  .listcol-scroll > *:nth-child(1)  { animation-delay: 0ms; }
-  .listcol-scroll > *:nth-child(2)  { animation-delay: 22ms; }
-  .listcol-scroll > *:nth-child(3)  { animation-delay: 44ms; }
-  .listcol-scroll > *:nth-child(4)  { animation-delay: 66ms; }
-  .listcol-scroll > *:nth-child(5)  { animation-delay: 88ms; }
-  .listcol-scroll > *:nth-child(6)  { animation-delay: 110ms; }
-  .listcol-scroll > *:nth-child(7)  { animation-delay: 132ms; }
-  .listcol-scroll > *:nth-child(8)  { animation-delay: 154ms; }
-  .listcol-scroll > *:nth-child(n+9) { animation-delay: 176ms; }
-
-  .modal { animation: scale-in var(--dur-1) var(--ease-soft) both; }
-  .modal-backdrop { animation: rise-in var(--dur-1) linear both; }
-  .menu  { animation: scale-in var(--dur-1) var(--ease-soft) both; transform-origin: bottom left; }
+  /* Conversation rows are available immediately; live filtering/grouping does
+     not replay a delayed first-paint cascade. Dialog animation is owned by the
+     Radix surface rules in redesign.css. */
+  .menu  { animation: scale-in var(--dur-immediate) var(--ease-interface) both; }
 
   .dot.on { animation: pulse-soft 3.2s ease-in-out infinite; }
 }

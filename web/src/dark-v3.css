@@ -4,7 +4,7 @@
  */
 
 :root {
-  --v3-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --v3-ease: var(--ease-interface);
 }
 
 .theme-dark {
@@ -185,7 +185,7 @@
   font-size: 0.68rem;
   font-weight: 640;
   letter-spacing: -0.01em;
-  transition: color 180ms ease, background 180ms ease, border-color 180ms ease, transform 180ms var(--v3-ease);
+  transition: color var(--dur-standard) var(--ease-interface), background var(--dur-standard) var(--ease-interface), border-color var(--dur-standard) var(--ease-interface), transform var(--dur-standard) var(--ease-interface);
 }
 
 .theme-dark .rail-btn .ic { width: 21px; height: 21px; }
@@ -304,7 +304,7 @@
   border: 1px solid rgba(220,255,233,0.1);
   border-radius: 15px;
   background: rgba(255,255,255,0.028);
-  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+  transition: border-color var(--dur-standard) var(--ease-interface), background var(--dur-standard) var(--ease-interface);
 }
 
 .theme-dark .search:focus-within {
@@ -337,7 +337,7 @@
   text-align: left;
   overflow: hidden;
   cursor: pointer;
-  transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  transition: background var(--dur-standard) var(--ease-interface), border-color var(--dur-standard) var(--ease-interface);
 }
 
 .theme-dark .contact-row:hover {
@@ -350,6 +350,9 @@
   background: linear-gradient(105deg, rgba(77,240,130,0.13), rgba(77,240,130,0.035));
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), 0 10px 30px rgba(0,0,0,0.16);
 }
+
+.theme-dark .contact-row.pending { cursor: default; }
+.theme-dark .contact-row.pending:hover { border-color: transparent; background: transparent; }
 
 .theme-dark .contact-row.grouped {
   width: calc(100% - 10px);
@@ -734,7 +737,7 @@
   background: rgba(20, 27, 23, 0.84);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.045), 0 18px 50px rgba(0,0,0,0.34);
   backdrop-filter: blur(26px) saturate(140%);
-  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms var(--v3-ease);
+  transition: border-color var(--dur-standard) var(--ease-interface), transform var(--dur-standard) var(--ease-interface);
 }
 
 .theme-dark .composer:focus-within {
@@ -786,7 +789,7 @@
   background: linear-gradient(145deg, #54f58b, #27c961);
   color: #041208;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 10px 28px rgba(27,205,91,0.24);
-  transition: transform 160ms var(--v3-ease), filter 160ms ease, opacity 160ms ease;
+  transition: transform var(--dur-immediate) var(--ease-interface), opacity var(--dur-immediate) var(--ease-interface);
 }
 
 .theme-dark .composer .btn.primary:hover:not(:disabled) {
@@ -816,7 +819,7 @@
   background: rgba(255,255,255,0.035);
   color: #c8d2cc;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
-  transition: transform 160ms var(--v3-ease), background 160ms ease, border-color 160ms ease;
+  transition: transform var(--dur-immediate) var(--ease-interface), background var(--dur-immediate) var(--ease-interface), border-color var(--dur-immediate) var(--ease-interface);
 }
 
 .theme-dark .btn:hover:not(:disabled) {
@@ -847,7 +850,7 @@
   border: 1px solid transparent;
   border-radius: 13px;
   color: #7f8c84;
-  transition: transform 160ms var(--v3-ease), color 160ms ease, background 160ms ease, border-color 160ms ease;
+  transition: transform var(--dur-immediate) var(--ease-interface), color var(--dur-immediate) var(--ease-interface), background var(--dur-immediate) var(--ease-interface), border-color var(--dur-immediate) var(--ease-interface);
 }
 
 .theme-dark .icon-btn:hover {
@@ -889,7 +892,7 @@
 
 .theme-dark :is(.cluster-row,.monitor-row) {
   border-radius: 18px;
-  transition: transform 170ms var(--v3-ease), background 170ms ease, border-color 170ms ease;
+  transition: transform var(--dur-immediate) var(--ease-interface), background var(--dur-immediate) var(--ease-interface), border-color var(--dur-immediate) var(--ease-interface);
 }
 
 .theme-dark :is(.cluster-row,.monitor-row):hover {
@@ -1196,7 +1199,7 @@
   .theme-dark .section .mon-wrap,
   .theme-dark .section .cluster-detail-wrap {
     background: #0a0e0c;
-    transition: transform 280ms var(--v3-ease), opacity 220ms ease;
+    transition: transform var(--dur-emphasis) var(--ease-interface), opacity var(--dur-standard) var(--ease-interface);
     opacity: 0.7;
   }
 
@@ -1287,6 +1290,12 @@ html:not(.theme-dark) .contact-row {
 html:not(.theme-dark) .contact-row:hover {
   border-color: var(--line-soft);
   background: var(--surface);
+}
+
+html:not(.theme-dark) .contact-row.pending:hover {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 html:not(.theme-dark) .contact-row.active {
@@ -1380,7 +1389,8 @@ html:not(.theme-dark) .messages {
   min-height: 0;
   gap: 0;
   padding: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--surface-2);
 }
 
@@ -1426,12 +1436,5 @@ html:not(.theme-dark) .bubble-text { white-space: pre-wrap; overflow-wrap: anywh
 html:not(.theme-dark) .thread-end { height: 1px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .theme-dark *,
-  .theme-dark *::before,
-  .theme-dark *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+  /* The final cascade owns the selector-scoped preference policy. */
 }
