@@ -47,7 +47,7 @@ const installRoutes = async (context) => context.route('**/api/**', async (route
   const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   if (url.pathname === '/api/identity') return json({ name: 'An extensively named local identity for text scaling', cid: 'ME-CID-' + 'B'.repeat(56) });
   if (url.pathname === '/api/build-info') return json({ name: 'messenger', version: 'test', sha: 'fixture' });
-  if (url.pathname === '/api/contacts') return json({ contacts: [{ name: longName, container_id: cid }], pending: [] });
+  if (url.pathname === '/api/contacts') return json({ contacts: [{ name: longName, container_id: cid }], pending: [{ name: 'Critic pending approval with a long identity name', container_id: 'PENDING', queued: 1 }] });
   if (url.pathname.endsWith('/page')) return json({ contact: cid, messages: [{ dir: 'in', text: 'Readable body text with `functional code` and a deliberately long unbroken identifier ' + 'C'.repeat(90), date: '2026-08-26T09:00:00.000Z', read: true, wire_id: 'TYPE-1', receipt: null }], total: 1, unread: 0, hasMore: false, nextBefore: null });
   if (url.pathname.endsWith('/files')) return json({ contact: cid, files: [] });
   if (url.pathname.endsWith('/read')) return json({ contact: cid, marked: 0 });
@@ -136,11 +136,35 @@ const exercise = async (width, height, coarse) => {
   const focusStyle = await invite.evaluate((node) => getComputedStyle(node));
   assert.ok(focusStyle.outlineStyle !== 'none' && parseFloat(focusStyle.outlineWidth) >= 2, 'restored focus remains visible');
 
+  const pending = page.locator('.contact-row.pending');
+  const pendingBox = await pending.boundingBox();
+  const pendingName = pending.locator('.contact-name');
+  const nameMetrics = await pendingName.evaluate((node) => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height, clientWidth: node.clientWidth, scrollWidth: node.scrollWidth, clientHeight: node.clientHeight, scrollHeight: node.scrollHeight, whiteSpace: getComputedStyle(node).whiteSpace, textOverflow: getComputedStyle(node).textOverflow }));
+  assert.ok(pendingBox && nameMetrics.width > 0 && nameMetrics.height > 0 && nameMetrics.clientWidth > 0, `${width}px pending identity remains visible at 200%`);
+  assert.ok(nameMetrics.scrollWidth <= nameMetrics.clientWidth + 1 && nameMetrics.scrollHeight <= nameMetrics.clientHeight + 1, `${width}px pending identity is not clipped at 200%`);
+  assert.equal(nameMetrics.whiteSpace, 'normal', `${width}px pending identity wraps instead of ellipsizing`);
+  assert.equal(nameMetrics.textOverflow, 'clip', `${width}px pending identity does not use ellipsis`);
+  const metadataMetrics = await pending.locator('.contact-last').evaluate((node) => ({ clientWidth: node.clientWidth, scrollWidth: node.scrollWidth, clientHeight: node.clientHeight, scrollHeight: node.scrollHeight, whiteSpace: getComputedStyle(node).whiteSpace, textOverflow: getComputedStyle(node).textOverflow }));
+  assert.ok(metadataMetrics.clientWidth > 0 && metadataMetrics.clientHeight > 0 && metadataMetrics.scrollWidth <= metadataMetrics.clientWidth + 1 && metadataMetrics.scrollHeight <= metadataMetrics.clientHeight + 1, `${width}px pending metadata remains visible and unclipped at 200%`);
+  assert.equal(metadataMetrics.whiteSpace, 'normal', `${width}px pending metadata wraps`);
+  assert.equal(metadataMetrics.textOverflow, 'clip', `${width}px pending metadata does not use ellipsis`);
+  const actions200 = await pending.locator('.pending-actions .linkbtn').evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width, height: box.height }; }));
+  assert.equal(actions200.length, 2, `${width}px exposes both pending actions`);
+  assert.equal(overlaps(actions200[0], actions200[1]), false, `${width}px pending actions do not overlap`);
+  for (const action of actions200) {
+    assert.ok(action.left >= pendingBox.x - 0.5 && action.right <= pendingBox.x + pendingBox.width + 0.5 && action.top >= pendingBox.y - 0.5 && action.bottom <= pendingBox.y + pendingBox.height + 0.5, `${width}px pending action stays inside its row`);
+    if (coarse) assert.ok(action.width >= 43.9 && action.height >= 43.9, `${width}px pending action remains a 44px touch target`);
+  }
+  await pending.locator('.pending-actions .linkbtn').first().focus();
+  const pendingFocus = await pending.locator('.pending-actions .linkbtn').first().evaluate((node) => getComputedStyle(node));
+  assert.ok(pendingFocus.outlineStyle !== 'none' && parseFloat(pendingFocus.outlineWidth) >= 2, `${width}px pending keyboard focus is visible`);
+
   await context.close();
 };
 
 try {
   await exercise(320, 760, true);
+  await exercise(375, 812, true);
   await exercise(1280, 900, false);
   console.log('browser-typography-foundation OK — system UI ownership, local mono, semantic metrics, and 200% geometry');
 } finally {
