@@ -39,8 +39,8 @@ assert.ok(source.includes('className="room-system-text message-markdown"'), 'Fle
 assert.ok(source.includes('rel="noopener noreferrer"'), 'outbound message links isolate their new tab');
 assert.ok(source.includes('aria-label={`${content} ${presentation.label}`}'), 'receipt marks have accessible labels');
 assert.ok(
-  (css.includes('min-width:861px') || css.includes('min-width: 861px')) && css.includes('prefers-reduced-motion'),
-  'canonical 861px responsive boundary and reduced motion are explicit',
+  (css.includes('max-width:860px') || css.includes('max-width: 860px')) && css.includes('prefers-reduced-motion'),
+  'canonical 860/861px responsive boundary and reduced motion are explicit',
 );
 assert.ok(built.includes('command-settings') && built.includes('Settings'), 'mobile keeps the canonical command-bar Settings entry for Web Push');
 assert.ok(source.includes('useReducer') && source.includes("from 'react-dom/client'"), 'the browser shell is React state rendered through createRoot');

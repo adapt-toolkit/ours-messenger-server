@@ -64,7 +64,7 @@ export function InviteModal(props: {
           {kind === 'one_time' ? (
             <><p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>Optionally name the person or agent this invite is for.</p><input className="field" value={peerName} onChange={(event) => setPeerName(event.target.value)} placeholder="Their name (optional), e.g. Bob" maxLength={64} /></>
           ) : (
-            <p className="onb-warning" data-testid="public-invite-warning" style={{ margin: 0, fontSize: '0.9rem' }}>Anyone with this invite can connect until you revoke it. It has no expiry and stays valid across server restarts.</p>
+            <p className="status-warning" data-testid="public-invite-warning" style={{ margin: 0, fontSize: '0.9rem' }}>Anyone with this invite can connect until you revoke it. It has no expiry and stays valid across server restarts.</p>
           )}
           <button className="btn primary" style={{ justifyContent: 'center' }} disabled={busy} onClick={() => void create()}>{busy ? 'Generating…' : kind === 'public' ? 'Create public invite' : 'Generate invite'}</button>
           {kind === 'public' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -75,7 +75,7 @@ export function InviteModal(props: {
               {confirmRevoke === item.invite_id ? <span><button className="btn sm danger" onClick={() => void props.onRevoke(item.invite_id).then(() => { setConfirmRevoke(null); return props.onRefresh(); }).catch((reason) => setError(String(reason)))}>Confirm revoke</button> <button className="btn sm" onClick={() => setConfirmRevoke(null)}>Keep it</button></span> : <button className="btn sm" onClick={() => setConfirmRevoke(item.invite_id)}>Revoke</button>}
             </div>)}
           </div>}
-          {note && <p className="muted">{note}</p>}{error && <p className="onb-error">{error}</p>}
+          {note && <p className="muted">{note}</p>}{error && <p className="field-error">{error}</p>}
         </div>
       )}
       {tab === 'generate' && inviteText && <>
@@ -92,7 +92,7 @@ export function InviteModal(props: {
         <textarea className="field mono" aria-label="Invite" rows={5} value={pasted} onChange={(event) => setPasted(event.target.value)} placeholder="Paste invite text…" />
         <input className="field" value={renameTo} onChange={(event) => setRenameTo(event.target.value)} placeholder="Rename them (optional)" maxLength={64} />
         <button className="btn primary" type="submit" disabled={busy || !pasted.trim()}>{busy ? 'Connecting…' : 'Add contact'}</button>
-        {note && <p className="muted">{note}</p>}{error && <p className="onb-error">{error}</p>}
+        {note && <p className="muted">{note}</p>}{error && <p className="field-error">{error}</p>}
       </form>}
       </div>
     </DialogShell>
@@ -125,14 +125,14 @@ export function SettingsModal(props: {
         : props.push.status === 'repairing' ? 'Repairing — checking the browser subscription and server acknowledgement…'
           : props.push.status === 'error' ? 'Repair needed — the browser and server could not confirm the same subscription.'
             : 'Off — enable notifications for this browser.';
-  return <DialogShell title="Settings" onClose={props.onClose} wide>
+  return <DialogShell title="Settings" onClose={props.onClose} wide className="settings-modal">
     <div><span className="lbl">Display name</span><input className="field" readOnly value={props.identity.name} /></div>
     <div><span className="lbl">Your address</span><input className="field mono" readOnly value={props.identity.cid} onFocus={(event) => event.currentTarget.select()} /><p className="muted">Your public address on ours. Share an invite to connect more easily.</p></div>
-    <div><span className="lbl">Public bio</span><textarea className="field" rows={3} value={bio} onChange={(event) => { setBio(event.target.value); setSaved(false); setError(null); }} /><button className="btn sm" onClick={() => { setError(null); void props.onSaveBio(bio).then(() => setSaved(true)).catch((reason) => setError(String(reason))); }}>{saved ? 'Saved' : 'Save bio'}</button>{error && <p className="onb-error">{error}</p>}</div>
+    <div><span className="lbl">Public bio</span><textarea className="field" rows={3} value={bio} onChange={(event) => { setBio(event.target.value); setSaved(false); setError(null); }} /><button className="btn sm" onClick={() => { setError(null); void props.onSaveBio(bio).then(() => setSaved(true)).catch((reason) => setError(String(reason))); }}>{saved ? 'Saved' : 'Save bio'}</button>{error && <p className="field-error">{error}</p>}</div>
     <label style={{ display: 'flex', gap: 9 }}><input type="checkbox" checked={props.dark} onChange={props.onToggleDark} /> Dark mode</label>
     <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
       <h4>Notifications</h4>
-      <p className={props.push.status === 'needs-permission' || props.push.status === 'error' ? 'onb-error' : 'muted'}>{pushCopy}</p>
+      <p className={props.push.status === 'needs-permission' || props.push.status === 'error' ? 'field-error' : 'muted'}>{pushCopy}</p>
       {guidance && guidance !== pushCopy && <p className="muted" data-testid="push-platform-guidance">{guidance}</p>}
       <fieldset style={{ border: 0, padding: 0, margin: '12px 0' }}>
         <legend className="lbl">Lock-screen preview</legend>

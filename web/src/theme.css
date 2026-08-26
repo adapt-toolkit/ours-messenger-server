@@ -4,133 +4,68 @@
    ============================================================ */
 
 :root {
-  /* surfaces — warm ivory neutrals, never stark white */
-  --bg:          oklch(0.972 0.008 90);
-  --bg-rail:     oklch(0.952 0.010 88);
-  --surface:     oklch(0.995 0.003 95);
-  --surface-2:   oklch(0.980 0.007 92);
-  --surface-3:   oklch(0.960 0.009 90);
-  --inset:       oklch(0.955 0.009 90);
+  color-scheme: light;
+  /* Private primitives: raw palette values are intentionally confined here. */
+  --primitive-linen: #f4f1ea; --primitive-paper: #fbfaf7; --primitive-white: #ffffff;
+  --primitive-group: #eae7df; --primitive-line: #d5d4cc; --primitive-line-strong: #a8aaa3;
+  --primitive-ink: #24302c; --primitive-ink-secondary: #65716c; --primitive-ink-disabled: #8b938e;
+  --primitive-eucalyptus: #2f6f62; --primitive-eucalyptus-hover: #285f54; --primitive-dusty-blue: #496b8d;
+  --primitive-success: #3f7d63; --primitive-warning: #8a5d18; --primitive-error: #a34f45;
 
-  /* borders / lines — warm to match */
-  --line:        oklch(0.915 0.010 88);
-  --line-soft:   oklch(0.942 0.008 90);
-  --line-strong: oklch(0.868 0.012 86);
+  /* Components consume these semantic roles, never primitives. */
+  --color-canvas: var(--primitive-linen); --color-surface: var(--primitive-paper);
+  --color-surface-elevated: var(--primitive-white); --color-surface-subtle: var(--primitive-group);
+  --color-text-primary: var(--primitive-ink); --color-text-secondary: var(--primitive-ink-secondary);
+  --color-text-disabled: var(--primitive-ink-disabled); --color-text-inverse: var(--primitive-white);
+  --color-border: var(--primitive-line); --color-border-subtle: color-mix(in srgb, var(--primitive-line) 70%, transparent);
+  --color-border-strong: var(--primitive-line-strong); --color-action-primary: var(--primitive-eucalyptus);
+  --color-action-primary-hover: var(--primitive-eucalyptus-hover); --color-on-action: var(--primitive-white);
+  --color-focus: var(--primitive-eucalyptus); --color-selection: #e0ebe6; --color-info: var(--primitive-dusty-blue);
+  --color-provenance-human: #f0eee7; --color-provenance-agent: #f7f8f3; --color-provenance-system: #edf1f3;
+  --color-code-surface: #ecefe9; --color-success: var(--primitive-success); --color-success-background: #e5eee9;
+  --color-success-border: #9bb8a8; --color-warning: var(--primitive-warning); --color-warning-background: #f4ead8;
+  --color-warning-border: #c7a776; --color-error: var(--primitive-error); --color-error-background: #f4e4e1;
+  --color-error-border: #ca9b95; --color-info-background: #e5ebf0; --color-info-border: #9fb1c2;
+  --color-scrim: rgb(21 26 24 / 0.56); --material-chrome: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  /* Functional media framing, never a general surface color. */
+  --color-media-void: #000000;
+  --material-overlay: var(--color-scrim); --material-solid: var(--color-surface); --material-blur: 14px;
+  --shadow-sm: 0 1px 2px rgb(36 48 44 / 0.08); --shadow-md: 0 8px 24px rgb(36 48 44 / 0.10);
+  --shadow-lg: 0 18px 46px rgb(36 48 44 / 0.15);
+  --radius-xs: 6px; --radius-sm: 9px; --radius-md: 13px; --radius-lg: 18px; --radius-xl: 24px;
+  --ease-interface: cubic-bezier(0.22, 1, 0.36, 1); --dur-immediate: 120ms; --dur-standard: 200ms; --dur-emphasis: 320ms;
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --display: var(--font);
+  --serif: var(--font); --mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace; --pad: 1;
 
-  /* text — warm charcoal, not blue-gray */
-  --text:        oklch(0.30 0.014 75);
-  --text-2:      oklch(0.51 0.014 78);
-  --text-3:      oklch(0.65 0.012 80);
-  --text-inv:    oklch(0.99 0.004 95);
-
-  /* accent — calm teal-green, the ours mark, used sparingly.
-     Override --accent alone and the rest follow. */
-  --accent:      #2c9c8d;
-  --accent-deep: color-mix(in oklab, var(--accent) 78%, #000);
-  --accent-soft: color-mix(in oklab, var(--accent) 13%, var(--surface));
-  --accent-line: color-mix(in oklab, var(--accent) 38%, var(--line));
-  --on-accent:   oklch(0.99 0.01 178);
-
-  /* accent-2 — warm apricot: the "you" color. Identity, keys, the
-     recovery phrase, everything that belongs to the person. */
-  --accent-2:      #e08a4e;
-  --accent-2-deep: color-mix(in oklab, var(--accent-2) 72%, #000);
-  --accent-2-soft: color-mix(in oklab, var(--accent-2) 14%, var(--surface));
-  --accent-2-line: color-mix(in oklab, var(--accent-2) 40%, var(--line));
-
-  /* motion — one easing family, three speeds */
-  --ease-interface: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-immediate: 120ms;
-  --dur-standard: 200ms;
-  --dur-emphasis: 320ms;
-  /* Compatibility aliases: one timing authority, including older surfaces. */
-  --ease-soft: var(--ease-interface);
-  --dur-1: var(--dur-immediate);
-  --dur-2: var(--dur-standard);
-  --dur-3: var(--dur-emphasis);
-  --material-chrome: color-mix(in srgb, var(--surface) 92%, transparent);
-  --material-overlay: color-mix(in srgb, var(--bg) 54%, transparent);
-  --material-solid: var(--surface);
-  --material-blur: 14px;
-
-  /* the one primary action per screen gets a soft colored halo */
-  --glow-accent: 0 6px 22px color-mix(in oklab, var(--accent) 32%, transparent),
-                 0 1px 3px color-mix(in oklab, var(--accent) 22%, transparent);
-
-  /* quiet status hues — same chroma family */
-  --ok:          oklch(0.66 0.10 168);
-  --ok-soft:     oklch(0.955 0.03 168);
-  --warn:        oklch(0.72 0.10 75);
-  --warn-soft:   oklch(0.96 0.035 80);
-  --danger:      oklch(0.58 0.13 22);
-  --danger-soft: oklch(0.955 0.028 22);
-
-  /* shape & depth */
-  --r-xs: 6px;
-  --r-sm: 9px;
-  --r-md: 13px;
-  --r-lg: 18px;
-  --r-xl: 24px;
-  --shadow-sm: 0 1px 2px oklch(0.5 0.02 260 / 0.06), 0 1px 1px oklch(0.5 0.02 260 / 0.04);
-  --shadow-md: 0 4px 16px oklch(0.45 0.03 260 / 0.08), 0 1px 3px oklch(0.45 0.03 260 / 0.06);
-  --shadow-lg: 0 18px 50px oklch(0.4 0.03 260 / 0.16), 0 4px 12px oklch(0.4 0.03 260 / 0.08);
-
-  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --display: var(--font);
-  --serif: var(--font);
-  --mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
-
-  /* density (fixed for production) */
-  --pad: 1;
+  /* Compatibility aliases (40): legacy, read-only mapping during staged migration. */
+  --bg: var(--color-canvas); --bg-rail: var(--color-surface-subtle); --surface: var(--color-surface);
+  --surface-2: var(--color-surface-subtle); --surface-3: var(--color-surface-elevated); --inset: var(--color-surface-subtle);
+  --line: var(--color-border); --line-soft: var(--color-border-subtle); --line-strong: var(--color-border-strong);
+  --text: var(--color-text-primary); --text-2: var(--color-text-secondary); --text-3: var(--color-text-disabled); --text-inv: var(--color-text-inverse);
+  --accent: var(--color-action-primary); --accent-deep: var(--color-action-primary-hover); --accent-fill: var(--color-action-primary);
+  --accent-fill-hover: var(--color-action-primary-hover); --accent-soft: var(--color-selection); --accent-line: var(--color-info-border);
+  --on-accent: var(--color-on-action); --accent-2: var(--color-info); --accent-2-deep: var(--color-info);
+  --accent-2-soft: var(--color-info-background); --accent-2-line: var(--color-info-border); --ok: var(--color-success);
+  --ok-soft: var(--color-success-background); --warn: var(--color-warning); --warn-soft: var(--color-warning-background);
+  --danger: var(--color-error); --danger-soft: var(--color-error-background); --glow-accent: var(--shadow-md);
+  --r-xs: var(--radius-xs); --r-sm: var(--radius-sm); --r-md: var(--radius-md); --r-lg: var(--radius-lg); --r-xl: var(--radius-xl);
+  --ease-soft: var(--ease-interface); --dur-1: var(--dur-immediate); --dur-2: var(--dur-standard); --dur-3: var(--dur-emphasis);
 }
 
-/* ---- dark variant — warm-black, ember accents ---- */
 .theme-dark {
-  --bg:          oklch(0.205 0.010 70);
-  --bg-rail:     oklch(0.182 0.010 70);
-  --surface:     oklch(0.245 0.011 72);
-  --surface-2:   oklch(0.226 0.010 72);
-  --surface-3:   oklch(0.276 0.012 74);
-  --inset:       oklch(0.20 0.010 70);
-
-  --line:        oklch(0.33 0.012 72);
-  --line-soft:   oklch(0.29 0.011 72);
-  --line-strong: oklch(0.40 0.013 74);
-
-  --text:        oklch(0.94 0.006 85);
-  --text-2:      oklch(0.74 0.011 82);
-  --text-3:      oklch(0.60 0.012 80);
-
-  --accent:      #45c9b8;
-  --accent-deep: color-mix(in oklab, var(--accent) 88%, #fff);
-  --accent-soft: color-mix(in oklab, var(--accent) 20%, var(--surface));
-  --accent-line: color-mix(in oklab, var(--accent) 42%, var(--line));
-  --on-accent:   oklch(0.18 0.02 200);
-
-  --accent-2:      #f0a468;
-  --accent-2-deep: color-mix(in oklab, var(--accent-2) 85%, #fff);
-  --accent-2-soft: color-mix(in oklab, var(--accent-2) 18%, var(--surface));
-  --accent-2-line: color-mix(in oklab, var(--accent-2) 42%, var(--line));
-
-  --glow-accent: 0 6px 26px color-mix(in oklab, var(--accent) 38%, transparent),
-                 0 1px 3px oklch(0 0 0 / 0.4);
-
-  --ok:          oklch(0.76 0.11 168);
-  --ok-soft:     oklch(0.32 0.05 168);
-  --warn:        oklch(0.80 0.10 78);
-  --warn-soft:   oklch(0.34 0.05 75);
-  --danger:      oklch(0.70 0.14 22);
-  --danger-soft: oklch(0.33 0.06 22);
-
-  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
-  --shadow-md: 0 4px 16px oklch(0 0 0 / 0.4);
-  --shadow-lg: 0 18px 50px oklch(0 0 0 / 0.55), 0 4px 12px oklch(0 0 0 / 0.4);
-
-  /* body computes color/background at :root scope; re-anchor them here so
-     text that merely inherits (h1/h3, list titles) resolves the dark values.
-     Pre-existing bug: inherited text was charcoal-on-charcoal in dark mode. */
-  background: var(--bg);
-  color: var(--text);
+  color-scheme: dark;
+  --color-canvas: #151a18; --color-surface: #1d2421; --color-surface-elevated: #26302c; --color-surface-subtle: #202824;
+  --color-text-primary: #e8ece8; --color-text-secondary: #a6b0aa; --color-text-disabled: #758079; --color-text-inverse: #10201b;
+  --color-border: #36423d; --color-border-subtle: #2d3733; --color-border-strong: #68766f;
+  --color-action-primary: #79b7a4; --color-action-primary-hover: #8ac4b2; --color-on-action: #10201b;
+  --color-focus: #79b7a4; --color-selection: #293d36; --color-info: #91aac5;
+  --color-provenance-human: #242d29; --color-provenance-agent: #202925; --color-provenance-system: #222b30;
+  --color-code-surface: #171e1b; --color-success: #86c8a7; --color-success-background: #23372f; --color-success-border: #4f7868;
+  --color-warning: #d7aa62; --color-warning-background: #382f20; --color-warning-border: #806b45;
+  --color-error: #e29a91; --color-error-background: #3b2927; --color-error-border: #80514c;
+  --color-info-background: #28323d; --color-info-border: #536b83; --color-scrim: rgb(5 8 7 / 0.7);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.24); --shadow-md: 0 8px 24px rgb(0 0 0 / 0.28); --shadow-lg: 0 18px 46px rgb(0 0 0 / 0.38);
+  background: var(--color-canvas); color: var(--color-text-primary);
 }
 
 * { box-sizing: border-box; }
@@ -254,8 +189,7 @@ select.field { cursor: pointer; appearance: none;
 }
 .chip.role { background: var(--inset); color: var(--text-2); border-color: var(--line-soft); }
 .chip.accent { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--accent-line); }
-.chip.monitored { background: var(--warn-soft); color: color-mix(in oklab, var(--warn) 65%, #000); border-color: color-mix(in oklab, var(--warn) 40%, var(--line)); }
-.theme-dark .chip.monitored { color: var(--warn); }
+.chip.monitored { background: var(--warn-soft); color: var(--color-warning); border-color: var(--color-warning-border); }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }

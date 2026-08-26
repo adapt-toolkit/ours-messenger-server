@@ -3,11 +3,13 @@
 // generated SVG as well as its surrounding canvas in both app themes.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 
 const webRoot = resolve(process.env.OURS_BROWSER_WEB_ROOT ?? new URL('../dist/web', import.meta.url).pathname);
+const evidenceRoot = resolve(new URL('../docs/design/baselines/calm-workspace-slice-1', import.meta.url).pathname);
+mkdirSync(evidenceRoot, { recursive: true });
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the Mermaid theme gate');
 
 const types = new Map([
@@ -80,6 +82,10 @@ const markdown = [
   '  end',
   '  Note over A,R: room-oriented public API, identity stays internal',
   '```',
+  '',
+  '```mermaid',
+  'this is deliberately not valid Mermaid syntax !!!',
+  '```',
 ].join('\n');
 
 try {
@@ -120,10 +126,17 @@ try {
     await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
     await page.getByTitle('Preview markdown').click();
     await page.waitForFunction(() => (
-      document.querySelectorAll('.markdown-mermaid-diagram svg, .markdown-mermaid-error').length === 2
+      document.querySelectorAll('.markdown-mermaid-diagram svg, .markdown-mermaid-error').length === 3
     ));
     const renderErrors = await page.locator('.markdown-mermaid-error').allTextContents();
-    assert.deepEqual(renderErrors, [], `Mermaid fixture must render without errors: ${renderErrors.join(' | ')}`);
+    assert.equal(renderErrors.length, 1, 'malformed Mermaid becomes one bounded inline error');
+    assert.match(renderErrors[0], /^Mermaid error:/, 'malformed source reports a readable error without breaking valid diagrams');
+    assert.equal(await page.locator('[id^="dmermaid-"]').count(), 0, 'Mermaid leaves no temporary render node in the document');
+    const leakedErrors = await page.evaluate(() => [...document.querySelectorAll('body *')]
+      .filter((node) => node.children.length === 0 && /Syntax error in text|mermaid version/i.test(node.textContent ?? ''))
+      .filter((node) => !node.closest('.markdown-mermaid-error'))
+      .map((node) => node.textContent));
+    assert.deepEqual(leakedErrors, [], `malformed Mermaid stays bounded inline (${leakedErrors.join(' | ')})`);
 
     const facts = await page.evaluate(() => {
       const rgb = (value) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
@@ -163,6 +176,34 @@ try {
       return (0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]) / 255;
     });
     measurements.push({ mode: dark ? 'dark' : 'light', ...facts, fullscreenLuminance });
+
+    if (!dark) {
+      const viewer = page.getByRole('dialog', { name: 'Diagram viewer' });
+      await page.screenshot({ path: join(evidenceRoot, 'renderer-mermaid-fullscreen-after.png'), fullPage: true });
+      const zoom = page.locator('.mermaid-zoom-value');
+      await page.keyboard.press('+');
+      assert.equal(await zoom.textContent(), '125%', 'keyboard zoom changes the bounded viewer scale');
+      for (let step = 0; step < 20; step++) await page.keyboard.press('+');
+      assert.equal(await zoom.textContent(), '800%', 'keyboard zoom clamps at the implemented maximum');
+      for (let step = 0; step < 30; step++) await page.keyboard.press('-');
+      assert.equal(await zoom.textContent(), '25%', 'keyboard zoom clamps at the documented minimum');
+      await page.keyboard.press('0');
+      assert.equal(await zoom.textContent(), '100%', 'keyboard reset restores scale and position');
+      const viewport = page.locator('.mermaid-fullscreen-viewport');
+      const before = await page.locator('.mermaid-fullscreen-canvas').getAttribute('style');
+      const rect = await viewport.boundingBox();
+      assert.ok(rect);
+      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(rect.x + rect.width / 2 + 45, rect.y + rect.height / 2 + 30);
+      await page.mouse.up();
+      const after = await page.locator('.mermaid-fullscreen-canvas').getAttribute('style');
+      assert.notEqual(after, before, 'pointer drag pans the real fullscreen canvas');
+      await page.keyboard.press('Escape');
+      await viewer.waitFor({ state: 'detached' });
+      assert.equal(await page.locator('.markdown-mermaid-expand').first().evaluate((node) => document.activeElement === node), true,
+        'closing fullscreen restores focus to its expand trigger');
+    }
 
     await context.close();
   }

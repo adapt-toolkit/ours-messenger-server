@@ -581,7 +581,7 @@ export function AppShell() {
           <button className="icon-btn command-settings" title="Settings" aria-label="Settings" onClick={() => setModal('settings')}><Icon name="settings" /></button>
           <button
             ref={accountButtonRef}
-            className="rail-me command-me"
+            className="command-me"
             title={identity.name}
             aria-label={`${identity.name} account menu`}
             aria-haspopup="menu"
