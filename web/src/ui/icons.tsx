@@ -33,6 +33,7 @@ import {
   SlidersHorizontal,
   Trash2,
   UserRound,
+  UserRoundPlus,
   X,
   type LucideProps,
 } from 'lucide-react';
@@ -72,6 +73,7 @@ const ICONS: Record<string, ComponentType<LucideProps>> = {
   sliders: SlidersHorizontal,
   trash: Trash2,
   user: UserRound,
+  invite: UserRoundPlus,
   agent: Bot,
   network: Boxes,
 };

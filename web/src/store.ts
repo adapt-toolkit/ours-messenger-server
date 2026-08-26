@@ -68,7 +68,7 @@ export function initialState(route: AppRoute): AppState {
     replies: {},
     connection: 'connecting',
     search: '',
-    mobileDetailOpen: route.name === 'chats' && route.contactCid !== null,
+    mobileDetailOpen: (route.name === 'chats' && route.contactCid !== null) || route.name === 'contact',
     coveringDialog: false,
     dialogBusy: false,
     generatedInvite: null,
@@ -83,7 +83,7 @@ export function dialogKey(identityCid: string, contactCid: string): string {
 }
 
 export function selectedContactCid(state: AppState): string | null {
-  return state.route.name === 'chats' ? state.route.contactCid : null;
+  return state.route.name === 'chats' || state.route.name === 'contact' ? state.route.contactCid : null;
 }
 
 export function selectedDialogKey(state: AppState): string | null {
@@ -261,7 +261,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'route': return {
       ...state,
       route: action.route,
-      mobileDetailOpen: action.mobileDetailOpen ?? (action.route.name === 'chats' && action.route.contactCid !== null),
+      mobileDetailOpen: action.mobileDetailOpen ?? ((action.route.name === 'chats' && action.route.contactCid !== null) || action.route.name === 'contact'),
     };
     case 'connection': return { ...state, connection: action.connection };
     case 'search': return { ...state, search: action.search };

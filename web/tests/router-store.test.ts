@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import { chatPath, parseRoute } from '../src/router.js';
+import { chatPath, contactPath, contactReturnMode, parseRoute } from '../src/router.js';
 import { appReducer, dialogKey, initialState, pageFor } from '../src/store.js';
 import type { ConversationPage } from '../src/types.js';
 
 assert.deepEqual(parseRoute('/'), { name: 'chats', contactCid: null });
 assert.deepEqual(parseRoute('/chats'), { name: 'chats', contactCid: null });
 assert.deepEqual(parseRoute('/chats/A%2FB'), { name: 'chats', contactCid: 'A/B' });
+assert.deepEqual(parseRoute('/chats/A%2FB/contact'), { name: 'contact', contactCid: 'A/B' });
 assert.deepEqual(parseRoute('/settings'), { name: 'not_found', pathname: '/settings' });
 assert.equal(chatPath('A/B'), '/chats/A%2FB');
+assert.equal(contactPath('A/B'), '/chats/A%2FB/contact');
+assert.equal(contactReturnMode({ oursMessenger: true }), 'back', 'in-app contact return consumes its route entry');
+assert.equal(contactReturnMode(null), 'replace', 'cold contact deep link returns without adding a duplicate history entry');
 
 const contacts = { contacts: [{ name: 'Alice', container_id: 'A' }], pending: [] };
 const page: ConversationPage = {
