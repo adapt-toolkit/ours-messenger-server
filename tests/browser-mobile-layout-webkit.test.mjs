@@ -150,6 +150,7 @@ try {
         await installRoutes(desktop); const desktopPage = await desktop.newPage();
         await desktopPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' }); await desktopPage.locator('.composer textarea').waitFor();
         await settleAnimations(desktopPage);
+        await desktopPage.locator('.composer textarea').fill('Ready to send');
         const desktopSend = await desktopPage.locator('.composer .btn.primary').evaluate((button) => {
           const label = button.querySelector('.btn-label'); const icon = button.querySelector('.ic');
           const box = button.getBoundingClientRect(); const iconBox = icon.getBoundingClientRect(); const labelBox = label.getBoundingClientRect();
