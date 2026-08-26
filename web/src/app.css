@@ -285,12 +285,14 @@
   color: var(--text-3); cursor: pointer; border-radius: 50%; display: grid; place-items: center;
   transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
-/* the hover reply button is a desktop/mouse affordance; on touch the swipe
-   gesture replaces it, so hide it where there's no true hover. */
+/* Fine pointers reveal Reply on hover. Touch keeps a restrained, discoverable
+   44px action: gestures are never the only path to reply. */
 @media (hover: hover) and (pointer: fine) {
   .msg-row:hover .msg-reply { opacity: 1; }
 }
-@media (hover: none) { .msg-reply { display: none; } }
+@media (hover: none), (pointer: coarse) {
+  .msg-reply { opacity: 0.72; width: 44px; height: 44px; }
+}
 .msg-reply:hover { background: var(--surface-3); color: var(--text); }
 .msg-reply:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
 .quote {

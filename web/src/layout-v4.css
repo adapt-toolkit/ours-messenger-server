@@ -328,10 +328,11 @@
 
   .signal-stage,
   .theme-dark .signal-stage {
+    --mobile-stage-gutter: max(8px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
     position: relative;
     grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     gap: 0;
-    padding: 0;
+    padding: 0 0 var(--mobile-stage-gutter);
     border: 0;
     border-radius: 0;
   }
@@ -340,8 +341,9 @@
   .theme-dark .signal-stage > .listcol {
     grid-column: 1;
     grid-row: 1;
-    border: 0;
-    border-radius: 0;
+    margin-inline: var(--mobile-stage-gutter);
+    border: 1px solid var(--line);
+    border-radius: 18px;
     box-shadow: none;
   }
 
@@ -351,11 +353,11 @@
     z-index: 5;
     grid-column: 1;
     grid-row: 1;
-    inset: 0;
+    inset: 0 var(--mobile-stage-gutter) var(--mobile-stage-gutter);
     transform: translateX(100%);
     opacity: 0.72;
-    border: 0;
-    border-radius: 0;
+    border: 1px solid var(--line);
+    border-radius: 18px;
     transition: transform var(--dur-emphasis) var(--ease-interface), opacity var(--dur-standard) var(--ease-interface);
   }
 
@@ -885,6 +887,12 @@
 .unread-divider::after { content: ''; height: 1px; flex: 1; background: color-mix(in srgb, var(--accent) 50%, transparent); }
 
 .signal-stage > .detail { position: relative; }
+@media (max-width: 860px) {
+  /* Keep the mobile pane in the overlay geometry declared above. This comes
+     after the jump-button positioning owner so the light theme cannot revert
+     the pane to in-flow `position: relative` and leak past its right edge. */
+  .signal-stage > .detail { position: absolute; }
+}
 .jump-latest {
   position: absolute;
   z-index: 5;

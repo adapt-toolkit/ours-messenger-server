@@ -18,6 +18,7 @@ import { ApiError } from '../api';
 import { AnimatePresence, motion } from 'framer-motion';
 import DialogShell from './DialogShell';
 import { interfaceSpring } from './motionSystem';
+import { SWIPE_DISTANCE_PX, classifyReplyIntent, shouldCommitReply } from './swipeReplyCore';
 import {
   groupConversationsByIdentity,
   readConversationListMode,
@@ -258,11 +259,10 @@ const timelineMessageId = (key: string) => `chat-message-${encodeURIComponent(ke
 const reducedMotion = () =>
   typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// Swipe-to-reply: drag a bubble toward screen centre (incoming → right,
-// outgoing → left) to reply, Telegram/WhatsApp style. Touch/pen only — a mouse
-// keeps text-selection + the hover reply button (see .msg-reply, @media hover).
-// touch-action: pan-y lets the browser own vertical scroll while we own the
-// horizontal drag, so the thread never fights the gesture (verified on WebKit).
+// Swipe-to-reply: drag any eligible bubble rightward, matching the familiar
+// mobile Messenger gesture. Touch/pen only — a mouse keeps text selection and
+// the hover Reply button. `touch-action: pan-y` leaves vertical scrolling with
+// the browser until the 10px horizontal-intent threshold wins.
 function SwipeReplyRow(props: {
   dir: 'in' | 'out';
   canReply: boolean;
@@ -277,30 +277,34 @@ function SwipeReplyRow(props: {
   const cue = useRef<HTMLDivElement>(null);
   const onReplyRef = useRef(onReply);
   onReplyRef.current = onReply;
-  const toCenter = dir === 'out' ? -1 : 1; // sign of a valid (toward-centre) drag
-  const ACTIVATE = 8; // px of travel before we commit to horizontal vs vertical
-  const THRESH = 56; // px to arm the reply
+  const REPLY_DIRECTION = 1; // a familiar rightward swipe, independent of message side
+  const THRESH = SWIPE_DISTANCE_PX;
   const MAX = 84; // rubber-band cap
-  const st = useRef({ id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'maybe' | 'drag', armed: false });
+  const idleGesture = () => ({
+    id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'maybe' | 'drag', armed: false,
+    distance: 0, samples: [] as Array<{ x: number; time: number }>,
+  });
+  const st = useRef(idleGesture());
 
   const paint = (dx: number) => {
     const s = slider.current;
     const c = cue.current;
-    if (s) s.style.transform = dx ? `translateX(${dx}px)` : '';
+    const reduce = reducedMotion();
+    if (s) s.style.transform = dx && !reduce ? `translateX(${dx}px)` : '';
     if (c) {
       const p = Math.min(1, Math.abs(dx) / THRESH);
       c.style.opacity = String(p);
-      c.style.transform = `scale(${0.5 + 0.5 * p})`;
+      c.style.transform = reduce ? 'scale(1)' : `scale(${0.5 + 0.5 * p})`;
     }
   };
 
   const clearGesture = (pointerId: number, commit: boolean) => {
     const s = st.current;
     if (s.id !== pointerId) return;
-    const fire = commit && s.mode === 'drag' && s.armed;
+    const fire = commit && s.mode === 'drag' && shouldCommitReply(s.distance, s.samples);
     // Clear ownership before releasePointerCapture: releasing can synchronously
     // dispatch lostpointercapture, whose cleanup must remain idempotent.
-    st.current = { id: -1, x0: 0, y0: 0, mode: 'idle', armed: false };
+    st.current = idleGesture();
     slider.current?.classList.remove('swiping');
     cue.current?.classList.remove('armed');
     paint(0);
@@ -325,19 +329,33 @@ function SwipeReplyRow(props: {
   }, []);
 
   const onDown = (e: React.PointerEvent) => {
-    if (!canReply || e.pointerType === 'mouse' || st.current.id !== -1) return;
-    st.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', armed: false };
+    const target = e.target as Element;
+    const selection = window.getSelection?.();
+    if (!canReply || !e.isPrimary || e.pointerType === 'mouse' || e.button !== 0 || st.current.id !== -1
+      || (selection && !selection.isCollapsed)
+      || target.closest('a, button, input, textarea, select, [role="button"], audio, video, img, [draggable="true"], .filecard, .filecard-bubble, .image-bubble, .voice-bubble, .ours-message-file, .attachment')) return;
+    st.current = {
+      id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', armed: false,
+      distance: 0, samples: [{ x: e.clientX, time: e.timeStamp }],
+    };
+    paint(0);
   };
   const onMove = (e: React.PointerEvent) => {
     const s = st.current;
     if (s.id !== e.pointerId || s.mode === 'idle') return;
     const dxr = e.clientX - s.x0;
     const dyr = e.clientY - s.y0;
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed) {
+      clearGesture(e.pointerId, false);
+      return;
+    }
     if (s.mode === 'maybe') {
-      if (Math.abs(dxr) < ACTIVATE && Math.abs(dyr) < ACTIVATE) return;
-      // commit to the drag only if it's horizontal AND toward centre; anything
-      // else (vertical, or a wrong-way drag) releases the gesture back to scroll.
-      if (Math.abs(dxr) > Math.abs(dyr) && Math.sign(dxr) === toCenter) {
+      const intent = classifyReplyIntent(dxr, dyr);
+      if (intent === 'pending') return;
+      // Commit only after horizontal rightward intent wins. Until then pan-y
+      // remains browser-owned, preserving native conversation scrolling.
+      if (intent === 'drag' && Math.sign(dxr) === REPLY_DIRECTION) {
         s.mode = 'drag';
         e.currentTarget.setPointerCapture?.(e.pointerId);
         slider.current?.classList.add('swiping');
@@ -346,12 +364,17 @@ function SwipeReplyRow(props: {
         return;
       }
     }
-    // magnitude toward centre, rubber-banded past the threshold, hard-capped
-    let d = dxr * toCenter;
+    e.preventDefault();
+    const time = e.timeStamp;
+    s.samples.push({ x: e.clientX, time });
+    s.samples = s.samples.filter((sample) => time - sample.time <= 120);
+    // Rightward magnitude, rubber-banded past the threshold and hard-capped.
+    let d = dxr * REPLY_DIRECTION;
     if (d < 0) d = 0;
     if (d > THRESH) d = THRESH + (d - THRESH) * 0.35;
     d = Math.min(d, MAX);
-    const dx = d * toCenter;
+    s.distance = d;
+    const dx = d * REPLY_DIRECTION;
     const armed = Math.abs(dx) >= THRESH;
     if (armed !== s.armed) {
       s.armed = armed;
@@ -361,6 +384,12 @@ function SwipeReplyRow(props: {
     paint(dx);
   };
   const onUp = (e: React.PointerEvent) => {
+    const s = st.current;
+    if (s.id === e.pointerId && s.mode === 'drag') {
+      s.samples.push({ x: e.clientX, time: e.timeStamp });
+      s.distance = Math.max(0, e.clientX - s.x0);
+      s.armed = s.distance >= THRESH;
+    }
     clearGesture(e.pointerId, true);
   };
 
@@ -1306,6 +1335,7 @@ export function Conversation(props: {
           />
           <button
             className="btn primary"
+            aria-label="Send"
             onPointerDown={(e) => {
               // Preserve the focused textarea under the submitting touch. A
               // post-request focus() cannot reopen iOS's software keyboard.
@@ -1316,7 +1346,7 @@ export function Conversation(props: {
             title={unknownDuplicate ? 'Delivery status unknown — edit before sending again' : undefined}
           >
             <Icon name="send" size={16} />
-            Send
+            <span className="btn-label">Send</span>
           </button>
         </div>
       </div>

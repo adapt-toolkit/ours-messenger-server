@@ -1040,7 +1040,8 @@
   .cs-message-list.messages .cs-message-list__scroll-wrapper { padding: 16px 12px 14px; }
   .bubble-wrap { max-width: 86%; }
   .composer { padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
-  .composer .btn.primary { flex-basis: 44px; width: 44px; min-width: 44px; padding: 0; font-size: 0; }
+  .composer .btn.primary { flex-basis: 44px; width: 44px; min-width: 44px; padding: 0; gap: 0; }
+  .composer .btn.primary .btn-label { display: none; }
 
   .cluster-detail { padding: 16px 13px 32px; }
   .apphdr-top,
