@@ -1231,14 +1231,15 @@
   .theme-dark .composer .composer-tool,
   .theme-dark .composer .voice-btn { width: 40px; height: 40px; flex-basis: 40px; }
   .theme-dark .composer .btn.primary {
-    flex-basis: 42px;
-    width: 42px;
-    min-width: 42px;
-    height: 42px;
+    flex-basis: 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
     padding: 0;
+    gap: 0;
     border-radius: 14px;
-    font-size: 0;
   }
+  .theme-dark .composer .btn.primary .btn-label { display: none; }
 
   .theme-dark .modal,
   .theme-dark .modal.modal-wide {
