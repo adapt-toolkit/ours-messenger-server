@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Icon } from './icons';
 
@@ -10,12 +10,23 @@ export default function DialogShell(props: {
   tabs?: ReactNode;
   wide?: boolean;
   className?: string;
+  contentId?: string;
 }) {
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      const target = returnFocusRef.current;
+      if (target?.isConnected) requestAnimationFrame(() => target.focus());
+    };
+  }, []);
+
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) props.onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-backdrop" />
-        <Dialog.Content className={'modal' + (props.wide ? ' modal-wide' : '') + (props.className ? ` ${props.className}` : '')}>
+        <Dialog.Content id={props.contentId} className={'modal' + (props.wide ? ' modal-wide' : '') + (props.className ? ` ${props.className}` : '')}>
           <div className="modal-head">
             <div>
               <Dialog.Title asChild>

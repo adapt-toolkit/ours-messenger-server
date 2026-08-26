@@ -68,7 +68,7 @@
   background: linear-gradient(150deg, var(--accent-2-soft) 0%, var(--surface) 85%);
   cursor: pointer; display: grid; place-items: center;
   font-weight: 700; color: var(--accent-2-deep); font-size: 0.85rem;
-  transition: border-color var(--dur-1), box-shadow var(--dur-1), transform var(--dur-1) var(--ease-soft);
+  transition: border-color var(--dur-immediate), transform var(--dur-immediate) var(--ease-interface);
   position: relative; text-transform: uppercase;
 }
 .rail-me:hover { border-color: var(--accent-2); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
@@ -153,7 +153,7 @@
   display: flex; align-items: center; gap: 11px;
   padding: calc(9px * var(--pad)) 10px; border-radius: var(--r-md);
   cursor: pointer; position: relative;
-  transition: background var(--dur-1), box-shadow var(--dur-1);
+  transition: background var(--dur-immediate) var(--ease-interface);
   /* .row is a <button>: its auto width is fit-content, so an unbreakable
      name/preview (a raw cid) grows the button past the list column instead
      of engaging the flex ellipsis — pin it to the column width. */
@@ -227,6 +227,9 @@
   padding: 14px 16px;
 }
 .idcard h4 { margin: 0 0 6px; font-size: 0.92rem; font-weight: 720; }
+.idcard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.idcard-head h4 { margin: 0; }
+.idcard-close { flex: 0 0 auto; margin: -6px -8px 0 0; }
 .idcard p { margin: 0 0 8px; font-size: 0.84rem; color: var(--text-2); line-height: 1.5; }
 .idcard-fp {
   font-size: 0.7rem; line-height: 1.4; word-break: break-all;
@@ -600,7 +603,7 @@
    ============================================================ */
 .cluster-row {
   display: flex; align-items: center; gap: 11px; padding: calc(11px * var(--pad)) 11px;
-  border-radius: var(--r-md); cursor: pointer; transition: background var(--dur-1), box-shadow var(--dur-1);
+  border-radius: var(--r-md); cursor: pointer; transition: background var(--dur-immediate) var(--ease-interface);
 }
 .cluster-row:hover { background: var(--surface-3); }
 .cluster-row.active { background: var(--surface); box-shadow: var(--shadow-sm); border: 1px solid var(--line); }
