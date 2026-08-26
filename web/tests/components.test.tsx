@@ -87,7 +87,7 @@ const conversation = renderToStaticMarkup(<Conversation
 assert.ok(conversation.includes('&lt;img src=x onerror=alert(1)&gt;'), 'message text is escaped');
 assert.ok(!conversation.includes('<img src=x'), 'message content is never raw HTML');
 assert.match(conversation, /aria-label="Message read"/, 'receipt state is accessible');
-assert.match(conversation, /verified identity/, 'canonical identity header renders');
+assert.match(conversation, /Encrypted connection/, 'compact conversation header preserves connection provenance');
 assert.match(conversation, /Load earlier messages/, 'bounded history control renders');
 assert.match(conversation, /voice-bubble/, 'received voice renders as a canonical timeline bubble');
 assert.match(conversation, /image-bubble/, 'sent photo renders as a canonical timeline bubble');

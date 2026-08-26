@@ -97,7 +97,8 @@ try {
         const row = page.locator(`#chat-message-${id} .msg-row`); const reply = row.locator('.msg-reply'); const box = await reply.boundingBox();
         const replyStyle = await reply.evaluate((node) => ({ width: parseFloat(getComputedStyle(node).width), height: parseFloat(getComputedStyle(node).height), opacity: Number(getComputedStyle(node).opacity) }));
         assert.ok(box && replyStyle.width >= 44 && replyStyle.height >= 44 && replyStyle.opacity > 0, `${engineName} ${id} visible Reply action (${replyStyle.width}x${replyStyle.height}, opacity ${replyStyle.opacity})`);
-        await fireGesture(row, [[40, 100], [52, 101], [110, 101]]); await page.getByText('Replying to', { exact: false }).waitFor(); await page.getByTitle('Cancel reply').click();
+        const inward = id === 'MOBILE-IN' ? [[40, 100], [52, 101], [110, 101]] : [[140, 100], [128, 101], [70, 101]];
+        await fireGesture(row, inward); await page.getByText('Replying to', { exact: false }).waitFor(); await page.getByTitle('Cancel reply').click();
       }
       const incoming = page.locator('#chat-message-MOBILE-IN .msg-row');
       await fireGesture(incoming, [[40, 100], [38, 170]]);

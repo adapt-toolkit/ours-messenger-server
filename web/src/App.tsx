@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { api } from './api.js';
 import { connectEvents, dispatchLiveEvent, listenLiveEvents } from './events.js';
 import { startPresence } from './presence.js';
 import { canMarkRead, ReadCoordinator } from './readGate.js';
-import { chatPath, parseRoute, type AppRoute } from './router.js';
+import { chatPath, contactPath, contactReturnMode, parseRoute, type AppRoute } from './router.js';
 import { appReducer, initialState, pageFor, selectedContactCid, type AppAction, type AppState } from './store.js';
 import type { BuildInfoView, InviteView, MediaRecord, PushPreviewMode, PushView, ServerEvent } from './types.js';
 import {
   activateWorkerUpdate, clearPushNotifications, currentPushState, disablePush, enablePush,
   registerMessengerWorker, repairPush, startForegroundHeartbeat, type WorkerState,
 } from './pwa.js';
-import { ChatList, Conversation } from './ui/Chats.js';
+import { ChatList, ContactScreen, Conversation } from './ui/Chats.js';
 import type { ChatMessage } from './ui/chatTypes.js';
 import { clearMediaRecords, configureMediaProvider, filePreviewLabel, registerMediaRecords } from './ui/fileStore.js';
 import { contactName, fmtWhen, initials, type ContactVM, type RootMetaVM, shortCid } from './ui/viewmodel.js';
@@ -149,57 +149,11 @@ export function AppShell() {
   const [worker, setWorker] = useState<WorkerState>({ supported: false, offline: !navigator.onLine, updateAvailable: false, registration: null });
   const [push, setPush] = useState<PushView>({ status: 'unsupported', preview: 'full' });
   const [pushBusy, setPushBusy] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const accountButtonRef = useRef<HTMLButtonElement>(null);
-  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const restoreContactTriggerRef = useRef(false);
   // A cold open from a push notification asks for one specific message. Until
   // that message is on screen the app is still catching up, and it says so.
   const [anchorPending, setAnchorPending] = useState(() => window.location.hash.startsWith(ANCHOR_HASH));
   const { toasts, push: pushToast, dismiss: dismissToast, clear: clearToasts } = useMessageToasts();
-
-  const closeAccountMenu = useCallback((restoreFocus = false) => {
-    setMenuOpen(false);
-    if (restoreFocus) accountButtonRef.current?.focus();
-  }, []);
-  useEffect(() => {
-    if (!menuOpen) return;
-    requestAnimationFrame(() => accountMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus());
-  }, [menuOpen]);
-  const onAccountMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const items = [...(accountMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
-    const current = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeAccountMenu(true);
-      return;
-    }
-    if (event.key === 'Tab') {
-      event.preventDefault();
-      const backwards = event.shiftKey;
-      setMenuOpen(false);
-      requestAnimationFrame(() => {
-        const focusable = [...document.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        )].filter((element) => element.offsetParent !== null && !accountMenuRef.current?.contains(element));
-        const triggerIndex = accountButtonRef.current ? focusable.indexOf(accountButtonRef.current) : -1;
-        const destination = triggerIndex < 0
-          ? accountButtonRef.current
-          : focusable[triggerIndex + (backwards ? -1 : 1)] ?? accountButtonRef.current;
-        destination?.focus();
-      });
-      return;
-    }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || items.length === 0) return;
-    event.preventDefault();
-    const next = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? items.length - 1
-        : event.key === 'ArrowUp'
-          ? (current - 1 + items.length) % items.length
-          : (current + 1) % items.length;
-    items[next]?.focus();
-  };
 
   const dispatch = useCallback((action: AppAction) => {
     stateRef.current = appReducer(stateRef.current, action);
@@ -449,6 +403,10 @@ export function AppShell() {
       unreadOpenGeneration.current += 1;
       setUnreadOpen(null);
       dispatch({ type: 'route', route });
+      if (restoreContactTriggerRef.current && route.name === 'chats' && route.contactCid) {
+        restoreContactTriggerRef.current = false;
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-contact-trigger]')?.focus({ preventScroll: true }));
+      }
       if (route.name === 'chats' && route.contactCid) void prepareUnreadOpen(route.contactCid);
     };
     const onVisible = () => {
@@ -515,7 +473,7 @@ export function AppShell() {
   }, [converge, convergeFile, dispatch, markVisibleRead, prepareUnreadOpen, pushToast, refreshContacts, refreshSnapshot, showError, worker.registration]);
 
   const go = (route: AppRoute, path: string, mobileDetailOpen?: boolean) => {
-    window.history.pushState(null, '', path);
+    window.history.pushState({ oursMessenger: true }, '', path);
     dispatch({ type: 'route', route, mobileDetailOpen });
   };
   const selectContact = async (cid: string) => {
@@ -572,25 +530,6 @@ export function AppShell() {
 
   return <div className={dark ? 'theme-dark' : ''} style={{ height: '100%' }}>
     <div className="app signal-app">
-      <header className="commandbar">
-        <div className="command-brand" aria-label="ours network"><span>Ours</span></div>
-        <div className="command-copy"><span className="command-kicker">ours / encrypted network</span><strong>Chats</strong></div>
-        <div className="command-actions">
-          {installPrompt && <button className="command-action" onClick={() => void installPrompt.prompt().then(() => setInstallPrompt(null))}>Install app</button>}
-          <button className="command-action" onClick={openInvites}><Icon name="plus" /><span>New chat</span></button>
-          <button className="icon-btn command-settings" title="Settings" aria-label="Settings" onClick={() => setModal('settings')}><Icon name="settings" /></button>
-          <button
-            ref={accountButtonRef}
-            className="rail-me command-me"
-            title={identity.name}
-            aria-label={`${identity.name} account menu`}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-controls="account-menu"
-            onClick={() => setMenuOpen((value) => !value)}
-          >{initials(identity.name)}<span className={'conn-dot ' + (state.connection === 'live' ? 'on' : 'off')} /></button>
-        </div>
-      </header>
       <main className={'section signal-stage' + (state.mobileDetailOpen ? ' show-detail' : '')}>
         <ChatList
           contacts={viewContacts}
@@ -602,7 +541,29 @@ export function AppShell() {
           onApprovePending={async (cid) => { try { await api.respondToIntroduction(cid, 'approve'); await refreshSnapshot(); return true; } catch (error) { showError(error); return false; } }}
           onRejectPending={async (cid) => { try { await api.respondToIntroduction(cid, 'reject'); await refreshSnapshot(); return true; } catch (error) { showError(error); return false; } }}
         />
-        <Conversation
+        {state.route.name === 'contact' && selectedView ? <ContactScreen
+          contact={selectedView}
+          messages={messages}
+          onBack={() => {
+            restoreContactTriggerRef.current = true;
+            if (contactReturnMode(window.history.state) === 'back') window.history.back();
+            else {
+              window.history.replaceState({ oursMessenger: true }, '', chatPath(selectedView.id));
+              dispatch({ type: 'route', route: { name: 'chats', contactCid: selectedView.id }, mobileDetailOpen: true });
+              requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-contact-trigger]')?.focus({ preventScroll: true }));
+              restoreContactTriggerRef.current = false;
+            }
+          }}
+          onRename={(name) => void api.renameContact(selectedView.id, name).then(refreshSnapshot).catch(showError)}
+          onRemove={() => { if (confirm(`Remove “${selected?.name ?? 'contact'}”?`)) void api.removeContact(selectedView.id).then(() => { window.history.replaceState({ oursMessenger: true }, '', chatPath()); dispatch({ type: 'route', route: { name: 'chats', contactCid: null }, mobileDetailOpen: false }); return refreshSnapshot(); }).catch(showError); }}
+          onOpenMessage={(key) => {
+            go({ name: 'chats', contactCid: selectedView.id }, chatPath(selectedView.id), true);
+            requestAnimationFrame(() => document.getElementById(`chat-message-${encodeURIComponent(key)}`)?.scrollIntoView({ block: 'center' }));
+          }}
+          indexOffset={pageFor(state, selectedView.id)?.hasMore ? Math.max(1, (pageFor(state, selectedView.id)?.total ?? messages.length) - messages.length) : 0}
+          onSendText={async (text, reply) => { const sent = await api.send(selectedView.id, text, reply); await refreshPage(selectedView.id, false); return sent.wire_id ?? undefined; }}
+          onSendFile={async (att, reply) => { await api.sendFile(selectedView.id, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedView.id), refreshPage(selectedView.id, false)]); }}
+        /> : <Conversation
           key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages} syncing={syncing}
           unreadOpen={unreadOpen?.contactCid === selectedCid ? unreadOpen : null}
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
@@ -613,6 +574,7 @@ export function AppShell() {
             setUnreadOpen(null);
             go({ name: 'chats', contactCid: null }, chatPath(), false);
           }}
+          onOpenContact={() => { if (selectedCid) go({ name: 'contact', contactCid: selectedCid }, contactPath(selectedCid), true); }}
           onDraftChange={noteDraftPresence}
           onSend={async (text, reply, signal) => {
             if (!selectedCid) return;
@@ -649,9 +611,7 @@ export function AppShell() {
           }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
           onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}
-          onRename={(name) => { if (selectedCid) void api.renameContact(selectedCid, name).then(refreshSnapshot).catch(showError); }}
-          onRemove={() => { if (selectedCid && confirm(`Remove “${selected?.name ?? 'contact'}”?`)) void api.removeContact(selectedCid).then(() => { go({ name: 'chats', contactCid: null }, chatPath(), false); return refreshSnapshot(); }).catch(showError); }}
-        />
+        />}
       </main>
       <div className="app-banners">
         {worker.offline && <div className="banner warn" role="status" aria-live="polite">Offline — reconnecting to the network…</div>}
@@ -659,9 +619,8 @@ export function AppShell() {
         {worker.updateAvailable && <div className="banner info"><span role="status" aria-live="polite">A new version is available.</span><span className="banner-actions"><button className="linkbtn" onClick={() => { if (worker.registration) void activateWorkerUpdate(worker.registration); }}>Restart now</button></span></div>}
         <MessageToasts items={toasts} onDismiss={dismissToast} onOpen={(cid) => void selectContact(cid)} />
       </div>
-      {menuOpen && <><div className="pop-backdrop" aria-hidden="true" onClick={() => closeAccountMenu(true)} /><div id="account-menu" ref={accountMenuRef} className="menu command-menu" role="menu" aria-label={`${identity.name} account`} onKeyDown={onAccountMenuKeyDown}><div className="menu-head"><div className="avatar accent lg">{initials(identity.name)}</div><div><strong>{identity.name}</strong><div className="faint mono">@{shortCid(identity.cid)}</div></div></div><button className="menu-item" role="menuitem" onClick={() => { setMenuOpen(false); openInvites(); }}><Icon name="plus" />Invite a contact</button><button className="menu-item" role="menuitem" onClick={() => { setMenuOpen(false); setModal('settings'); }}><Icon name="settings" />Settings</button></div></>}
       {modal === 'invite' && <InviteModal identity={identity} invites={invites} onRefresh={async () => setInvites(await api.invites())} onCreate={async (mode, name) => { const result = await api.createInvite(mode, name); return result.blob; }} onAccept={async (invite, name) => { await api.addContact(invite, name); await refreshSnapshot(); }} onRevoke={async (id) => { await api.revokeInvite(id); }} onClose={() => { setModal(null); void refreshSnapshot(); }} />}
-      {modal === 'settings' && <SettingsModal identity={identity} push={push} workerSupported={worker.supported} busy={pushBusy} offline={worker.offline} updateAvailable={worker.updateAvailable} build={build} dark={dark} onToggleDark={() => setDark((value) => { localStorage.setItem(DARK_KEY, value ? '0' : '1'); return !value; })} onSaveBio={async (bio) => { await api.setBio(bio); await refreshSnapshot(); }} onPushAction={updatePush} onReloadUpdate={() => { if (worker.registration) void activateWorkerUpdate(worker.registration); }} onClose={() => { modalRef.current = null; setModal(null); if (selectedCid) void markVisibleRead(selectedCid); }} />}
+      {modal === 'settings' && <SettingsModal identity={identity} push={push} workerSupported={worker.supported} busy={pushBusy} offline={worker.offline} updateAvailable={worker.updateAvailable} build={build} dark={dark} onToggleDark={() => setDark((value) => { localStorage.setItem(DARK_KEY, value ? '0' : '1'); return !value; })} onSaveBio={async (bio) => { await api.setBio(bio); await refreshSnapshot(); }} onPushAction={updatePush} onInstall={installPrompt ? () => void installPrompt.prompt().then(() => setInstallPrompt(null)) : undefined} onReloadUpdate={() => { if (worker.registration) void activateWorkerUpdate(worker.registration); }} onClose={() => { modalRef.current = null; setModal(null); if (selectedCid) void markVisibleRead(selectedCid); }} />}
       {state.error && <div className="banner error" role="alert" aria-live="assertive">{state.error}<button className="linkbtn" onClick={() => dispatch({ type: 'error', message: null })}>dismiss</button></div>}
     </div>
   </div>;

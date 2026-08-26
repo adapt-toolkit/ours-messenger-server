@@ -113,6 +113,22 @@ try {
   assert.equal(await page.getByText('Replying to Peer', { exact: true }).count(), 1, 'captured release commits once');
   await page.getByTitle('Cancel reply').click();
 
+  // A right-aligned outgoing bubble owns the mirrored inward gesture. This is
+  // deliberately leftward; the previous shared +1 direction moved it outward
+  // and the old synthetic test repeated that incorrect path.
+  const outgoing = page.locator('#chat-message-TOUCH-25 .msg-row');
+  const outgoingBox = await outgoing.locator('.ours-message').boundingBox();
+  assert.ok(outgoingBox);
+  const outgoingX = outgoingBox.x + outgoingBox.width / 2;
+  const outgoingY = outgoingBox.y + outgoingBox.height / 2;
+  await pen(session, 'mousePressed', outgoingX, outgoingY);
+  await pen(session, 'mouseMoved', outgoingX - 18, outgoingY);
+  await pen(session, 'mouseMoved', outgoingX - 76, outgoingY);
+  await pen(session, 'mouseReleased', outgoingX - 76, outgoingY);
+  await page.getByText('Replying to You', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Replying to You', { exact: true }).count(), 1, 'outgoing inward release commits once');
+  await page.getByTitle('Cancel reply').click();
+
   const clean = async (label) => {
     assert.equal(await incoming.locator('.bubble-wrap.swiping').count(), 0, `${label}: swiping class cleared`);
     assert.equal(await incoming.locator('.swipe-cue.armed').count(), 0, `${label}: armed cue cleared`);

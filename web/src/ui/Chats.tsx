@@ -16,7 +16,6 @@ import { MessageReceipt } from './MessageReceipt';
 import { MessageMarkdown } from './MessageMarkdown';
 import { ApiError } from '../api';
 import { AnimatePresence, motion } from 'framer-motion';
-import DialogShell from './DialogShell';
 import { interfaceSpring } from './motionSystem';
 import { SWIPE_DISTANCE_PX, classifyReplyIntent, shouldCommitReply } from './swipeReplyCore';
 import {
@@ -144,10 +143,10 @@ export function ChatList(props: {
     <div className="listcol">
       <div className="listcol-head">
         <div className="listcol-titlebar">
-          <h2 id="chat-list-title" className="listcol-title" tabIndex={-1}>Chats</h2>
+          <h2 id="chat-list-title" className="listcol-title messenger-lockup" tabIndex={-1}><Icon name="lock" size={16} />Ours Messenger</h2>
           <div className="listcol-actions">
             <button className="btn sm primary" onClick={props.onInvite}>
-              <Icon name="plus" size={15} />
+              <Icon name="invite" size={15} />
               Invite
             </button>
             <button className="icon-btn" title="Settings" onClick={props.onSettings}>
@@ -248,6 +247,69 @@ export function ChatList(props: {
   );
 }
 
+export function ContactScreen(props: {
+  contact: ContactVM;
+  messages: ChatMessage[];
+  onBack: () => void;
+  onRename: (alias: string) => void;
+  onRemove: () => void;
+  onOpenMessage: (key: string) => void;
+  indexOffset?: number;
+  onSendText: (text: string, replyToWireId?: string) => Promise<string | void>;
+  onSendFile?: (att: PendingAttachment, replyToWireId?: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(props.contact.name);
+  const [showMedia, setShowMedia] = useState(false);
+  const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
+  const renameSettledRef = useRef(false);
+  useEffect(() => {
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || showMedia || previewRec || editing) return;
+      event.preventDefault();
+      props.onBack();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [editing, previewRec, props.onBack, showMedia]);
+  const saveName = () => {
+    if (renameSettledRef.current) return;
+    renameSettledRef.current = true;
+    const next = name.trim();
+    if (next && next !== props.contact.name) props.onRename(next);
+    else setName(props.contact.name);
+    setEditing(false);
+  };
+  return <div className="detail contact-screen">
+    <div className="detail-head contact-screen-head">
+      <button type="button" className="icon-btn detail-back contact-back" aria-label="Back to conversation" onClick={props.onBack}><Icon name="back" /></button>
+      <strong>Contact</strong>
+    </div>
+    <div className="contact-screen-scroll">
+      <section className="contact-hero" aria-labelledby="contact-screen-name">
+        <div className="avatar accent contact-avatar-large" aria-hidden>{props.contact.initials}</div>
+        {editing ? <input id="contact-screen-name" className="field contact-name-input" value={name} autoFocus onChange={(event) => setName(event.target.value)} onBlur={saveName} onKeyDown={(event) => { if (event.key === 'Enter') saveName(); if (event.key === 'Escape') { renameSettledRef.current = true; setName(props.contact.name); setEditing(false); } }} /> : <h2 id="contact-screen-name">{props.contact.name}</h2>}
+        <p><Icon name="lock" size={13} /> End-to-end encrypted connection</p>
+      </section>
+      <section className="contact-action-group" aria-label="Contact actions">
+        <button type="button" onClick={() => setShowMedia(true)}><span><Icon name="paperclip" />Shared photos, files, and links</span><Icon name="chevron" /></button>
+        <button type="button" onClick={() => { renameSettledRef.current = false; setName(props.contact.name); setEditing(true); }}><span><Icon name="edit" />Rename contact</span><Icon name="chevron" /></button>
+      </section>
+      <section className="contact-identity" aria-labelledby="contact-identity-title">
+        <h3 id="contact-identity-title">Verified identity</h3>
+        {props.contact.roleId && <p>Role <strong>{props.contact.roleId}</strong> of <strong>{props.contact.rootName}</strong></p>}
+        <code>{props.contact.id}</code>
+        <button type="button" className="btn sm" onClick={() => void navigator.clipboard.writeText(props.contact.id)}><Icon name="copy" size={14} />Copy identity</button>
+      </section>
+      <button type="button" className="contact-remove" onClick={props.onRemove}><Icon name="trash" />Remove contact</button>
+    </div>
+    {showMedia && <ChatMediaPanel messages={props.messages} indexOffset={props.indexOffset} onClose={() => setShowMedia(false)} onJump={props.onOpenMessage} onPreview={(record) => { setShowMedia(false); setPreviewRec(record); }} />}
+    {previewRec && (isHtmlAttachment(previewRec.filename, previewRec.mime)
+      ? <HtmlPreview rec={previewRec} onClose={() => setPreviewRec(null)} />
+      : <MarkdownPreview rec={previewRec} onClose={() => setPreviewRec(null)} onSendText={props.onSendText} onSendFile={props.onSendFile} />)}
+  </div>;
+}
+
 interface ReplyDraft {
   wireId: string;
   author: string;
@@ -259,8 +321,8 @@ const timelineMessageId = (key: string) => `chat-message-${encodeURIComponent(ke
 const reducedMotion = () =>
   typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// Swipe-to-reply: drag any eligible bubble rightward, matching the familiar
-// mobile Messenger gesture. Touch/pen only — a mouse keeps text selection and
+// Swipe-to-reply: drag any eligible bubble inward toward the conversation
+// centre. Touch/pen only — a mouse keeps text selection and
 // the hover Reply button. `touch-action: pan-y` leaves vertical scrolling with
 // the browser until the 10px horizontal-intent threshold wins.
 function SwipeReplyRow(props: {
@@ -277,7 +339,9 @@ function SwipeReplyRow(props: {
   const cue = useRef<HTMLDivElement>(null);
   const onReplyRef = useRef(onReply);
   onReplyRef.current = onReply;
-  const REPLY_DIRECTION = 1; // a familiar rightward swipe, independent of message side
+  // Swipe inward toward the conversation: right for a left-aligned incoming
+  // bubble, left for a right-aligned outgoing bubble.
+  const REPLY_DIRECTION = dir === 'in' ? 1 : -1;
   const THRESH = SWIPE_DISTANCE_PX;
   const MAX = 84; // rubber-band cap
   const idleGesture = () => ({
@@ -336,7 +400,7 @@ function SwipeReplyRow(props: {
       || target.closest('a, button, input, textarea, select, [role="button"], audio, video, img, [draggable="true"], .filecard, .filecard-bubble, .image-bubble, .voice-bubble, .ours-message-file, .attachment')) return;
     st.current = {
       id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', armed: false,
-      distance: 0, samples: [{ x: e.clientX, time: e.timeStamp }],
+      distance: 0, samples: [{ x: e.clientX * REPLY_DIRECTION, time: e.timeStamp }],
     };
     paint(0);
   };
@@ -351,11 +415,11 @@ function SwipeReplyRow(props: {
       return;
     }
     if (s.mode === 'maybe') {
-      const intent = classifyReplyIntent(dxr, dyr);
+      const intent = classifyReplyIntent(dxr * REPLY_DIRECTION, dyr);
       if (intent === 'pending') return;
-      // Commit only after horizontal rightward intent wins. Until then pan-y
+      // Commit only after horizontal inward intent wins. Until then pan-y
       // remains browser-owned, preserving native conversation scrolling.
-      if (intent === 'drag' && Math.sign(dxr) === REPLY_DIRECTION) {
+      if (intent === 'drag') {
         s.mode = 'drag';
         e.currentTarget.setPointerCapture?.(e.pointerId);
         slider.current?.classList.add('swiping');
@@ -366,9 +430,9 @@ function SwipeReplyRow(props: {
     }
     e.preventDefault();
     const time = e.timeStamp;
-    s.samples.push({ x: e.clientX, time });
+    s.samples.push({ x: e.clientX * REPLY_DIRECTION, time });
     s.samples = s.samples.filter((sample) => time - sample.time <= 120);
-    // Rightward magnitude, rubber-banded past the threshold and hard-capped.
+    // Inward magnitude, rubber-banded past the threshold and hard-capped.
     let d = dxr * REPLY_DIRECTION;
     if (d < 0) d = 0;
     if (d > THRESH) d = THRESH + (d - THRESH) * 0.35;
@@ -386,8 +450,8 @@ function SwipeReplyRow(props: {
   const onUp = (e: React.PointerEvent) => {
     const s = st.current;
     if (s.id === e.pointerId && s.mode === 'drag') {
-      s.samples.push({ x: e.clientX, time: e.timeStamp });
-      s.distance = Math.max(0, e.clientX - s.x0);
+      s.samples.push({ x: e.clientX * REPLY_DIRECTION, time: e.timeStamp });
+      s.distance = Math.max(0, (e.clientX - s.x0) * REPLY_DIRECTION);
       s.armed = s.distance >= THRESH;
     }
     clearGesture(e.pointerId, true);
@@ -426,11 +490,14 @@ export function Conversation(props: {
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
   onBack: () => void;
+  onOpenContact?: () => void;
   /** Resolves with the canonical wire id of the delivered message when it has one. */
   onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<string | void>;
   /** Canonical state is still catching up: shown inline, never as a screen. */
   syncing?: 'connecting' | 'updating' | null;
-  onRemove: () => void;
+  /** @deprecated Contact management lives on ContactScreen. */
+  onRemove?: () => void;
+  /** @deprecated Contact management lives on ContactScreen. */
   onRename?: (alias: string) => void;
   onDraftChange?: (hasText: boolean) => void;
   emptyOverride?: ReactNode;
@@ -455,18 +522,12 @@ export function Conversation(props: {
     wireIds: ReadonlySet<string>;
   } | null>(null);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
-  // header: inline rename + the verified-identity popover
-  const [editingName, setEditingName] = useState<string | null>(null);
-  const [showIdCard, setShowIdCard] = useState(false);
-  const idChipRef = useRef<HTMLButtonElement>(null);
-  const idCardRef = useRef<HTMLDivElement>(null);
   // attachments: picked/recorded file awaiting send; active voice recording
   const [pendingAtt, setPendingAtt] = useState<PendingAttachment | null>(null);
   const [voiceActive, setVoiceActive] = useState(false); // hold-to-record in progress
   const [sendingFile, setSendingFile] = useState(false);
   const [processingFile, setProcessingFile] = useState(false);
   const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
-  const [showSharedMedia, setShowSharedMedia] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const sendingRef = useRef(false);
@@ -491,39 +552,18 @@ export function Conversation(props: {
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
   const newestMessageRef = useRef<string | null>(null);
-  const identityDetailsAsDialog = typeof window !== 'undefined' && window.matchMedia('(max-width: 860px)').matches;
-
-  const closeIdentityDetails = (restoreFocus = false) => {
-    setShowIdCard(false);
-    if (restoreFocus) requestAnimationFrame(() => idChipRef.current?.focus());
-  };
-  useEffect(() => {
-    if (!showIdCard || identityDetailsAsDialog) return;
-    idCardRef.current?.querySelector<HTMLButtonElement>('.idcard-close')?.focus();
-    const escape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      closeIdentityDetails(true);
-    };
-    document.addEventListener('keydown', escape);
-    return () => document.removeEventListener('keydown', escape);
-  }, [showIdCard, identityDetailsAsDialog]);
-
   useEffect(() => {
     setDraft('');
     setError(null);
     setUnknownSend(null);
     setOptimisticSend(null);
     setReplyTo(null);
-    setEditingName(null);
-    setShowIdCard(false);
     setPendingAtt(null);
     setVoiceActive(false);
     setSendingFile(false);
     setProcessingFile(false);
     fileReadGenerationRef.current += 1;
     setPreviewRec(null);
-    setShowSharedMedia(false);
     sentKeysRef.current.clear();
     followTargetRef.current = null;
     followTopRef.current = null;
@@ -912,37 +952,10 @@ export function Conversation(props: {
           <button className="icon-btn detail-back" onClick={props.onBack}>
             <Icon name="back" />
           </button>
-          <div className="avatar accent">{contact.initials}</div>
-          <div className="conv-peer-meta">
-            {editingName !== null ? (
-              <input
-                className="field name-edit"
-                value={editingName}
-                autoFocus
-                placeholder={contact.name}
-                onChange={(e) => setEditingName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    props.onRename?.(editingName);
-                    setEditingName(null);
-                  } else if (e.key === 'Escape') setEditingName(null);
-                }}
-                onBlur={() => setEditingName(null)}
-              />
-            ) : (
-              <div className="conv-peer-name">
-                {contact.name}
-                {props.onRename && (
-                  <button
-                    className="icon-btn name-pencil"
-                    title="Rename (only changes how they appear to you)"
-                    onClick={() => setEditingName(contact.name)}
-                  >
-                    <Icon name="edit" size={13} />
-                  </button>
-                )}
-              </div>
-            )}
+          <button type="button" className="conv-contact-trigger" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
+            <span className="avatar accent">{contact.initials}</span>
+            <span className="conv-peer-meta">
+              <span className="conv-peer-name">{contact.name}</span>
             {/* Opening the app from a notification lands here before the
                 messages do. An empty thread with no explanation reads as a
                 lost message, so the header says what is happening — inline,
@@ -953,49 +966,8 @@ export function Conversation(props: {
                 {props.syncing === 'connecting' ? 'Connecting…' : 'Updating…'}
               </div>
             )}
-            {/* Delegation + id demoted to a verification badge — tap for the
-                full story. The raw 'role X of Y' subtitle read like a broken
-                name; it is actually the anti-impersonation proof. */}
-            {!props.syncing && (contact.roleId ? (
-              <button ref={idChipRef} className="idchip" aria-haspopup="dialog" aria-expanded={showIdCard} aria-controls="identity-details" onClick={() => setShowIdCard(true)}>
-                <Icon name="shield" size={11} />
-                verified role of {contact.rootName}
-              </button>
-            ) : (
-              contact.status !== 'pending' && (
-                <button ref={idChipRef} className="idchip quiet" aria-haspopup="dialog" aria-expanded={showIdCard} aria-controls="identity-details" onClick={() => setShowIdCard(true)}>
-                  <Icon name="lock" size={11} />
-                  verified identity
-                </button>
-              )
-            ))}
-          </div>
-        </div>
-        {showIdCard && (identityDetailsAsDialog ? (
-          <DialogShell title="Verified identity" onClose={() => closeIdentityDetails(true)} className="identity-details-modal" contentId="identity-details">
-            {contact.roleId && <p>This is the role <strong>“{contact.roleId}”</strong> of <strong>{contact.rootName}</strong> — the link is cryptographically signed, not self-declared.</p>}
-            <div className="idcard-fp mono">{contact.id}</div>
-            <p className="idcard-note">This id is the fingerprint of their key. Names are what people show you; the fingerprint is what guarantees you&apos;re always talking to the same identity — no one can impersonate it. Renaming only changes how they appear to you.</p>
-          </DialogShell>
-        ) : (
-          <>
-            <div className="pop-backdrop" aria-hidden="true" onClick={() => closeIdentityDetails(true)} />
-            <div id="identity-details" ref={idCardRef} className="idcard anim-scale" role="dialog" aria-modal="false" aria-labelledby="identity-details-title">
-              <div className="idcard-head"><h4 id="identity-details-title">Verified identity</h4><button className="icon-btn idcard-close" aria-label="Close verified identity" onClick={() => closeIdentityDetails(true)}><Icon name="close" size={16} /></button></div>
-              {contact.roleId && <p>This is the role <strong>“{contact.roleId}”</strong> of <strong>{contact.rootName}</strong> — the link is cryptographically signed, not self-declared.</p>}
-              <div className="idcard-fp mono">{contact.id}</div>
-              <p className="idcard-note">This id is the fingerprint of their key. Names are what people show you; the fingerprint is what guarantees you&apos;re always talking to the same identity — no one can impersonate it. Renaming only changes how they appear to you.</p>
-            </div>
-          </>
-        ))}
-        <div className="conv-actions">
-          <button className="btn sm" title="Shared photos, files, and links" onClick={() => setShowSharedMedia(true)}>
-            <Icon name="paperclip" size={14} />
-            Media
-          </button>
-          <button className="btn sm danger" title="Remove contact" onClick={props.onRemove}>
-            <Icon name="trash" size={14} />
-            Remove
+            {!props.syncing && <span className="conv-contact-status"><Icon name="lock" size={11} />Encrypted connection</span>}
+            </span>
           </button>
         </div>
       </div>
@@ -1306,13 +1278,6 @@ export function Conversation(props: {
               >
                 <Icon name="paperclip" size={18} />
               </button>
-              <VoiceComposer
-                key={contact.id}
-                disabled={sendingFile || processingFile || !!pendingAtt}
-                onReady={(att) => { setVoiceActive(false); setPendingAtt(att); }}
-                onError={(err) => { setVoiceActive(false); setError(err); }}
-                onActiveChange={setVoiceActive}
-              />
             </>
           )}
           <textarea
@@ -1333,7 +1298,13 @@ export function Conversation(props: {
               } else if (e.key === 'Escape') setReplyTo(null);
             }}
           />
-          <button
+          {props.onSendFile && !draft.trim() && !pendingAtt && !processingFile && !sendingFile ? <VoiceComposer
+            key={contact.id}
+            disabled={sendingFile || processingFile || !!pendingAtt}
+            onReady={(att) => { setVoiceActive(false); setPendingAtt(att); }}
+            onError={(err) => { setVoiceActive(false); setError(err); }}
+            onActiveChange={setVoiceActive}
+          /> : <button
             className="btn primary"
             aria-label="Send"
             onPointerDown={(e) => {
@@ -1347,7 +1318,7 @@ export function Conversation(props: {
           >
             <Icon name="send" size={16} />
             <span className="btn-label">Send</span>
-          </button>
+          </button>}
         </div>
       </div>
       {/* One preview slot, two documents. HTML gets the sandboxed viewer and
@@ -1363,21 +1334,6 @@ export function Conversation(props: {
             onSendFile={props.onSendFile}
           />
         )
-      )}
-      {showSharedMedia && (
-        <ChatMediaPanel
-          messages={messages}
-          indexOffset={props.hiddenEarlier ?? 0}
-          onClose={() => setShowSharedMedia(false)}
-          onPreview={(rec) => {
-            setShowSharedMedia(false);
-            setPreviewRec(rec);
-          }}
-          onJump={(key) => {
-            document.getElementById(timelineMessageId(key))?.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
-            setShowSharedMedia(false);
-          }}
-        />
       )}
     </div>
   );

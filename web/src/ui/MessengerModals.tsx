@@ -112,6 +112,7 @@ export function SettingsModal(props: {
   onSaveBio(bio: string): Promise<void>;
   onPushAction(action: 'enable' | 'disable' | 'repair', preview?: PushPreviewMode): Promise<void>;
   onReloadUpdate(): void;
+  onInstall?(): void;
   onClose(): void;
 }) {
   const [bio, setBio] = useState(props.identity.bio ?? '');
@@ -146,7 +147,7 @@ export function SettingsModal(props: {
           : <button className="btn primary" disabled={props.busy || !props.workerSupported || props.push.status === 'unsupported'} onClick={() => void props.onPushAction(props.push.status === 'error' || props.push.blocked ? 'repair' : 'enable', preview)}>{props.busy ? 'Repairing…' : props.push.status === 'error' || props.push.blocked ? 'Repair' : 'Enable notifications'}</button>}
       </div>
     </div>
-    <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}><h4>App status</h4><p className="muted">{props.offline ? 'Offline — reconnecting. Message and identity data are never cached.' : 'Online.'}</p>{props.updateAvailable && <button className="btn primary" onClick={props.onReloadUpdate}>Reload to update</button>}</div>
+    <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}><h4>App status</h4><p className="muted">{props.offline ? 'Offline — reconnecting. Message and identity data are never cached.' : 'Online.'}</p>{props.onInstall && <button className="btn" onClick={props.onInstall}>Install app</button>}{props.updateAvailable && <button className="btn primary" onClick={props.onReloadUpdate}>Reload to update</button>}</div>
     <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}><h4>Build</h4><input className="field mono" readOnly value={props.build ? `${props.build.version} · ${props.build.sha}` : 'Loading…'} /></div>
   </DialogShell>;
 }

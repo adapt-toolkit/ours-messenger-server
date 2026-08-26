@@ -9,7 +9,7 @@
 .signal-app {
   --deck-gutter: clamp(12px, 1.5vw, 22px);
   display: grid;
-  grid-template: 88px minmax(0, 1fr) / minmax(0, 1fr);
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   gap: 0;
   padding: 0;
 }
@@ -266,7 +266,7 @@
 @media (max-width: 860px) {
   .signal-app,
   .theme-dark .signal-app {
-    grid-template: 68px minmax(0, 1fr) / minmax(0, 1fr);
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     padding: 0;
   }
 
@@ -392,6 +392,50 @@
   .operations-stage .cluster-row { width: 232px; min-width: 232px; min-height: 66px; }
 
   .preview-badge { bottom: 8px; }
+}
+
+/* Calm workspace chrome: translucency is reserved for controls that float
+   above content; the reading surfaces and bubbles remain opaque. */
+.messenger-lockup { display: inline-flex; align-items: center; gap: 8px; }
+.listcol-actions .btn,
+.listcol-actions .icon-btn,
+.conv-contact-trigger,
+.contact-action-group,
+.contact-identity {
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 7%, transparent);
+  backdrop-filter: blur(18px) saturate(112%);
+}
+.conv-contact-trigger { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 4px 8px; border-radius: 15px; color: inherit; text-align: left; cursor: pointer; }
+.conv-contact-trigger:disabled { cursor: default; opacity: 1; }
+.conv-contact-trigger .conv-peer-meta { display: grid; }
+.conv-contact-status { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: 0.72rem; }
+.contact-screen { background: var(--surface); }
+.contact-screen-head { justify-content: flex-start; gap: 12px; }
+.contact-screen-scroll { overflow: auto; width: min(100%, 680px); margin-inline: auto; padding: clamp(24px, 6vw, 64px) 18px 48px; }
+.contact-hero { display: grid; justify-items: center; text-align: center; }
+.contact-avatar-large { display: grid; place-items: center; width: 92px; height: 92px; border-radius: 50%; font-size: 1.8rem; }
+.contact-hero h2 { margin: 16px 0 6px; font-size: 1.65rem; letter-spacing: -0.035em; }
+.contact-hero p { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--text-3); }
+.contact-name-input { width: min(320px, 100%); margin-top: 16px; text-align: center; font-size: 1.35rem; }
+.contact-action-group { overflow: hidden; margin-top: 32px; border-radius: 18px; }
+.contact-action-group button { display: flex; width: 100%; min-height: 54px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; }
+.contact-action-group button:last-child { border-bottom: 0; }
+.contact-action-group button > span { display: inline-flex; align-items: center; gap: 12px; }
+.contact-identity { margin-top: 18px; padding: 18px; border-radius: 18px; }
+.contact-identity h3 { margin: 0 0 8px; }
+.contact-identity code { display: block; overflow-wrap: anywhere; margin: 12px 0; color: var(--text-3); }
+.contact-remove { display: flex; width: 100%; min-height: 50px; align-items: center; justify-content: center; gap: 8px; margin-top: 24px; border: 1px solid var(--danger); border-radius: 16px; background: transparent; color: var(--danger); }
+
+@media (prefers-reduced-transparency: reduce) {
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { background: var(--surface-2); backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { border-color: currentColor; box-shadow: none; }
+}
+@media (forced-colors: active) {
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity, .contact-remove) { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
 }
 
 @media (max-width: 390px) {
