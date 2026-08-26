@@ -86,6 +86,12 @@ try {
           `${engineName} ${viewport.width} edges symmetric (${geometry.left}/${geometry.right})`);
       }
       await page.setViewportSize({ width: 375, height: 812 });
+      const micGeometry = await page.locator('.composer .vr-mic').evaluate((button) => {
+        const box = button.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      });
+      assert.ok(micGeometry.width >= 44 && micGeometry.height >= 44, `${engineName} empty composer microphone target is 44x44`);
+      await page.locator('.composer textarea').fill('Ready to send');
       const sendGeometry = await page.locator('.composer .btn.primary').evaluate((button) => {
         const box = button.getBoundingClientRect(); const icon = button.querySelector('.ic').getBoundingClientRect();
         return { width: box.width, height: box.height, delta: Math.abs((icon.left + icon.width / 2) - (box.left + box.width / 2)), label: getComputedStyle(button.querySelector('.btn-label')).display };
@@ -122,6 +128,7 @@ try {
       const lightPage = await light.newPage(); await installCaptureHarness(lightPage);
       await lightPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' }); await lightPage.locator('.composer textarea').waitFor();
       await settleAnimations(lightPage);
+      await lightPage.locator('.composer textarea').fill('Ready to send');
       const lightMetrics = await lightPage.evaluate(() => {
         const stage = document.querySelector('.signal-stage').getBoundingClientRect();
         const detail = document.querySelector('.signal-stage > .detail').getBoundingClientRect();
