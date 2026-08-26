@@ -558,7 +558,26 @@ export function AppShell() {
           onRemove={() => { if (confirm(`Remove “${selected?.name ?? 'contact'}”?`)) void api.removeContact(selectedView.id).then(() => { window.history.replaceState({ oursMessenger: true }, '', chatPath()); dispatch({ type: 'route', route: { name: 'chats', contactCid: null }, mobileDetailOpen: false }); return refreshSnapshot(); }).catch(showError); }}
           onOpenMessage={(key) => {
             go({ name: 'chats', contactCid: selectedView.id }, chatPath(selectedView.id), true);
-            requestAnimationFrame(() => document.getElementById(`chat-message-${encodeURIComponent(key)}`)?.scrollIntoView({ block: 'center' }));
+            let attempts = 12;
+            const reveal = () => {
+              const message = document.getElementById(`chat-message-${encodeURIComponent(key)}`);
+              const scroller = message?.closest<HTMLElement>('.messages');
+              if ((!message || !scroller || scroller.clientHeight <= 0) && attempts-- > 0) {
+                requestAnimationFrame(reveal);
+                return;
+              }
+              if (!message || !scroller) return;
+              const messageRect = message.getBoundingClientRect();
+              const scrollerRect = scroller.getBoundingClientRect();
+              const centeredTop = scroller.scrollTop + messageRect.top - scrollerRect.top
+                - Math.max(0, (scroller.clientHeight - messageRect.height) / 2);
+              const top = Math.max(0, Math.min(centeredTop, scroller.scrollHeight - scroller.clientHeight));
+              scroller.scrollTo({
+                top,
+                behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+              });
+            };
+            requestAnimationFrame(reveal);
           }}
           indexOffset={pageFor(state, selectedView.id)?.hasMore ? Math.max(1, (pageFor(state, selectedView.id)?.total ?? messages.length) - messages.length) : 0}
           onSendText={async (text, reply) => { const sent = await api.send(selectedView.id, text, reply); await refreshPage(selectedView.id, false); return sent.wire_id ?? undefined; }}

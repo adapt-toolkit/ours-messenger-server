@@ -100,25 +100,23 @@ const exercise = async (width, height, coarse) => {
 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `${width}px page has no horizontal overflow at 200% text`);
   const peer = rect(await page.locator('.conv-peer').boundingBox());
-  const actions = rect(await page.locator('.conv-actions').boundingBox());
-  assert.equal(overlaps(peer, actions), false, `${width}px conversation identity and actions do not overlap`);
+  const contactTrigger = rect(await page.locator('.conv-contact-trigger').boundingBox());
+  assert.ok(contactTrigger.left >= peer.left && contactTrigger.right <= peer.right, `${width}px compact contact trigger stays within conversation identity bounds`);
   const composerChildren = await page.locator('.composer > :not(input)').evaluateAll((nodes) => nodes.filter((node) => getComputedStyle(node).display !== 'none').map((node) => {
     const b = node.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom };
   }));
   for (let i = 0; i < composerChildren.length; i += 1) for (let j = i + 1; j < composerChildren.length; j += 1) {
     assert.equal(overlaps(composerChildren[i], composerChildren[j]), false, `${width}px composer controls ${i}/${j} do not overlap`);
   }
-  if (coarse) for (const selector of ['.detail-back', '.composer-tool', '.vr-mic', '.composer .btn.primary']) {
-    const box = await page.locator(selector).first().boundingBox();
-    assert.ok(box && box.width >= 43.9 && box.height >= 43.9, `${selector} remains a 44px touch target at 200%`);
+  if (coarse) {
+    for (const selector of ['.detail-back', '.composer-tool', '.vr-mic']) {
+      const box = await page.locator(selector).first().boundingBox();
+      assert.ok(box && box.width >= 43.9 && box.height >= 43.9, `${selector} remains a 44px touch target at 200%`);
+    }
+    await page.locator('.composer textarea').fill('Send target');
+    const sendBox = await page.locator('.composer .btn.primary').boundingBox();
+    assert.ok(sendBox && sendBox.width >= 43.9 && sendBox.height >= 43.9, '.composer .btn.primary remains a 44px touch target at 200%');
   }
-
-  const account = page.getByRole('button', { name: /account menu/ });
-  await account.click();
-  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'menuitem');
-  await page.keyboard.press('Escape');
-  await page.locator('.command-menu').waitFor({ state: 'detached' });
-  assert.equal(await account.evaluate((node) => document.activeElement === node), true, 'account Escape restores focus at 200%');
 
   if (coarse) await page.locator('.detail-back').click();
   const invite = page.getByRole('button', { name: 'Invite' });

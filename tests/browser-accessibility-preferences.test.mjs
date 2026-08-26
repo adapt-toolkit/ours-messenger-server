@@ -67,6 +67,18 @@ const makePage = async ({ features = [], dark = true, reducedMotion = 'no-prefer
   if (features.length) await session.send('Emulation.setEmulatedMedia', { features });
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
   await page.locator('.composer textarea').waitFor();
+  const geometry = await page.evaluate(() => {
+    const app = document.querySelector('.signal-app');
+    const stage = document.querySelector('.signal-stage');
+    const tool = document.querySelector('.composer-tool:not(.vr-mic)');
+    const appRect = app?.getBoundingClientRect();
+    const stageRect = stage?.getBoundingClientRect();
+    const toolRect = tool?.getBoundingClientRect();
+    const target = toolRect && document.elementFromPoint(toolRect.left + toolRect.width / 2, toolRect.top + toolRect.height / 2);
+    return { appHeight: appRect?.height, stageHeight: stageRect?.height, composerHit: target?.closest('.composer-tool') != null };
+  });
+  assert.equal(geometry.stageHeight, geometry.appHeight, `${dark ? 'dark' : 'light'} desktop stage fills the app shell`);
+  assert.equal(geometry.composerHit, true, `${dark ? 'dark' : 'light'} desktop composer remains hit-testable`);
   return { context, page, session };
 };
 
@@ -79,7 +91,7 @@ try {
   // Fresh ordinary context: spatial surface motion remains present. Contact
   // rows intentionally have no hover transform owner after motion consolidation.
   const ordinary = await makePage();
-  await ordinary.page.locator('.command-settings').click();
+  await ordinary.page.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   assert.notEqual(await ordinary.page.locator('.modal').evaluate((node) => getComputedStyle(node).animationName), 'none', 'ordinary spatial motion remains enabled');
   assert.equal(await ordinary.page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), false);
   await ordinary.context.close();
@@ -88,30 +100,42 @@ try {
   // real shared-media jump reports auto (not smooth), and press colour remains.
   const reduced = await makePage({ reducedMotion: 'reduce' });
   assert.equal(await reduced.page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), true);
-  await reduced.page.locator('.command-settings').click();
+  await reduced.page.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   assert.equal(await reduced.page.locator('.modal').evaluate((node) => getComputedStyle(node).animationName), 'none', 'reduced motion removes spatial surface motion');
   await reduced.page.getByRole('button', { name: 'Close Settings' }).click();
   await reduced.page.evaluate(() => {
-    globalThis.__scrollIntoViewOptions = null;
-    const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function (options) {
-      globalThis.__scrollIntoViewOptions = options;
+    globalThis.__elementScroll = null;
+    globalThis.__windowScrollBeforeJump = { x: window.scrollX, y: window.scrollY };
+    const original = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = function (options) {
+      globalThis.__elementScroll = { className: this.className, options };
       return original.call(this, options);
     };
   });
-  await reduced.page.getByTitle('Shared photos, files, and links').click();
+  await reduced.page.getByRole('button', { name: /Open contact details/ }).click();
+  await reduced.page.getByRole('button', { name: /Shared photos, files, and links/ }).click();
   await reduced.page.getByRole('tab', { name: /Files/ }).click();
   await reduced.page.locator('.shared-media-jump').first().click();
-  assert.equal(await reduced.page.evaluate(() => globalThis.__scrollIntoViewOptions?.behavior), 'auto', 'real reduced-motion media jump uses auto scrolling');
+  await reduced.page.waitForFunction(() => globalThis.__elementScroll?.options?.behavior === 'auto');
+  const jumpScroll = await reduced.page.evaluate(() => ({ element: globalThis.__elementScroll, before: globalThis.__windowScrollBeforeJump, after: { x: window.scrollX, y: window.scrollY } }));
+  assert.match(jumpScroll.element.className, /(?:^|\s)messages(?:\s|$)/, 'media jump scrolls the message container');
+  assert.equal(jumpScroll.element.options.behavior, 'auto', 'real reduced-motion media jump uses auto scrolling');
+  assert.deepEqual(jumpScroll.after, jumpScroll.before, 'media jump does not scroll the document');
   const press = reduced.page.locator('.composer-tool:not(.vr-mic)');
   const pressBox = await press.boundingBox();
+  const pressPoint = { x: pressBox.x + pressBox.width / 2, y: pressBox.y + pressBox.height / 2 };
+  const pressTarget = await reduced.page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    return { composerTool: target?.closest('.composer-tool') != null, tag: target?.tagName, className: target?.getAttribute('class'), label: target?.getAttribute('aria-label') };
+  }, pressPoint);
+  assert.equal(pressTarget.composerTool, true, `composer tool remains the hit target after media jump: ${JSON.stringify(pressTarget)}`);
   const rest = await press.evaluate((node) => ({ transform: getComputedStyle(node).transform, background: getComputedStyle(node).backgroundColor }));
-  await reduced.session.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pressBox.x + 20, y: pressBox.y + 20, button: 'left', buttons: 1, pointerType: 'pen', clickCount: 1 });
+  await reduced.session.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...pressPoint, button: 'left', buttons: 1, pointerType: 'pen', clickCount: 1 });
   await reduced.page.waitForTimeout(50);
   const down = await press.evaluate((node) => ({ transform: getComputedStyle(node).transform, background: getComputedStyle(node).backgroundColor }));
   assert.ok(down.transform === rest.transform || down.transform === 'matrix(1, 0, 0, 1, 0, 0)', 'reduced press has no geometric movement');
   assert.notEqual(down.background, rest.background, 'reduced press retains surface feedback');
-  await reduced.session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pressBox.x + 20, y: pressBox.y + 20, button: 'left', buttons: 0, pointerType: 'pen', clickCount: 1 });
+  await reduced.session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...pressPoint, button: 'left', buttons: 0, pointerType: 'pen', clickCount: 1 });
   await reduced.context.close();
 
   // Reduced transparency is genuinely emulated and independently checked in
@@ -128,21 +152,15 @@ try {
       assert.ok(style.backdrop === 'none' && (!style.webkitBackdrop || style.webkitBackdrop === 'none'), `${selector} removes backdrop filtering`);
       assert.equal(alpha(style.background), 1, `${selector} has an opaque ${dark ? 'dark' : 'light'} background (${style.background})`);
     };
-    for (const selector of ['.commandbar', '.detail-head', '.composer']) await assertOpaqueSurface(selector);
-
-    await transparent.page.getByRole('button', { name: 'Me account menu' }).click();
-    await assertOpaqueSurface('.command-menu');
-    await transparent.page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'menuitem');
-    await transparent.page.keyboard.press('Escape');
-    await transparent.page.locator('.command-menu').waitFor({ state: 'detached' });
+    for (const selector of ['.listcol-actions .icon-btn', '.detail-head', '.composer']) await assertOpaqueSurface(selector);
 
     await transparent.page.getByRole('button', { name: 'Invite' }).click();
     await assertOpaqueSurface('.modal');
     await transparent.page.getByRole('button', { name: 'Close Invite a contact' }).click();
 
-    await transparent.page.locator('.idchip').click();
-    await assertOpaqueSurface('.idcard');
-    await transparent.page.getByRole('button', { name: 'Close verified identity' }).click();
+    await transparent.page.getByRole('button', { name: /Open contact details/ }).click();
+    await assertOpaqueSurface('.contact-identity');
+    await transparent.page.keyboard.press('Escape');
 
     await transparent.context.setOffline(true);
     const transparencyBanner = transparent.page.getByRole('status').filter({ hasText: 'Offline' });
@@ -155,7 +173,7 @@ try {
   const contrast = await makePage({ features: [{ name: 'prefers-contrast', value: 'more' }] });
   assert.equal(await contrast.page.evaluate(() => matchMedia('(prefers-contrast: more)').matches), true);
   assert.equal(await contrast.page.evaluate(() => matchMedia('(prefers-reduced-transparency: reduce)').matches || matchMedia('(prefers-reduced-motion: reduce)').matches), false, 'contrast preference is independent');
-  for (const selector of ['.commandbar', '.detail-head', '.composer', '.conv-actions .btn']) {
+  for (const selector of ['.listcol-actions .icon-btn', '.detail-head', '.composer', '.conv-contact-trigger']) {
     const boundary = await contrast.page.locator(selector).first().evaluate((node) => {
       const style = getComputedStyle(node);
       return { width: Math.max(parseFloat(style.borderTopWidth), parseFloat(style.borderBottomWidth)), color: style.borderColor };
@@ -168,7 +186,8 @@ try {
   // focus; the real banner shape is exercised in both transparency contexts.
   const forced = await makePage({ features: [{ name: 'forced-colors', value: 'active' }] });
   assert.equal(await forced.page.evaluate(() => matchMedia('(forced-colors: active)').matches), true);
-  await forced.page.getByTitle('Shared photos, files, and links').click();
+  await forced.page.getByRole('button', { name: /Open contact details/ }).click();
+  await forced.page.getByRole('button', { name: /Shared photos, files, and links/ }).click();
   const selected = forced.page.getByRole('tab', { name: /Photos/ });
   const unselected = forced.page.getByRole('tab', { name: /Files/ });
   assert.ok(parseFloat(await selected.evaluate((node) => getComputedStyle(node).borderTopWidth)) >= 2, 'selected tab has a shape boundary');
@@ -186,7 +205,7 @@ try {
     matchMedia('(prefers-contrast: more)').matches,
     matchMedia('(forced-colors: active)').matches,
   ].some(Boolean)), false, 'fresh ordinary context restores every media preference');
-  await restored.page.locator('.command-settings').click();
+  await restored.page.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   assert.notEqual(await restored.page.locator('.modal').evaluate((node) => getComputedStyle(node).animationName), 'none', 'ordinary spatial motion still exists after preference contexts');
   await restored.context.close();
 

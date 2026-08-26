@@ -42,7 +42,7 @@ assert.ok(
   (css.includes('min-width:861px') || css.includes('min-width: 861px')) && css.includes('prefers-reduced-motion'),
   'canonical 861px responsive boundary and reduced motion are explicit',
 );
-assert.ok(built.includes('command-settings') && built.includes('Settings'), 'mobile keeps the canonical command-bar Settings entry for Web Push');
+assert.ok(built.includes('messenger-lockup') && built.includes('Settings'), 'mobile keeps Settings in the canonical Ours Messenger list header for Web Push');
 assert.ok(source.includes('useReducer') && source.includes("from 'react-dom/client'"), 'the browser shell is React state rendered through createRoot');
 
 for (const excluded of ['ControlClient', 'createAgent', 'adapt_wrapper', '/mcp']) {
