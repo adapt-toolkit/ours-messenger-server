@@ -30,7 +30,10 @@ const installRoutes = (context) => context.route('**/api/**', async (route) => {
   const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
   if (url.pathname === '/api/build-info') return json({ name: 'messenger', version: 'test', sha: 'fixture' });
-  if (url.pathname === '/api/contacts') return json({ contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [] });
+  if (url.pathname === '/api/contacts') return json({
+    contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [],
+    roots: { PEER: { root_cid: 'ROOT', root_name: 'Owner', role_id: 'assistant' } },
+  });
   if (url.pathname === '/api/conversations/PEER/page') return json({ contact: 'PEER', messages, total: 2, unread: 0, hasMore: false, nextBefore: null });
   if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
   if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
@@ -62,6 +65,27 @@ const fireGesture = (row, points, downTargetSelector) => row.evaluate((node, { p
   for (const [x, y] of path.slice(1)) fire(node, 'pointermove', x, y);
   const last = path.at(-1); fire(node, 'pointerup', last[0], last[1]);
 }, { points, downTarget: downTargetSelector });
+const fireNativeTouch = async (page, selector, direction) => {
+  const row = page.locator(selector);
+  const bubble = row.locator('.message-markdown p').first();
+  const box = await bubble.boundingBox();
+  assert.ok(box, `${selector} has a native-touch target`);
+  const x0 = direction > 0 ? box.x + Math.min(24, box.width / 3) : box.x + box.width - Math.min(24, box.width / 3);
+  const y = box.y + box.height / 2;
+  await row.evaluate((node) => {
+    globalThis.__nativeSwipeEvents = [];
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(type, (event) => {
+      globalThis.__nativeSwipeEvents.push({ type, pointerType: event.pointerType, button: event.button, buttons: event.buttons });
+    }, { once: type === 'pointerdown' });
+  });
+  const session = await page.context().newCDPSession(page);
+  const point = (x) => [{ x, y, radiusX: 1, radiusY: 1, force: 1, id: 1 }];
+  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(x0) });
+  for (const distance of [12, 28, 48, 72]) await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(x0 + direction * distance) });
+  await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await session.detach();
+  return page.evaluate(() => globalThis.__nativeSwipeEvents);
+};
 
 try {
   const requestedEngines = new Set((process.env.MOBILE_BROWSER_ENGINES ?? 'chromium,webkit').split(','));
@@ -112,6 +136,16 @@ try {
       await fireGesture(incoming, [[40, 100], [110, 100]], 'a');
       assert.equal(await page.getByText('Replying to', { exact: false }).count(), 0, `${engineName} link does not reply`);
       assert.equal(await incoming.locator('.bubble-wrap').evaluate((node) => node.style.transform), '', `${engineName} gestures settle`);
+      if (engineName === 'chromium') {
+        for (const [selector, direction] of [['#chat-message-MOBILE-IN .msg-row', 1], ['#chat-message-MOBILE-OUT .msg-row', -1]]) {
+          const events = await fireNativeTouch(page, selector, direction);
+          await page.getByText('Replying to', { exact: false }).waitFor();
+          assert.ok(events.some((event) => event.type === 'pointerdown' && event.pointerType === 'touch'), `${selector} receives native touch pointerdown: ${JSON.stringify(events)}`);
+          assert.ok(events.some((event) => event.type === 'pointerup'), `${selector} receives native touch pointerup: ${JSON.stringify(events)}`);
+          assert.equal(events.some((event) => event.type === 'pointercancel'), false, `${selector} native inward swipe is not cancelled: ${JSON.stringify(events)}`);
+          await page.getByTitle('Cancel reply').click();
+        }
+      }
       await context.close();
 
       const reduced = await browser.newContext({ hasTouch: true, isMobile: true, reducedMotion: 'reduce', serviceWorkers: 'block', viewport: { width: 375, height: 812 } });
@@ -144,6 +178,54 @@ try {
       assert.ok(lightMetrics.directionGap > 0, `${engineName} light incoming/outgoing messages retain a gap`);
       assert.ok(lightMetrics.sendDelta < 0.1, `${engineName} light compact send remains centered`);
       await light.close();
+
+      for (const dark of [false, true]) {
+        const listContext = await browser.newContext({ hasTouch: true, isMobile: true, serviceWorkers: 'block', viewport: { width: 390, height: 812 } });
+        await installRoutes(listContext);
+        await listContext.addInitScript(({ useDark }) => {
+          localStorage.setItem('ours-dark-v3', useDark ? '1' : '0');
+          localStorage.setItem('ours.chats.listMode', 'identity');
+        }, { useDark: dark });
+        const listPage = await listContext.newPage();
+        await listPage.goto(`${origin}/chats`, { waitUntil: 'domcontentloaded' });
+        await listPage.locator('.contact-row.grouped').waitFor();
+        for (const width of [320, 390, 430]) {
+          await listPage.setViewportSize({ width, height: 812 });
+          for (const textScale of [100, 200]) {
+          await listPage.evaluate((scale) => { document.documentElement.style.fontSize = `${scale}%`; }, textScale);
+          const geometry = await listPage.evaluate(() => {
+            const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+            const stage = rect('.signal-stage'); const list = rect('.signal-stage > .listcol');
+            const head = rect('.listcol-head'); const titlebar = rect('.listcol-titlebar'); const title = rect('.listcol-title');
+            const scroll = rect('.listcol-scroll'); const row = rect('.contact-row.grouped');
+            const search = rect('.search'); const actionGroup = rect('.listcol-actions');
+            const actions = [...document.querySelectorAll('.listcol-actions .btn')].map((node) => {
+              const box = node.getBoundingClientRect();
+              return { text: node.textContent.trim(), ...box.toJSON(), labelContained: node.scrollWidth <= node.clientWidth };
+            });
+            return {
+              stage: [list.left - stage.left, stage.right - list.right],
+              titlebar: [titlebar.left - head.left, head.right - titlebar.right],
+              search: [search.left - head.left, head.right - search.right],
+              row: [row.left - scroll.left, scroll.right - row.right],
+              head: head.toJSON(), title: title.toJSON(), actionGroup: actionGroup.toJSON(),
+              actions,
+              overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            };
+          });
+          for (const [label, pair] of Object.entries({ stage: geometry.stage, titlebar: geometry.titlebar, search: geometry.search, row: geometry.row })) {
+            assert.ok(Math.abs(pair[0] - pair[1]) < 1, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${textScale}% ${label} gaps symmetric (${pair[0]}/${pair[1]})`);
+          }
+          assert.deepEqual(geometry.actions.map((action) => action.text), ['Invite', 'Settings'], `${engineName} ${width}px ${textScale}% keeps visible Invite then Settings`);
+          assert.ok(geometry.actions.every((action) => action.width >= 44 && action.height >= 44), `${engineName} ${width}px ${textScale}% header actions retain 44px targets`);
+          assert.ok(geometry.actions.every((action) => action.labelContained), `${engineName} ${width}px ${textScale}% header labels remain fully contained ${JSON.stringify(geometry.actions)}`);
+          assert.ok(geometry.title.right <= geometry.actionGroup.left || geometry.title.bottom <= geometry.actionGroup.top, `${engineName} ${width}px ${textScale}% title and actions do not overlap`);
+          assert.ok(geometry.actionGroup.left >= geometry.head.left && geometry.actionGroup.right <= geometry.head.right && geometry.actionGroup.bottom <= geometry.head.bottom, `${engineName} ${width}px ${textScale}% actions remain inside header ${JSON.stringify({ head: geometry.head, actions: geometry.actionGroup })}`);
+          assert.equal(geometry.overflow, 0, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${textScale}% list has no horizontal overflow`);
+          }
+        }
+        await listContext.close();
+      }
 
       if (engineName === 'chromium') {
         const desktop = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 800 } });

@@ -374,6 +374,14 @@
   .signal-stage .messages-inner { padding: 17px 10px 14px; }
   .signal-stage .composer { margin: 8px; }
 
+  .contact-row.grouped,
+  .theme-dark .contact-row.grouped {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .listcol-actions .btn { min-height: 44px; }
+
   .operations-stage > .listcol {
     grid-template: auto minmax(0, 1fr) / minmax(0, 1fr);
     border-inline: 0;
@@ -396,7 +404,9 @@
 
 /* Calm workspace chrome: translucency is reserved for controls that float
    above content; the reading surfaces and bubbles remain opaque. */
-.messenger-lockup { display: inline-flex; align-items: center; gap: 8px; }
+.messenger-lockup { display: inline-flex; align-items: baseline; gap: 0.28em; }
+.messenger-brand-ours { color: var(--accent); }
+.messenger-brand-product { color: var(--text); }
 .listcol-actions .btn,
 .listcol-actions .icon-btn,
 .conv-contact-trigger,
@@ -429,7 +439,8 @@
 .contact-remove { display: flex; width: 100%; min-height: 50px; align-items: center; justify-content: center; gap: 8px; margin-top: 24px; border: 1px solid var(--danger); border-radius: 16px; background: transparent; color: var(--danger); }
 
 @media (prefers-reduced-transparency: reduce) {
-  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { background: var(--surface-2); backdrop-filter: none; }
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { background: var(--surface-2) !important; backdrop-filter: none; }
+  .listcol-actions .btn.primary { background: var(--accent-fill) !important; }
 }
 @media (prefers-contrast: more) {
   :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { border-color: currentColor; box-shadow: none; }
@@ -438,8 +449,11 @@
   :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity, .contact-remove) { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
 }
 
-@media (max-width: 390px) {
+@media (max-width: 480px) {
   .command-modes .rail-btn { padding-inline: 7px; }
+  .listcol-titlebar { flex-wrap: wrap; gap: 10px; }
+  .listcol-actions { width: 100%; flex-wrap: wrap; }
+  .listcol-actions .btn { flex: 1 0 auto; justify-content: center; min-width: 44px; }
 }
 
 /* Markdown review and per-chat shared media. These dialogs intentionally live
