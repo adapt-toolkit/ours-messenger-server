@@ -184,14 +184,15 @@ try {
   assert.ok(timelineOrder.indexOf('chat-message-W31') < timelineOrder.indexOf('chat-message-VOICE-31'));
   assert.ok(timelineOrder.indexOf('chat-message-VOICE-31') < timelineOrder.indexOf('chat-message-W32'));
   assert.ok(timelineOrder.indexOf('chat-message-W46') < timelineOrder.indexOf('chat-message-PHOTO-46'));
-  await appPage.getByRole('button', { name: 'Fetch' }).click();
+  const fetchVoice = appPage.locator('#chat-message-VOICE-31').getByRole('button', { name: 'Fetch' });
+  await fetchVoice.evaluate((button) => button.click());
   await appPage.locator('.voice-bubble').waitFor({ state: 'attached' });
   await appPage.locator('.voice-bubble audio').waitFor({ state: 'attached' });
   assert.equal(await appPage.getByText('Voice fixture transcript').isVisible(), true,
     'voice transcription remains visible beside the canonical player');
   await appPage.locator('.chat-load-earlier').scrollIntoViewIfNeeded();
   const scrollBefore = await appPage.locator('.messages').evaluate((node) => ({ height: node.scrollHeight, top: node.scrollTop }));
-  await appPage.getByRole('button', { name: /Load earlier messages/ }).click();
+  await appPage.getByRole('button', { name: /Load earlier messages/ }).evaluate((button) => button.click());
   await appPage.locator('#chat-message-W1').waitFor();
   await appPage.waitForFunction(() => (document.querySelector('.messages')?.scrollTop ?? 0) > 0);
   const scrollAfter = await appPage.locator('.messages').evaluate((node) => ({ height: node.scrollHeight, top: node.scrollTop }));
@@ -201,7 +202,7 @@ try {
   assert.ok(Math.abs((scrollAfter.height - scrollAfter.top) - (scrollBefore.height - scrollBefore.top)) <= 2,
     `prepending preserves the visible scroll anchor (${JSON.stringify({ scrollBefore, scrollAfter })})`);
 
-  await appPage.locator('.commandbar').getByRole('button', { name: 'New chat' }).click();
+  await appPage.locator('.listcol-head').getByRole('button', { name: 'Invite' }).click();
   await appPage.getByRole('tab', { name: 'Accept invite' }).click();
   await appPage.getByRole('textbox', { name: 'Invite', exact: true }).fill('test-invite');
   await appPage.getByRole('button', { name: 'Add contact' }).click();
@@ -209,7 +210,7 @@ try {
   assert.equal(await appPage.getByRole('button', { name: 'Add contact' }).isEnabled(), false);
   await appPage.getByRole('button', { name: 'Close Accept an invite' }).click();
   await appPage.getByRole('dialog').waitFor({ state: 'detached' });
-  await appPage.locator('.commandbar').getByRole('button', { name: 'New chat' }).click();
+  await appPage.locator('.listcol-head').getByRole('button', { name: 'Invite' }).click();
   await appPage.getByRole('tab', { name: 'Accept invite' }).click();
   assert.equal(await appPage.getByRole('button', { name: 'Add contact' }).isEnabled(), false,
     'successful acceptance clears busy state before the invite dialog is reopened');

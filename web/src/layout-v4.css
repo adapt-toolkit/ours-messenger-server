@@ -223,7 +223,7 @@
 
 .theme-dark .signal-app {
   display: grid;
-  grid-template: 88px minmax(0, 1fr) / minmax(0, 1fr);
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   gap: 0;
   padding: 0;
   background:

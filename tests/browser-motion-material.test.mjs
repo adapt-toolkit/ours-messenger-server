@@ -64,28 +64,21 @@ try {
   await rows.nth(1).click(); await rows.first().click();
   assert.equal(await page.locator('.contact-active-glow').count(), 1, 'rapid selection retarget keeps one shared spring owner');
   assert.equal(await rows.first().evaluate((node) => node.style.transform), '', 'Framer does not write transforms onto the CSS-owned contact row');
-  await page.getByRole('button', { name: /account menu/ }).click();
-  const menuOrigin = await page.locator('.command-menu').evaluate((node) => ({ origin: getComputedStyle(node).transformOrigin, width: node.getBoundingClientRect().width }));
-  assert.ok(parseFloat(menuOrigin.origin) >= menuOrigin.width * 0.75 && menuOrigin.origin.endsWith(' 0px'), 'account menu is anchored at its top-right trigger edge');
-  await page.getByRole('button', { name: /account menu/ }).evaluate((node) => node.click());
-  await page.locator('.idchip').click();
-  assert.equal(await page.locator('.idcard').evaluate((node) => getComputedStyle(node).transformOrigin), '0px 0px', 'identity popover is anchored at its header trigger edge');
-  await page.getByRole('button', { name: 'Close verified identity' }).click();
-  await page.locator('.command-settings').click();
+  await page.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   await page.locator('.modal').evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const dialogOrigin = await page.locator('.modal').evaluate((node) => ({ origin: getComputedStyle(node).transformOrigin.split(' ').map(parseFloat), box: [node.getBoundingClientRect().width, node.getBoundingClientRect().height] }));
   assert.ok(Math.abs(dialogOrigin.origin[0] - dialogOrigin.box[0] / 2) < 1 && Math.abs(dialogOrigin.origin[1] - dialogOrigin.box[1] / 2) < 1, `desktop dialog originates at its center ${JSON.stringify(dialogOrigin)}`);
   await fine.close();
 
   const coarse = await browser.newContext({ viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true, serviceWorkers: 'block' });
-  const mobile = await openPage(coarse); await mobile.locator('.command-settings').evaluate((node) => node.click());
+  const mobile = await openPage(coarse); await mobile.locator('.detail-back').click(); await mobile.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   await mobile.locator('.modal').evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const sheetOrigin = await mobile.locator('.modal').evaluate((node) => ({ origin: getComputedStyle(node).transformOrigin.split(' ').map(parseFloat), box: [node.getBoundingClientRect().width, node.getBoundingClientRect().height] }));
   assert.ok(Math.abs(sheetOrigin.origin[0] - sheetOrigin.box[0] / 2) < 1 && Math.abs(sheetOrigin.origin[1] - sheetOrigin.box[1]) < 1, 'mobile sheet originates at its bottom edge');
   await coarse.close();
 
   const reduced = await browser.newContext({ viewport: { width: 1000, height: 760 }, reducedMotion: 'reduce', serviceWorkers: 'block' });
-  const reducedPage = await openPage(reduced); await reducedPage.locator('.command-settings').click();
+  const reducedPage = await openPage(reduced); await reducedPage.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   assert.equal(await reducedPage.locator('.modal').evaluate((node) => getComputedStyle(node).animationName), 'none', 'reduced motion suppresses dialog spatial keyframes');
   await reduced.close();
 
@@ -93,7 +86,7 @@ try {
   const accessiblePage = await accessible.newPage(); const session = await accessible.newCDPSession(accessiblePage);
   await session.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }, { name: 'forced-colors', value: 'active' }] });
   await accessiblePage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' }); await accessiblePage.locator('.composer textarea').waitFor();
-  for (const selector of ['.commandbar', '.detail-head', '.composer']) assert.equal(await accessiblePage.locator(selector).evaluate((node) => getComputedStyle(node).backdropFilter), 'none', `${selector} material becomes non-blurred in accessibility modes`);
+  for (const selector of ['.listcol-actions .icon-btn', '.detail-head', '.composer']) assert.equal(await accessiblePage.locator(selector).evaluate((node) => getComputedStyle(node).backdropFilter), 'none', `${selector} material becomes non-blurred in accessibility modes`);
   await accessible.close();
   console.log('browser-motion-material OK — single motion owners, immediate lists, real anchored surfaces, and accessible material fallbacks');
 } finally {

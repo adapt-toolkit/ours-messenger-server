@@ -142,7 +142,8 @@ try {
   await sendButton.tap();
   assert.equal(await composer.inputValue(), '', 'submitted text clears immediately instead of freezing until network settlement');
   assert.equal(await composer.isEnabled(), true, 'in-flight send never disables and blurs the focused textarea');
-  assert.equal(await sendButton.isDisabled(), true, 'in-flight send still disables duplicate submit activation');
+  await sendButton.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.composer .vr-mic').isVisible(), true, 'cleared in-flight draft removes duplicate submit activation and restores the shared mic slot');
   await successResponse;
   await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
   assert.equal(await composer.evaluate((node) => document.activeElement === node), true,

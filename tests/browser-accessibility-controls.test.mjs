@@ -66,40 +66,12 @@ try {
   });
   const page = await context.newPage();
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Me account menu' }).waitFor();
-
-  const account = page.getByRole('button', { name: 'Me account menu' });
-  assert.equal(await account.getAttribute('aria-haspopup'), 'menu');
-  assert.equal(await account.getAttribute('aria-expanded'), 'false');
-  await account.click();
-  assert.equal(await account.getAttribute('aria-expanded'), 'true');
-  const menu = page.getByRole('menu', { name: 'Me account' });
-  await menu.waitFor();
-  const inviteItem = menu.getByRole('menuitem', { name: 'Invite a contact' });
-  const settingsItem = menu.getByRole('menuitem', { name: 'Settings' });
-  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'menuitem');
-  assert.equal(await inviteItem.evaluate((node) => document.activeElement === node), true, 'opening moves focus to first menu item');
-  await page.keyboard.press('End');
-  assert.equal(await settingsItem.evaluate((node) => document.activeElement === node), true, 'End focuses last menu item');
-  await page.keyboard.press('ArrowDown');
-  assert.equal(await inviteItem.evaluate((node) => document.activeElement === node), true, 'Arrow navigation wraps');
-  await page.keyboard.press('Escape');
-  await menu.waitFor({ state: 'detached' });
-  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-haspopup') === 'menu');
-  assert.equal(await account.evaluate((node) => document.activeElement === node), true, 'Escape restores trigger focus');
-  await account.click();
-  await menu.waitFor();
-  await page.locator('.pop-backdrop').click({ position: { x: 2, y: 2 } });
-  await menu.waitFor({ state: 'detached' });
-  assert.equal(await account.evaluate((node) => document.activeElement === node), true, 'outside dismissal restores trigger focus');
-  await account.click();
-  await menu.waitFor();
-  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'menuitem');
-  await page.keyboard.press('Tab');
-  await menu.waitFor({ state: 'detached' });
   const listInvite = page.locator('.listcol-head').getByRole('button', { name: 'Invite' });
-  await page.waitForFunction(() => document.activeElement?.textContent?.trim() === 'Invite');
-  assert.equal(await listInvite.evaluate((node) => document.activeElement === node), true, 'Tab closes the menu and advances to the next page control');
+  const listSettings = page.locator('.listcol-head').getByRole('button', { name: 'Settings' });
+  await listInvite.waitFor();
+  await listInvite.focus();
+  await page.keyboard.press('Tab');
+  assert.equal(await listSettings.evaluate((node) => document.activeElement === node), true, 'compact list actions retain predictable keyboard order');
 
   const pendingText = page.getByText('Waiting person', { exact: true });
   await pendingText.waitFor();
@@ -133,7 +105,7 @@ try {
   await page.waitForFunction(() => document.activeElement?.textContent?.trim() === 'Approve');
   assert.equal(await failingApprove.evaluate((node) => document.activeElement === node), true, 'failed decision keeps focus at the action');
 
-  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByRole('button', { name: 'Invite' }).click();
   const generate = page.getByRole('tab', { name: 'Generate invite' });
   const accept = page.getByRole('tab', { name: 'Accept invite' });
   assert.equal(await generate.getAttribute('tabindex'), '0');
@@ -148,26 +120,23 @@ try {
   assert.equal(await generate.getAttribute('aria-selected'), 'true');
   await page.getByRole('button', { name: 'Close Invite a contact' }).click();
 
-  const identityTrigger = page.getByRole('button', { name: /verified identity/i });
+  const identityTrigger = page.getByRole('button', { name: /Open contact details/i });
   await identityTrigger.click();
-  const identityPopover = page.getByRole('dialog', { name: 'Verified identity' });
-  await identityPopover.waitFor();
-  assert.equal(await identityPopover.getAttribute('aria-modal'), 'false', 'desktop identity details remain an anchored nonmodal popover');
-  await identityPopover.getByRole('button', { name: 'Close verified identity' }).click();
-  await page.waitForFunction(() => document.activeElement?.classList.contains('idchip'));
-  assert.equal(await identityTrigger.evaluate((node) => document.activeElement === node), true, 'desktop identity popover restores trigger focus');
+  await page.getByRole('heading', { name: 'Verified identity' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.hasAttribute('data-contact-trigger'));
+  assert.equal(await identityTrigger.evaluate((node) => document.activeElement === node), true, 'desktop contact screen restores trigger focus');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await identityTrigger.click();
-  const identityDialog = page.getByRole('dialog', { name: 'Verified identity' });
-  await identityDialog.waitFor();
-  assert.notEqual(await identityDialog.getAttribute('aria-modal'), 'false', 'mobile identity details use a focus-trapped modal dialog');
-  await identityDialog.getByRole('button', { name: 'Close Verified identity' }).click();
-  await page.waitForFunction(() => document.activeElement?.classList.contains('idchip'));
-  assert.equal(await identityTrigger.evaluate((node) => document.activeElement === node), true, 'mobile identity dialog restores trigger focus');
+  await page.getByRole('heading', { name: 'Verified identity' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.hasAttribute('data-contact-trigger'));
+  assert.equal(await identityTrigger.evaluate((node) => document.activeElement === node), true, 'mobile contact screen restores trigger focus');
   await page.setViewportSize({ width: 1280, height: 800 });
 
-  await page.getByRole('button', { name: 'Media' }).click();
+  await identityTrigger.click();
+  await page.getByRole('button', { name: /Shared photos, files, and links/ }).click();
   const photo = page.getByRole('tab', { name: /Photos/ });
   const files = page.getByRole('tab', { name: /Files/ });
   await photo.focus();
@@ -180,13 +149,14 @@ try {
   assert.equal(await page.getByRole('tabpanel').getAttribute('id'), 'shared-media-panel');
   assert.equal(await files.getAttribute('aria-controls'), 'shared-media-panel');
   await page.getByRole('button', { name: 'Close Shared media' }).click();
+  await page.keyboard.press('Escape');
 
   await context.setOffline(true);
   await page.getByRole('status').filter({ hasText: 'Offline — reconnecting' }).waitFor();
   assert.equal(await page.getByRole('status').filter({ hasText: 'Offline — reconnecting' }).getAttribute('aria-live'), 'polite');
   await context.setOffline(false);
   failInvites = true;
-  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByRole('button', { name: 'Invite' }).click();
   const apiAlert = page.getByRole('alert').filter({ hasText: 'invite fixture failed' });
   await apiAlert.waitFor();
   assert.equal(await apiAlert.getAttribute('aria-live'), 'assertive');

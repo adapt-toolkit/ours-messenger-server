@@ -193,7 +193,8 @@ try {
   assert.ok(seekTarget.waveHeight <= 34.5, `waveform remains visually compact (${seekTarget.waveHeight}px)`);
   assert.ok(seekTarget.playWidth >= 44 && seekTarget.playHeight >= 44, 'playback button exposes a 44x44 hit box');
 
-  await page.getByTitle('Shared photos, files, and links').click();
+  await page.getByRole('button', { name: /Open contact details/ }).click();
+  await page.getByRole('button', { name: /Shared photos, files, and links/ }).click();
   const sharedTabs = page.getByRole('tablist', { name: 'Shared media type' }).getByRole('tab');
   assert.equal(await sharedTabs.count(), 3);
   for (const tab of await sharedTabs.all()) {
@@ -216,14 +217,18 @@ try {
   assert.equal(tabReleased.transform, tabRest.transform, 'real tab release removes geometric feedback');
   assert.notEqual(tabReleased.background, tabPressed.background, 'real tab release settles into its selected surface');
   await page.getByRole('button', { name: 'Close Shared media' }).click();
+  await page.keyboard.press('Escape');
 
-  const targetSelectors = ['.detail-back', '.conv-actions .btn', '.composer-tool', '.vr-mic', '.composer .btn.primary'];
+  const targetSelectors = ['.detail-back', '.conv-contact-trigger', '.composer-tool', '.vr-mic'];
   for (const selector of targetSelectors) {
     const target = page.locator(selector).first();
     await target.waitFor();
     const box = await target.boundingBox();
     assert.ok(box && box.width >= 44 && box.height >= 44, `${selector} is at least 44x44 (${box?.width}x${box?.height})`);
   }
+  await page.locator('.composer textarea').fill('Ready to send');
+  const sendTargetBox = await page.locator('.composer .btn.primary').boundingBox();
+  assert.ok(sendTargetBox && sendTargetBox.width >= 44 && sendTargetBox.height >= 44, `send state is at least 44x44 (${sendTargetBox?.width}x${sendTargetBox?.height})`);
   await page.locator('.detail-back').click();
   const pendingActions = page.getByText('Waiting', { exact: true }).locator('xpath=ancestor::div[contains(@class,"contact-row")]').getByRole('button');
   assert.equal(await pendingActions.count(), 2);
@@ -261,13 +266,6 @@ try {
   await pen(session, 'mouseMoved', 1, 1);
   await page.waitForTimeout(200);
   assert.deepEqual(await styleOf(attach), rest, 'release restores the resting presentation');
-  const send = page.locator('.composer .btn.primary');
-  assert.equal(await send.isDisabled(), true);
-  const disabledRest = await styleOf(send);
-  const sendBox = await send.boundingBox();
-  await pen(session, 'mousePressed', sendBox.x + 20, sendBox.y + 20);
-  assert.deepEqual(await styleOf(send), disabledRest, 'disabled control has no pressed state');
-  await pen(session, 'mouseReleased', sendBox.x + 20, sendBox.y + 20);
   await context.close();
 
   const reduceContext = await browser.newContext({ hasTouch: true, isMobile: true, reducedMotion: 'reduce', serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
