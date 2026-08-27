@@ -331,6 +331,7 @@ try {
           assert.ok(geometry.actions.every((action) => action.width >= 44 && action.height >= 44), `${engineName} ${width}px ${textScale}% header actions retain 44px targets`);
           assert.ok(geometry.searchBox.width >= 200 && geometry.searchBox.height >= 44, `${engineName} ${width}px search stays fixed open ${JSON.stringify(geometry.searchBox)}`);
           assert.ok(geometry.invite.width >= 44 && geometry.invite.height >= 44 && geometry.invite.left - geometry.searchBox.right >= 10, `${engineName} ${width}px bottom Search and Invite are disjoint 44px+ controls`);
+          assert.ok(Math.abs(geometry.invite.height - geometry.searchBox.height) <= 1, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${textScale}% Invite height equals Search (${geometry.invite.height}/${geometry.searchBox.height})`);
           assert.ok(geometry.bottomChrome.left >= 0 && geometry.bottomChrome.right <= geometry.viewport && geometry.bottomChrome.bottom <= 812, `${engineName} ${width}px transparent bottom wrapper is contained`);
           assert.ok(geometry.title.right <= geometry.actionGroup.left || geometry.title.bottom <= geometry.actionGroup.top, `${engineName} ${width}px ${textScale}% title and actions do not overlap`);
           assert.ok(geometry.actionGroup.left >= geometry.head.left && geometry.actionGroup.right <= geometry.head.right && geometry.actionGroup.bottom <= geometry.head.bottom, `${engineName} ${width}px ${textScale}% actions remain inside header ${JSON.stringify({ head: geometry.head, actions: geometry.actionGroup })}`);
@@ -520,6 +521,15 @@ try {
               items: items.map((item) => item.toJSON()),
             };
           });
+          const equalChrome = await listPage.evaluate(() => {
+            const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+            return { back: rect('.detail-back').toJSON(), status: rect('.conv-peer-status').toJSON(), avatar: rect('.conv-contact-avatar').toJSON(), attach: rect('.composer-tool').toJSON(), field: rect('.composer .field').toJSON(), trailing: rect('.composer .vr-mic, .composer .btn.primary').toJSON() };
+          });
+          for (const [name, top] of Object.entries({ back: equalChrome.back, status: equalChrome.status, avatar: equalChrome.avatar })) {
+            assert.ok(top.height >= 44 && Math.abs(top.height - equalChrome.field.height) <= 1, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${name} height equals bottom controls (${top.height}/${equalChrome.field.height})`);
+          }
+          assert.ok(Math.abs(equalChrome.attach.height - equalChrome.field.height) <= 1 && Math.abs(equalChrome.trailing.height - equalChrome.field.height) <= 1, `${engineName} ${width}px bottom controls share one height ${JSON.stringify(equalChrome)}`);
+          assert.ok(equalChrome.status.left - equalChrome.back.right >= 10 && equalChrome.avatar.left - equalChrome.status.right >= 10, `${engineName} ${width}px equal-height header controls remain disjoint`);
           assert.ok(collapsed.width >= 160 && collapsed.height >= 44 && collapsed.height <= 45 && collapsed.placeholder.length > 0,
             `${engineName} ${dark ? 'dark' : 'light'} ${width}px fixed-open input stays recognizable ${JSON.stringify(collapsed)}`);
           assert.ok(!['transparent', 'rgba(0, 0, 0, 0)'].includes(collapsed.placeholderColor),
@@ -544,7 +554,10 @@ try {
           }
         }
         await listPage.setViewportSize({ width: 390, height: 812 });
+        await listPage.locator('.composer textarea').fill('');
         await listPage.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+        await listPage.locator('.composer textarea').fill('Zoom resize probe');
+        await listPage.locator('.composer textarea').fill('');
         await listPage.waitForFunction(() => {
           const detail = document.querySelector('.detail-chat');
           const head = document.querySelector('.detail-head');
@@ -558,10 +571,13 @@ try {
           const detail = document.querySelector('.detail-chat');
           const head = box('.detail-head'); const composer = box('.composer-wrap');
           const controls = [...document.querySelectorAll('.detail-head button, .composer-wrap button')].map((node) => node.getBoundingClientRect().toJSON());
+          const equalHeights = ['.detail-back', '.conv-peer-status', '.conv-contact-avatar', '.composer-tool', '.composer .vr-mic, .composer .btn.primary'].map((selector) => box(selector).height);
+          const field = document.querySelector('.composer .field');
           const rows = [...document.querySelectorAll('.msg-row')].map((node) => node.getBoundingClientRect());
           return {
             overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            viewport: { width: innerWidth, height: innerHeight }, head: head.toJSON(), composer: composer.toJSON(), controls,
+            viewport: { width: innerWidth, height: innerHeight }, head: head.toJSON(), composer: composer.toJSON(), controls, equalHeights,
+            field: { height: field.getBoundingClientRect().height, clientHeight: field.clientHeight, scrollHeight: field.scrollHeight },
             headReserve: parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-head-height')),
             composeReserve: parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-compose-height')),
             directionGap: rows[1].top - rows[0].bottom,
@@ -578,6 +594,8 @@ try {
         assert.ok(zoomMetrics.controls.every((control) => control.width >= 44 && control.height >= 44
           && control.left >= 0 && control.right <= zoomMetrics.viewport.width && control.top >= 0 && control.bottom <= zoomMetrics.viewport.height),
         `${engineName} ${dark ? 'dark' : 'light'} 200% overlay controls retain contained 44px targets ${JSON.stringify(zoomMetrics.controls)}`);
+        assert.ok(zoomMetrics.equalHeights.every((height) => height >= 44 && Math.abs(height - zoomMetrics.equalHeights[0]) <= 1), `${engineName} ${dark ? 'dark' : 'light'} 200% fixed top and bottom controls retain equal 44px heights ${zoomMetrics.equalHeights}`);
+        assert.ok(zoomMetrics.field.height >= 44 && zoomMetrics.field.scrollHeight <= zoomMetrics.field.clientHeight + 2, `${engineName} ${dark ? 'dark' : 'light'} 200% text field may grow for Dynamic Type without vertical clipping ${JSON.stringify(zoomMetrics.field)}`);
         assert.ok(zoomMetrics.directionGap >= 8, `${engineName} ${dark ? 'dark' : 'light'} 200% direction turn retains >=8px (${zoomMetrics.directionGap}px)`);
         assert.ok(zoomMetrics.continuationGap > 0 && zoomMetrics.continuationGap < zoomMetrics.directionGap,
           `${engineName} ${dark ? 'dark' : 'light'} 200% continuation stays compact (${zoomMetrics.continuationGap}px vs ${zoomMetrics.directionGap}px)`);
@@ -596,8 +614,8 @@ try {
           composer: document.querySelector('.composer-wrap').getBoundingClientRect().toJSON(),
           scrollTop: document.querySelector('.messages').scrollTop,
         }));
-        assert.ok(lastReachable.row.top < lastReachable.composer.top && lastReachable.row.bottom > zoomMetrics.head.bottom,
-          `${engineName} ${dark ? 'dark' : 'light'} 200% last message is reachable in the exposed canvas ${JSON.stringify(lastReachable)}`);
+        assert.ok(lastReachable.row.bottom <= lastReachable.composer.top - 8 && lastReachable.row.bottom > zoomMetrics.head.bottom,
+          `${engineName} ${dark ? 'dark' : 'light'} 200% last message clears the measured composer while remaining reachable ${JSON.stringify(lastReachable)}`);
         if (captureDir && engineName === 'chromium') {
           await listPage.goto(`${origin}/chats`, { waitUntil: 'domcontentloaded' });
           await listPage.locator('.contact-row.grouped').first().waitFor();

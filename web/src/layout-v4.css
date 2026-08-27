@@ -389,9 +389,9 @@
   .signal-stage .detail-head .conv-peer { width: 100%; gap: 10px; }
   .signal-stage .detail-back {
     display: inline-grid;
-    flex: 0 0 54px;
-    width: 54px;
-    height: 54px;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
     border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
     border-radius: 18px;
     background: color-mix(in srgb, var(--surface) 78%, transparent);
@@ -404,7 +404,7 @@
   .signal-stage .detail-head .conv-peer-status {
     flex: 1 1 auto;
     min-width: 0;
-    height: 54px;
+    height: 44px;
     align-content: center;
     justify-items: center;
     padding-inline: 8px;
@@ -416,7 +416,7 @@
   }
   .signal-stage .detail-head .conv-peer-name { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
   .signal-stage .detail-head .conv-contact-avatar {
-    flex: 0 0 54px; width: 54px; height: 54px; border-radius: 50%;
+    flex: 0 0 44px; width: 44px; height: 44px; border-radius: 50%;
     border: 0;
     background: var(--accent-fill);
     color: var(--on-accent);
@@ -469,6 +469,8 @@
     flex: 1 1 auto;
     width: auto;
     min-width: 112px;
+    height: 44px;
+    min-height: 44px;
     border-radius: 16px;
   }
   .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing) {
@@ -513,9 +515,9 @@
   }
   .signal-stage.show-detail > .listcol .list-bottom-chrome { display: none; }
   .list-bottom-chrome > * { pointer-events: auto; }
-  .listcol > .listcol-scroll { padding-bottom: calc(var(--list-bottom-chrome-height, 54px) + 12px); }
+  .listcol > .listcol-scroll { padding-bottom: calc(var(--list-bottom-chrome-height, 46px) + 12px); }
   .list-bottom-invite {
-    flex: 0 0 54px; width: 54px; height: 54px; border-radius: 50%;
+    flex: 0 0 46px; width: 46px; height: 46px; border-radius: 50%;
     border: 1px solid var(--accent-fill);
     background: var(--accent-fill);
     color: var(--on-accent);
