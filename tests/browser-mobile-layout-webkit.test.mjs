@@ -23,6 +23,16 @@ const contrastRatio = (foreground, background) => {
   const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
   return (lighter + 0.05) / (darker + 0.05);
 };
+const parseCssColor = (color) => {
+  const values = color.match(/[\d.]+/g).map(Number);
+  const normalized = color.startsWith('color(srgb') ? values.slice(0, 3).map((value) => value * 255) : values.slice(0, 3);
+  const slash = color.match(/\/\s*([\d.]+)/); const rgba = color.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/);
+  return { channels: normalized, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1) };
+};
+const compositeColor = (foreground, background) => {
+  const fg = parseCssColor(foreground); const bg = parseCssColor(background);
+  return `rgb(${fg.channels.map((channel, index) => Math.round(channel * fg.alpha + bg.channels[index] * (1 - fg.alpha))).join(' ')})`;
+};
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/api/events') {
@@ -469,11 +479,12 @@ try {
         await listPage.getByTitle('Cancel reply').click();
         const conversationMaterials = await listPage.evaluate(() => {
           const probe = (value) => { const node = document.createElement('i'); node.style.background = value; document.body.append(node); const result = getComputedStyle(node).backgroundColor; node.remove(); return result; };
+          const probeColor = (value) => { const node = document.createElement('i'); node.style.color = value; document.body.append(node); const result = getComputedStyle(node).color; node.remove(); return result; };
           const read = (selector) => { const style = getComputedStyle(document.querySelector(selector)); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; };
-          return { regular: probe('var(--material-floating)'), accent: probe('var(--material-floating-accent)'),
+          return { regular: probe('var(--material-floating)'), accent: probe('var(--material-floating-accent)'), action: probe('var(--material-floating-action)'), actionHover: probe('var(--material-floating-action-hover)'), actionPressed: probe('var(--material-floating-action-pressed)'), actionInk: probeColor('var(--material-floating-action-ink)'), solidAccent: probe('var(--accent)'), canvas: probe('var(--bg)'), surface: probe('var(--surface)'), outgoing: probe('var(--accent-fill)'),
             jump: read('.jump-latest'), back: read('.detail-back'), status: read('.conv-peer-status'), attach: read('.composer-tool'), field: read('.composer .field'), mic: read('.vr-mic'), avatar: read('.conv-contact-avatar') };
         });
-        for (const [name, item] of Object.entries(conversationMaterials).filter(([name]) => !['regular', 'accent', 'avatar'].includes(name))) {
+        for (const [name, item] of Object.entries(conversationMaterials).filter(([name]) => !['regular', 'accent', 'action', 'actionHover', 'actionPressed', 'actionInk', 'solidAccent', 'canvas', 'surface', 'outgoing', 'avatar'].includes(name))) {
           assert.equal(item.background, conversationMaterials.regular, `${engineName} ${name} resolves shared floating role`);
           assert.notEqual(item.filter, 'none', `${engineName} ${name} has standard backdrop filter`);
           if (item.webkitFilter) assert.notEqual(item.webkitFilter, 'none', `${engineName} ${name} has computed WebKit backdrop filter`);
@@ -482,10 +493,52 @@ try {
         assert.ok(conversationMaterials.avatar.alpha < 1 && conversationMaterials.avatar.filter !== 'none', `${engineName} avatar is filtered translucent glass ${JSON.stringify(conversationMaterials.avatar)}`);
         if (conversationMaterials.avatar.webkitFilter) assert.notEqual(conversationMaterials.avatar.webkitFilter, 'none', `${engineName} avatar exposes computed WebKit filter`);
         await listPage.locator('.composer textarea').fill('Material check');
-        const sendMaterial = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; });
-        assert.equal(sendMaterial.background, conversationMaterials.accent, `${engineName} Send resolves floating accent role`);
+        const sendMaterial = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); const iconStyle = getComputedStyle(node.querySelector('.ic')); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, color: style.color, iconColor: iconStyle.color, border: style.borderColor, opacity: Number(style.opacity), pointerEvents: style.pointerEvents, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; });
+        assert.equal(sendMaterial.background, conversationMaterials.action, `${engineName} enabled Send resolves dedicated floating action role`);
+        assert.equal(sendMaterial.iconColor, conversationMaterials.actionInk, `${engineName} enabled Send glyph resolves action-ink role`);
         assert.ok(sendMaterial.alpha < 1 && sendMaterial.filter !== 'none', `${engineName} Send is filtered translucent glass ${JSON.stringify(sendMaterial)}`);
         if (sendMaterial.webkitFilter) assert.notEqual(sendMaterial.webkitFilter, 'none', `${engineName} Send exposes computed WebKit filter`);
+        const underlyingColors = { canvas: conversationMaterials.canvas, surface: conversationMaterials.surface, outgoing: conversationMaterials.outgoing };
+        const effectiveActions = Object.fromEntries(Object.entries(underlyingColors).map(([name, color]) => [name, compositeColor(sendMaterial.background, color)]));
+        for (const [name, effectiveAction] of Object.entries(effectiveActions)) assert.ok(contrastRatio(sendMaterial.iconColor, effectiveAction) >= 3, `${engineName} enabled Send glyph has >=3:1 effective contrast over ${name} (${contrastRatio(sendMaterial.iconColor, effectiveAction).toFixed(2)}) ${JSON.stringify({ sendMaterial, effectiveAction, underlying: underlyingColors[name] })}`);
+        const effectiveAction = effectiveActions.canvas;
+        const effectivePassive = compositeColor(conversationMaterials.accent, conversationMaterials.canvas);
+        assert.ok(Math.abs(contrastRatio('rgb(0 0 0)', effectiveAction) - contrastRatio('rgb(0 0 0)', effectivePassive)) >= 0.75, `${engineName} enabled action has >=0.75 grayscale luminance-ratio delta from passive accent ${JSON.stringify({ effectiveAction, effectivePassive })}`);
+        assert.equal(sendMaterial.opacity, 1, `${engineName} enabled Send is fully legible`);
+        await listPage.locator('.composer .btn.primary').hover();
+        await settleAnimations(listPage);
+        const hoverSend = await listPage.locator('.composer .btn.primary').evaluate((node) => ({ background: getComputedStyle(node).backgroundColor, iconColor: getComputedStyle(node.querySelector('.ic')).color }));
+        assert.deepEqual(hoverSend, { background: conversationMaterials.actionHover, iconColor: conversationMaterials.actionInk }, `${engineName} hover resolves action-hover and action-ink roles`);
+        const sendBox = await listPage.locator('.composer .btn.primary').boundingBox(); assert.ok(sendBox);
+        await listPage.mouse.move(sendBox.x + sendBox.width / 2, sendBox.y + sendBox.height / 2); await listPage.mouse.down();
+        await settleAnimations(listPage);
+        const pressedSend = await listPage.locator('.composer .btn.primary').evaluate((node) => ({ background: getComputedStyle(node).backgroundColor, iconColor: getComputedStyle(node.querySelector('.ic')).color }));
+        assert.deepEqual(pressedSend, { background: conversationMaterials.actionPressed, iconColor: conversationMaterials.actionInk }, `${engineName} pressed resolves action-pressed and action-ink roles`);
+        await listPage.mouse.up();
+        await listPage.locator('.composer .btn.primary').evaluate((node) => { node.disabled = true; });
+        await settleAnimations(listPage);
+        const disabledSend = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); return { disabled: node.disabled, opacity: Number(style.opacity), pointerEvents: style.pointerEvents, color: style.color, iconColor: getComputedStyle(node.querySelector('.ic')).color }; });
+        assert.ok(disabledSend.disabled && disabledSend.opacity <= 0.45 && disabledSend.pointerEvents === 'none' && disabledSend.iconColor !== conversationMaterials.actionInk, `${engineName} genuinely disabled Send retains its muted glyph styling and is noninteractive ${JSON.stringify(disabledSend)}`);
+        await listPage.locator('.composer .btn.primary').evaluate((node) => { node.disabled = false; });
+        if (engineName === 'chromium') {
+          const mediaSession = await listPage.context().newCDPSession(listPage);
+          await mediaSession.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
+          await settleAnimations(listPage);
+          const reducedSend = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); return { background: style.backgroundColor, filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; });
+          assert.equal(reducedSend.background, conversationMaterials.solidAccent, `reduced-transparency enabled Send uses solid accent fallback ${JSON.stringify(reducedSend)}`);
+          assert.equal(reducedSend.filter, 'none', 'reduced-transparency enabled Send removes standard filter');
+          if (reducedSend.webkitFilter) assert.equal(reducedSend.webkitFilter, 'none', 'reduced-transparency enabled Send removes WebKit filter');
+          await mediaSession.send('Emulation.setEmulatedMedia', { features: [] }); await mediaSession.detach();
+        }
+        await listPage.emulateMedia({ contrast: 'more' });
+        await settleAnimations(listPage);
+        const highContrastSend = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); return { outline: style.outlineColor, color: style.color, width: parseFloat(style.outlineWidth), shadow: style.boxShadow }; });
+        assert.ok(highContrastSend.outline === highContrastSend.color && highContrastSend.width >= 1 && highContrastSend.shadow === 'none', `${engineName} increased-contrast Send has a currentColor edge without soft shadow ${JSON.stringify(highContrastSend)}`);
+        await listPage.emulateMedia({ contrast: 'no-preference', forcedColors: 'active' });
+        await settleAnimations(listPage);
+        const forcedSend = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); return { background: style.backgroundColor, color: style.color, filter: style.backdropFilter, shadow: style.boxShadow }; });
+        assert.ok(forcedSend.filter === 'none' && forcedSend.shadow === 'none' && forcedSend.background !== forcedSend.color, `${engineName} forced-colors Send uses distinct system fill/text without glass ${JSON.stringify(forcedSend)}`);
+        await listPage.emulateMedia({ forcedColors: 'none' });
         await listPage.locator('.composer textarea').fill('');
         await listPage.locator('.messages').evaluate((node) => { node.scrollTop = node.scrollHeight; });
         const headTopology = await listPage.locator('.detail-head').evaluate((node) => {

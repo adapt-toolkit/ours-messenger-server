@@ -596,6 +596,21 @@
     background: var(--material-floating-accent);
     color: var(--text);
   }
+  .signal-stage .composer > .btn.primary:not(:disabled) {
+    background-color: var(--material-floating-action);
+    color: var(--material-floating-action-ink);
+  }
+  .signal-stage .composer > .btn.primary:not(:disabled) .ic {
+    color: inherit !important;
+  }
+  .signal-stage .composer > .btn.primary:hover:not(:disabled) {
+    background-color: var(--material-floating-action-hover);
+    color: var(--material-floating-action-ink);
+  }
+  .signal-stage .composer > .btn.primary:active:not(:disabled) {
+    background-color: var(--material-floating-action-pressed);
+    color: var(--material-floating-action-ink);
+  }
 
   .conversation-group > .contact-row:not(:last-child)::after {
     content: ''; position: absolute; right: 0; bottom: 0; left: 64px; height: 1px;
@@ -695,6 +710,7 @@
   .conversation-list-modes,
   .conversation-list-modes::before { background: var(--surface) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .list-bottom-invite { background: var(--accent-fill) !important; color: var(--on-accent); }
+  .signal-app .signal-stage .composer > .btn.primary:not(:disabled) { background: var(--accent) !important; color: var(--on-accent); }
 }
 
 @media (max-width: 860px) and (prefers-contrast: more) {
@@ -732,6 +748,7 @@
   .conversation-list-modes { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .conversation-list-modes::before { border: 2px solid Highlight; background: Canvas; box-shadow: none; }
   .conversation-group > .contact-row:not(:last-child)::after { background: CanvasText; }
+  .signal-stage .composer > .btn.primary:not(:disabled) { border-color: Highlight; background: Highlight; color: HighlightText; }
 }
 
 @media (max-width: 860px) and (prefers-reduced-motion: reduce) {
