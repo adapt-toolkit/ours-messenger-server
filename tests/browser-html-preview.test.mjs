@@ -27,7 +27,7 @@ const address = server.address(); assert.ok(address && typeof address === 'objec
 const origin = `http://127.0.0.1:${address.port}`;
 const ownerShaped = (marker, accent) => Buffer.from(`<!doctype html><html><head><meta charset="utf-8"><style>code{white-space:pre-wrap}.smallcaps{font-variant:small-caps}</style><style>
   @import url("${origin}/hostile-import");
-  :root{--ink:#15213a} body{display:grid;grid-template-columns:17rem minmax(0,1fr);margin:0;background:#fbfcff;color:var(--ink)}
+  :root{--ink:#15213a} body{display:grid;grid-template-columns:17rem minmax(0,1fr);margin:0;overflow:clip;background:#fbfcff;color:var(--ink)}
   #title-block-header{padding:42px;color:white;background:linear-gradient(132deg,#07152f,#3434a4)}
   .title{font-size:43px}.card{border-radius:22px;background:${accent};background-image:url("${origin}/hostile-image")}
   #TOC{position:sticky;border-radius:20px}.section{min-height:30rem}</style></head><body><header id="title-block-header"><h1 class="title">${marker} — Привет</h1></header>
@@ -85,6 +85,22 @@ try {
   assert.equal(styles.color, 'rgb(21, 33, 58)'); assert.equal(styles.background, 'rgb(251, 252, 255)');
   assert.notEqual(styles.grid, 'none'); assert.equal(styles.titleSize, '43px'); assert.equal(styles.cardRadius, '22px');
   assert.ok(styles.sheets.reduce((sum, count) => sum + count, 0) >= 5); assert.ok(styles.parentDenied && styles.storageDenied && styles.cookieDenied && styles.scriptRan === null, JSON.stringify(styles));
+  const outerScrollBefore = await page.evaluate(() => ({ y: scrollY, modalBodyTop: document.querySelector('.html-modal .modal-body').scrollTop }));
+  const scrollBefore = await frame.locator('body').evaluate(() => ({
+    y: scrollY,
+    scrollingElement: document.scrollingElement?.tagName, htmlOverflow: getComputedStyle(document.documentElement).overflow,
+    bodyOverflow: getComputedStyle(document.body).overflow,
+    scrollHeight: document.documentElement.scrollHeight, clientHeight: document.documentElement.clientHeight,
+  }));
+  assert.equal(scrollBefore.scrollingElement, 'HTML'); assert.equal(scrollBefore.htmlOverflow, 'auto'); assert.equal(scrollBefore.bodyOverflow, 'clip');
+  assert.ok(scrollBefore.scrollHeight > scrollBefore.clientHeight, JSON.stringify(scrollBefore));
+  await iframe.hover(); await page.mouse.wheel(0, 500);
+  await page.waitForTimeout(120);
+  const scrollAfter = await frame.locator('body').evaluate(() => ({ y: scrollY }));
+  const outerScrollAfter = await page.evaluate(() => ({ y: scrollY, modalBodyTop: document.querySelector('.html-modal .modal-body').scrollTop }));
+  assert.ok(scrollAfter.y > scrollBefore.y, JSON.stringify({ scrollBefore, scrollAfter }));
+  assert.equal(outerScrollAfter.y, outerScrollBefore.y, 'wheel stays inside preview, not the app page');
+  assert.equal(outerScrollAfter.modalBodyTop, outerScrollBefore.modalBodyTop, 'wheel stays inside preview, not the modal shell');
   const download = page.getByRole('link', { name: /Download original/ });
   const downloadEvent = page.waitForEvent('download'); await download.click(); const saved = await downloadEvent; const stream = await saved.createReadStream(); const chunks = []; for await (const chunk of stream) chunks.push(chunk);
   assert.deepEqual(Buffer.concat(chunks), files.get('HTML-ONE'), 'download blob preserves exact original bytes');
