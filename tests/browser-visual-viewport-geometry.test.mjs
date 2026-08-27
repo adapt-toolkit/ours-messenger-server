@@ -61,6 +61,44 @@ assert.ok(Math.abs(geometry.root.height - 412.5) <= 0.1, `root follows fractiona
 assert.ok(Math.abs((geometry.root.bottom - geometry.composer.bottom) - 8) <= 0.1,
   `composer hugs the visible viewport with only its intentional 8px gutter (${geometry.root.bottom - geometry.composer.bottom})`);
 
+// Orientation changes can resize the layout/dynamic viewport before WebKit
+// updates visualViewport or emits its event. Deliberately leave that API stale
+// at the old portrait height while the real viewport becomes 844x390.
+await page.evaluate(() => {
+  Object.assign(visualViewport, { height: 844, offsetTop: 0 });
+  visualViewport.dispatchEvent(new Event('resize'));
+});
+await page.setViewportSize({ width: 844, height: 390 });
+const stale = await page.evaluate(() => {
+  const root = document.querySelector('#root').getBoundingClientRect();
+  const composer = document.querySelector('.composer-wrap').getBoundingClientRect();
+  const head = document.querySelector('.detail-head').getBoundingClientRect();
+  const hit = document.elementFromPoint(2, Math.round((head.bottom + composer.top) / 2));
+  return { viewportHeight: innerHeight, root: root.toJSON(), composer: composer.toJSON(), canvasHit: !!hit?.closest('.messages') };
+});
+assert.ok(stale.root.bottom <= stale.viewportHeight + 0.1,
+  `stale oversized visualViewport is capped by current dvh (${JSON.stringify(stale)})`);
+assert.ok(stale.composer.bottom <= stale.root.bottom,
+  'composer remains inside the capped root before visualViewport catches up');
+assert.equal(stale.canvasHit, true, 'message canvas remains hit-testable while visualViewport is stale');
+
+const resized = await page.evaluate(() => {
+  Object.assign(visualViewport, { height: 300.75, offsetTop: 4.5 });
+  // WebKit may emit window.resize before visualViewport.resize during an
+  // orientation change. The shell must be correct on that first event.
+  window.dispatchEvent(new Event('resize'));
+  const root = document.querySelector('#root').getBoundingClientRect();
+  const composer = document.querySelector('.composer-wrap').getBoundingClientRect();
+  const head = document.querySelector('.detail-head').getBoundingClientRect();
+  const hit = document.elementFromPoint(2, Math.round((head.bottom + composer.top) / 2));
+  return { root: root.toJSON(), composer: composer.toJSON(), canvasHit: !!hit?.closest('.messages') };
+});
+assert.ok(Math.abs(resized.root.top - 4.5) <= 0.1 && Math.abs(resized.root.height - 300.75) <= 0.1,
+  `window resize immediately applies the updated visual viewport (${JSON.stringify(resized.root)})`);
+assert.ok(Math.abs((resized.root.bottom - resized.composer.bottom) - 8) <= 0.1,
+  'composer remains pinned after the WebKit event-ordering path');
+assert.equal(resized.canvasHit, true, 'message canvas remains hit-testable between overlays after resize');
+
 await context.close();
 await browser.close();
 server.close();

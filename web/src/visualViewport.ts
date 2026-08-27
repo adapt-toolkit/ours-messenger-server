@@ -16,12 +16,15 @@ export function installVisualViewportSizing(
   update();
   viewport?.addEventListener('resize', update);
   viewport?.addEventListener('scroll', update);
-  if (!viewport) win.addEventListener('resize', update);
+  // WebKit can update visualViewport during an orientation/viewport change
+  // before dispatching its own resize event. The window event closes that
+  // timing gap; update still reads the visual viewport as the source of truth.
+  win.addEventListener('resize', update);
 
   return () => {
     viewport?.removeEventListener('resize', update);
     viewport?.removeEventListener('scroll', update);
-    if (!viewport) win.removeEventListener('resize', update);
+    win.removeEventListener('resize', update);
     root.style.removeProperty('--app-viewport-height');
     root.style.removeProperty('--app-viewport-top');
   };

@@ -28,6 +28,10 @@ viewport.dispatchEvent(new Event('resize'));
 assert.equal(values.get('--app-viewport-height'), '436.4px', 'keyboard resize preserves the exact visible viewport');
 assert.equal(values.get('--app-viewport-top'), '12.6px', 'a panned/zoomed viewport keeps the shell aligned without a seam');
 
+viewport.height = 390;
+viewportWindow.dispatchEvent(new Event('resize'));
+assert.equal(values.get('--app-viewport-height'), '390px', 'window resize closes WebKit visualViewport event timing gaps');
+
 cleanup();
 assert.equal(values.has('--app-viewport-height'), false);
 assert.equal(values.has('--app-viewport-top'), false);

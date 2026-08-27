@@ -147,7 +147,9 @@
   top: var(--app-viewport-top, 0px);
   right: 0;
   left: 0;
-  height: var(--app-viewport-height, 100%);
+  /* 100dvh is an event-order-independent ceiling during orientation changes:
+     WebKit can resize the layout viewport before visualViewport dispatches. */
+  height: min(var(--app-viewport-height, 100dvh), 100dvh);
 }
 
 /* ---------- shell ---------- */
