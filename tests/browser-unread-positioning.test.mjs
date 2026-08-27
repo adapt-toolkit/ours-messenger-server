@@ -101,6 +101,7 @@ try {
   await jump.focus(); await page.keyboard.press('Enter');
   await jump.waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => window.__unreadScrollBehaviors.includes('smooth')), false, 'reduced-motion Jump latest never requests smooth scrolling');
+  await page.waitForFunction(() => document.activeElement?.classList.contains('messages'));
   assert.equal(await page.locator('.messages').evaluate((node) => document.activeElement === node), true, 'keyboard activation restores focus to the timeline');
   const focus = await page.locator('.messages').evaluate((node) => getComputedStyle(node));
   assert.ok(focus.outlineStyle !== 'none' && parseFloat(focus.outlineWidth) >= 2, 'timeline focus is visible after Jump latest disappears');
