@@ -143,14 +143,18 @@ export function ChatList(props: {
     <div className="listcol">
       <div className="listcol-head">
         <div className="listcol-titlebar">
-          <h2 id="chat-list-title" className="listcol-title messenger-lockup" tabIndex={-1}><Icon name="lock" size={16} />Ours Messenger</h2>
+          <h2 id="chat-list-title" className="listcol-title messenger-lockup" tabIndex={-1}>
+            <span className="messenger-brand-ours">Ours</span>{' '}
+            <span className="messenger-brand-product">Messenger</span>
+          </h2>
           <div className="listcol-actions">
             <button className="btn sm primary" onClick={props.onInvite}>
               <Icon name="invite" size={15} />
               Invite
             </button>
-            <button className="icon-btn" title="Settings" onClick={props.onSettings}>
-              <Icon name="settings" />
+            <button className="btn sm" onClick={props.onSettings}>
+              <Icon name="settings" size={15} />
+              Settings
             </button>
           </div>
         </div>

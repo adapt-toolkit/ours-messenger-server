@@ -281,17 +281,6 @@
   letter-spacing: -0.055em;
 }
 
-.theme-dark .listcol-title::after {
-  content: ' private workspace';
-  display: block;
-  margin-top: 6px;
-  color: #6f7c74;
-  font-family: var(--mono);
-  font-size: 0.59rem;
-  font-weight: 520;
-  letter-spacing: 0.025em;
-}
-
 .theme-dark .listcol-actions { gap: 8px; }
 
 .theme-dark .listcol-actions .btn.primary {

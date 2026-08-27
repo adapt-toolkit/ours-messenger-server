@@ -152,7 +152,7 @@ try {
       assert.ok(style.backdrop === 'none' && (!style.webkitBackdrop || style.webkitBackdrop === 'none'), `${selector} removes backdrop filtering`);
       assert.equal(alpha(style.background), 1, `${selector} has an opaque ${dark ? 'dark' : 'light'} background (${style.background})`);
     };
-    for (const selector of ['.listcol-actions .icon-btn', '.detail-head', '.composer']) await assertOpaqueSurface(selector);
+    for (const selector of ['.listcol-actions .btn', '.detail-head', '.composer']) await assertOpaqueSurface(selector);
 
     await transparent.page.getByRole('button', { name: 'Invite' }).click();
     await assertOpaqueSurface('.modal');
@@ -173,7 +173,7 @@ try {
   const contrast = await makePage({ features: [{ name: 'prefers-contrast', value: 'more' }] });
   assert.equal(await contrast.page.evaluate(() => matchMedia('(prefers-contrast: more)').matches), true);
   assert.equal(await contrast.page.evaluate(() => matchMedia('(prefers-reduced-transparency: reduce)').matches || matchMedia('(prefers-reduced-motion: reduce)').matches), false, 'contrast preference is independent');
-  for (const selector of ['.listcol-actions .icon-btn', '.detail-head', '.composer', '.conv-contact-trigger']) {
+  for (const selector of ['.listcol-actions .btn', '.detail-head', '.composer', '.conv-contact-trigger']) {
     const boundary = await contrast.page.locator(selector).first().evaluate((node) => {
       const style = getComputedStyle(node);
       return { width: Math.max(parseFloat(style.borderTopWidth), parseFloat(style.borderBottomWidth)), color: style.borderColor };

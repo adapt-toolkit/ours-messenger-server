@@ -86,7 +86,7 @@ try {
   const accessiblePage = await accessible.newPage(); const session = await accessible.newCDPSession(accessiblePage);
   await session.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }, { name: 'forced-colors', value: 'active' }] });
   await accessiblePage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' }); await accessiblePage.locator('.composer textarea').waitFor();
-  for (const selector of ['.listcol-actions .icon-btn', '.detail-head', '.composer']) assert.equal(await accessiblePage.locator(selector).evaluate((node) => getComputedStyle(node).backdropFilter), 'none', `${selector} material becomes non-blurred in accessibility modes`);
+  for (const selector of ['.listcol-actions .btn:not(.primary)', '.detail-head', '.composer']) assert.equal(await accessiblePage.locator(selector).evaluate((node) => getComputedStyle(node).backdropFilter), 'none', `${selector} material becomes non-blurred in accessibility modes`);
   await accessible.close();
   console.log('browser-motion-material OK — single motion owners, immediate lists, real anchored surfaces, and accessible material fallbacks');
 } finally {
