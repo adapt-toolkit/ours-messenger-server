@@ -161,8 +161,10 @@ try {
       await light.addInitScript(() => localStorage.setItem('ours-dark-v3', '0'));
       const lightPage = await light.newPage(); await installCaptureHarness(lightPage);
       await lightPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' }); await lightPage.locator('.composer textarea').waitFor();
-      await settleAnimations(lightPage);
+      await lightPage.locator('#chat-message-MOBILE-IN .msg-row').waitFor();
+      await lightPage.locator('#chat-message-MOBILE-OUT .msg-row').waitFor();
       await lightPage.locator('.composer textarea').fill('Ready to send');
+      await settleAnimations(lightPage);
       const lightMetrics = await lightPage.evaluate(() => {
         const stage = document.querySelector('.signal-stage').getBoundingClientRect();
         const detail = document.querySelector('.signal-stage > .detail').getBoundingClientRect();
@@ -175,7 +177,7 @@ try {
       });
       assert.equal(lightMetrics.overflow, 0, `${engineName} light theme has no overflow`);
       assert.ok(lightMetrics.left >= 8 && Math.abs(lightMetrics.left - lightMetrics.right) < 1, `${engineName} light edges remain symmetric (${lightMetrics.left}/${lightMetrics.right})`);
-      assert.ok(lightMetrics.directionGap > 0, `${engineName} light incoming/outgoing messages retain a gap`);
+      assert.ok(lightMetrics.directionGap > 0, `${engineName} light incoming/outgoing messages retain a gap (${lightMetrics.directionGap}px)`);
       assert.ok(lightMetrics.sendDelta < 0.1, `${engineName} light compact send remains centered`);
       await light.close();
 
