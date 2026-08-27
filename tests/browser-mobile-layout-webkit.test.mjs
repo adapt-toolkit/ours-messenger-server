@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { chromium, webkit } from '@playwright/test';
 
@@ -8,6 +8,14 @@ const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the mobile WebKit gate');
 const types = new Map([['.css', 'text/css; charset=utf-8'], ['.html', 'text/html; charset=utf-8'], ['.js', 'text/javascript; charset=utf-8']]);
 const streams = new Set();
+const captureDir = process.env.MOBILE_CAPTURE_DIR ? resolve(process.env.MOBILE_CAPTURE_DIR) : null;
+if (captureDir) mkdirSync(captureDir, { recursive: true });
+const contrastRatio = (foreground, background) => {
+  const channel = (value) => { const unit = value / 255; return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4; };
+  const luminance = (color) => { const [r, g, b] = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (lighter + 0.05) / (darker + 0.05);
+};
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/api/events') {
@@ -24,6 +32,7 @@ const origin = `http://127.0.0.1:${address.port}`;
 const messages = [
   { dir: 'in', text: `Long ${'C'.repeat(180)} https://example.com/action`, date: '2026-08-26T08:00:00Z', read: true, wire_id: 'MOBILE-IN', receipt: null },
   { dir: 'out', text: 'outgoing reply target', date: '2026-08-26T08:01:00Z', read: true, wire_id: 'MOBILE-OUT', receipt: null },
+  { dir: 'out', text: 'outgoing continuation', date: '2026-08-26T08:01:30Z', read: true, wire_id: 'MOBILE-OUT-CONT', receipt: null },
 ];
 const installRoutes = (context) => context.route('**/api/**', async (route) => {
   const url = new URL(route.request().url());
@@ -31,10 +40,14 @@ const installRoutes = (context) => context.route('**/api/**', async (route) => {
   if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
   if (url.pathname === '/api/build-info') return json({ name: 'messenger', version: 'test', sha: 'fixture' });
   if (url.pathname === '/api/contacts') return json({
-    contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [],
-    roots: { PEER: { root_cid: 'ROOT', root_name: 'Owner', role_id: 'assistant' } },
+    contacts: [
+      { name: 'Peer', container_id: 'PEER' },
+      { name: 'Alice', container_id: 'ALICE' },
+      { name: 'Bob', container_id: 'BOB' },
+    ], pending: [],
+    roots: Object.fromEntries(['PEER', 'ALICE', 'BOB'].map((id) => [id, { root_cid: 'ROOT', root_name: 'Owner', role_id: 'assistant' }])),
   });
-  if (url.pathname === '/api/conversations/PEER/page') return json({ contact: 'PEER', messages, total: 2, unread: 0, hasMore: false, nextBefore: null });
+  if (url.pathname === '/api/conversations/PEER/page') return json({ contact: 'PEER', messages, total: messages.length, unread: 0, hasMore: false, nextBefore: null });
   if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
   if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
   if (url.pathname === '/api/events') return route.fallback();
@@ -55,19 +68,23 @@ const settleAnimations = (page) => page.evaluate(() => document.getAnimations().
     animation.cancel();
   }
 }));
-const fireGesture = (row, points, downTargetSelector) => row.evaluate((node, { points: path, downTarget }) => {
-  const fire = (target, type, x, y) => target.dispatchEvent(new PointerEvent(type, {
-    bubbles: true, cancelable: true, pointerId: 7, pointerType: 'touch', isPrimary: true,
-    button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y,
+const fireGesture = (row, points, downTargetSelector, button = 0, pointerType = 'touch') => row.evaluate((node, { points: path, downTarget, pointerButton, pointerKind }) => {
+  const fire = (target, eventType, x, y) => target.dispatchEvent(new PointerEvent(eventType, {
+    bubbles: true, cancelable: true, pointerId: 7, pointerType: pointerKind, isPrimary: true,
+    button: pointerButton, buttons: eventType === 'pointerup' ? 0 : 1, clientX: x, clientY: y,
   }));
   const target = downTarget ? node.querySelector(downTarget) : node;
+  let observedDown = null;
+  target.addEventListener('pointerdown', (event) => { observedDown = { button: event.button, pointerType: event.pointerType }; }, { capture: true, once: true });
   fire(target, 'pointerdown', path[0][0], path[0][1]);
   for (const [x, y] of path.slice(1)) fire(node, 'pointermove', x, y);
   const last = path.at(-1); fire(node, 'pointerup', last[0], last[1]);
-}, { points, downTarget: downTargetSelector });
+  return observedDown;
+}, { points, downTarget: downTargetSelector, pointerButton: button, pointerKind: pointerType });
 const fireNativeTouch = async (page, selector, direction) => {
   const row = page.locator(selector);
   const bubble = row.locator('.message-markdown p').first();
+  await bubble.scrollIntoViewIfNeeded();
   const box = await bubble.boundingBox();
   assert.ok(box, `${selector} has a native-touch target`);
   const x0 = direction > 0 ? box.x + Math.min(24, box.width / 3) : box.x + box.width - Math.min(24, box.width / 3);
@@ -101,13 +118,33 @@ try {
         const geometry = await page.evaluate(() => {
           const stage = document.querySelector('.signal-stage').getBoundingClientRect();
           const detail = document.querySelector('.signal-stage > .detail').getBoundingClientRect();
+          const messages = document.querySelector('.messages').getBoundingClientRect();
+          const head = document.querySelector('.detail-head').getBoundingClientRect();
+          const composer = document.querySelector('.composer-wrap').getBoundingClientRect();
+          const canvasHit = document.elementFromPoint(2, Math.round((head.bottom + composer.top) / 2));
           return { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
-            visualWidth: visualViewport?.width ?? innerWidth, left: detail.left - stage.left, right: stage.right - detail.right };
+            visualWidth: visualViewport?.width ?? innerWidth,
+            detail: detail.toJSON(), messages: messages.toJSON(), head: head.toJSON(), composer: composer.toJSON(),
+            canvasHit: !!canvasHit?.closest('.messages'), stage: stage.toJSON() };
         });
         assert.equal(geometry.scrollWidth, geometry.clientWidth, `${engineName} ${viewport.width} has no document overflow`);
         assert.ok(Math.abs(geometry.clientWidth - geometry.visualWidth) < 1, `${engineName} layout matches visual viewport`);
-        assert.ok(geometry.left >= 8 && geometry.right >= 8 && Math.abs(geometry.left - geometry.right) < 1,
-          `${engineName} ${viewport.width} edges symmetric (${geometry.left}/${geometry.right})`);
+        for (const box of [geometry.detail, geometry.messages]) {
+          assert.ok(Math.abs(box.left) < 1 && Math.abs(box.right - geometry.clientWidth) < 1, `${engineName} ${viewport.width} conversation canvas meets viewport edges ${JSON.stringify(box)}`);
+        }
+        assert.ok(geometry.head.left >= 8 && geometry.head.right <= geometry.clientWidth - 8, `${engineName} ${viewport.width} header floats inside viewport`);
+        assert.ok(geometry.composer.left >= 8 && geometry.composer.right <= geometry.clientWidth - 8, `${engineName} ${viewport.width} composer floats inside viewport`);
+        assert.equal(geometry.canvasHit, true, `${engineName} ${viewport.width} message canvas remains hit-testable between overlays`);
+        for (const [state, value] of [['mic', ''], ['send', 'Ready to send']]) {
+          await page.locator('.composer textarea').fill(value);
+          const composerGap = await page.locator('.composer').evaluate((node) => {
+            const field = node.querySelector('textarea').getBoundingClientRect();
+            const trailing = node.querySelector('.vr-mic, .btn.primary').getBoundingClientRect();
+            return { gap: trailing.left - field.right, field: field.toJSON(), trailing: trailing.toJSON() };
+          });
+          assert.ok(composerGap.gap >= 8, `${engineName} ${viewport.width} ${state} has >=8px after input ${JSON.stringify(composerGap)}`);
+        }
+        await page.locator('.composer textarea').fill('');
       }
       await page.setViewportSize({ width: 375, height: 812 });
       const micGeometry = await page.locator('.composer .vr-mic').evaluate((button) => {
@@ -128,7 +165,13 @@ try {
         const replyStyle = await reply.evaluate((node) => ({ width: parseFloat(getComputedStyle(node).width), height: parseFloat(getComputedStyle(node).height), opacity: Number(getComputedStyle(node).opacity) }));
         assert.ok(box && replyStyle.width >= 44 && replyStyle.height >= 44 && replyStyle.opacity > 0, `${engineName} ${id} visible Reply action (${replyStyle.width}x${replyStyle.height}, opacity ${replyStyle.opacity})`);
         const inward = id === 'MOBILE-IN' ? [[40, 100], [52, 101], [110, 101]] : [[140, 100], [128, 101], [70, 101]];
-        await fireGesture(row, inward); await page.getByText('Replying to', { exact: false }).waitFor(); await page.getByTitle('Cancel reply').click();
+        for (const button of [0, -1]) {
+          const observedTouch = await fireGesture(row, inward, '.message-markdown p', button, 'touch');
+          assert.deepEqual(observedTouch, { button, pointerType: 'touch' }, `${engineName} diagnostic dispatched touch button ${button}`);
+          await page.getByText('Replying to', { exact: false }).waitFor();
+          await page.getByTitle('Cancel reply').click();
+          await page.getByText('Replying to', { exact: false }).waitFor({ state: 'detached' });
+        }
       }
       const incoming = page.locator('#chat-message-MOBILE-IN .msg-row');
       await fireGesture(incoming, [[40, 100], [38, 170]]);
@@ -136,6 +179,13 @@ try {
       await fireGesture(incoming, [[40, 100], [110, 100]], 'a');
       assert.equal(await page.getByText('Replying to', { exact: false }).count(), 0, `${engineName} link does not reply`);
       assert.equal(await incoming.locator('.bubble-wrap').evaluate((node) => node.style.transform), '', `${engineName} gestures settle`);
+      await fireGesture(incoming, [[40, 100], [110, 100]], '.message-markdown p', 0, 'pen');
+      assert.equal(await page.getByText('Replying to', { exact: false }).count(), 1, `${engineName} pen tip replies`);
+      await page.getByTitle('Cancel reply').click();
+      await page.getByText('Replying to', { exact: false }).waitFor({ state: 'detached' });
+      const penBarrel = await fireGesture(incoming, [[40, 100], [110, 100]], '.message-markdown p', 2, 'pen');
+      assert.deepEqual(penBarrel, { button: 2, pointerType: 'pen' }, `${engineName} diagnostic dispatched pen barrel semantics`);
+      assert.equal(await page.getByText('Replying to', { exact: false }).count(), 0, `${engineName} pen barrel button does not reply`);
       if (engineName === 'chromium') {
         for (const [selector, direction] of [['#chat-message-MOBILE-IN .msg-row', 1], ['#chat-message-MOBILE-OUT .msg-row', -1]]) {
           const events = await fireNativeTouch(page, selector, direction);
@@ -144,6 +194,7 @@ try {
           assert.ok(events.some((event) => event.type === 'pointerup'), `${selector} receives native touch pointerup: ${JSON.stringify(events)}`);
           assert.equal(events.some((event) => event.type === 'pointercancel'), false, `${selector} native inward swipe is not cancelled: ${JSON.stringify(events)}`);
           await page.getByTitle('Cancel reply').click();
+          await page.getByText('Replying to', { exact: false }).waitFor({ state: 'detached' });
         }
       }
       await context.close();
@@ -173,13 +224,23 @@ try {
         const icon = document.querySelector('.composer .btn.primary .ic').getBoundingClientRect();
         return { left: detail.left - stage.left, right: stage.right - detail.right,
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          directionGap: rows[1].top - rows[0].bottom, sendDelta: Math.abs((button.left + button.width / 2) - (icon.left + icon.width / 2)) };
+          directionGap: rows[1].top - rows[0].bottom, continuationGap: rows[2].top - rows[1].bottom,
+          sendDelta: Math.abs((button.left + button.width / 2) - (icon.left + icon.width / 2)) };
       });
       assert.equal(lightMetrics.overflow, 0, `${engineName} light theme has no overflow`);
-      assert.ok(lightMetrics.left >= 8 && Math.abs(lightMetrics.left - lightMetrics.right) < 1, `${engineName} light edges remain symmetric (${lightMetrics.left}/${lightMetrics.right})`);
-      assert.ok(lightMetrics.directionGap > 0, `${engineName} light incoming/outgoing messages retain a gap (${lightMetrics.directionGap}px)`);
+      assert.ok(Math.abs(lightMetrics.left) < 1 && Math.abs(lightMetrics.right) < 1, `${engineName} light conversation is edge-to-edge (${lightMetrics.left}/${lightMetrics.right})`);
+      assert.ok(lightMetrics.directionGap >= 8, `${engineName} light incoming/outgoing messages retain an >=8px turn gap (${lightMetrics.directionGap}px)`);
+      assert.ok(lightMetrics.continuationGap > 0 && lightMetrics.continuationGap < lightMetrics.directionGap,
+        `${engineName} light same-sender continuation remains compact (${lightMetrics.continuationGap}px vs ${lightMetrics.directionGap}px)`);
       assert.ok(lightMetrics.sendDelta < 0.1, `${engineName} light compact send remains centered`);
       await light.close();
+
+      if (captureDir && engineName === 'chromium') messages.push(...Array.from({ length: 8 }, (_, index) => ({
+        dir: index % 2 ? 'out' : 'in',
+        text: `Workspace note ${index + 1}: a calm, readable message moving beneath the floating controls.`,
+        date: `2026-08-26T08:${String(index + 2).padStart(2, '0')}:00Z`, read: true,
+        wire_id: `MOBILE-CAPTURE-${index + 1}`, receipt: null,
+      })));
 
       for (const dark of [false, true]) {
         const listContext = await browser.newContext({ hasTouch: true, isMobile: true, serviceWorkers: 'block', viewport: { width: 390, height: 812 } });
@@ -188,9 +249,9 @@ try {
           localStorage.setItem('ours-dark-v3', useDark ? '1' : '0');
           localStorage.setItem('ours.chats.listMode', 'identity');
         }, { useDark: dark });
-        const listPage = await listContext.newPage();
+        const listPage = await listContext.newPage(); await installCaptureHarness(listPage);
         await listPage.goto(`${origin}/chats`, { waitUntil: 'domcontentloaded' });
-        await listPage.locator('.contact-row.grouped').waitFor();
+        await listPage.locator('.contact-row.grouped').first().waitFor();
         for (const width of [320, 390, 430]) {
           await listPage.setViewportSize({ width, height: 812 });
           for (const textScale of [100, 200]) {
@@ -200,31 +261,270 @@ try {
             const stage = rect('.signal-stage'); const list = rect('.signal-stage > .listcol');
             const head = rect('.listcol-head'); const titlebar = rect('.listcol-titlebar'); const title = rect('.listcol-title');
             const scroll = rect('.listcol-scroll'); const row = rect('.contact-row.grouped');
-            const search = rect('.search'); const actionGroup = rect('.listcol-actions');
-            const actions = [...document.querySelectorAll('.listcol-actions .btn')].map((node) => {
+            const search = rect('.search'); const bottomChrome = rect('.list-bottom-chrome'); const invite = rect('.list-bottom-invite'); const actionGroup = rect('.listcol-actions');
+            const actions = [...document.querySelectorAll('.listcol-actions .icon-btn')].map((node) => {
               const box = node.getBoundingClientRect();
-              return { text: node.textContent.trim(), ...box.toJSON(), labelContained: node.scrollWidth <= node.clientWidth };
-            });
+              return { label: node.getAttribute('aria-label'), title: node.getAttribute('title'), ...box.toJSON() };
+            }).filter((action) => action.width > 0 && action.height > 0);
+            const rows = [...document.querySelectorAll('.conversation-group > .contact-row')];
+            const firstDivider = rows[0] ? getComputedStyle(rows[0], '::after') : null;
+            const lastDivider = rows.at(-1) ? getComputedStyle(rows.at(-1), '::after') : null;
+            const firstAvatar = rows[0]?.querySelector('.contact-avatar')?.getBoundingClientRect();
             return {
               stage: [list.left - stage.left, stage.right - list.right],
               titlebar: [titlebar.left - head.left, head.right - titlebar.right],
-              search: [search.left - head.left, head.right - search.right],
               row: [row.left - scroll.left, scroll.right - row.right],
               head: head.toJSON(), title: title.toJSON(), actionGroup: actionGroup.toJSON(),
               actions,
+              searchBox: search.toJSON(),
+              bottomChrome: bottomChrome.toJSON(), invite: invite.toJSON(),
+              divider: firstDivider && firstAvatar ? { content: firstDivider.content, left: parseFloat(firstDivider.left), bottom: parseFloat(firstDivider.bottom), height: parseFloat(firstDivider.height), background: firstDivider.backgroundColor, avatarRight: firstAvatar.right - rows[0].getBoundingClientRect().left } : null,
+              lastDividerContent: lastDivider?.content,
+              viewport: innerWidth,
+              list: list.toJSON(),
               overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
             };
           });
-          for (const [label, pair] of Object.entries({ stage: geometry.stage, titlebar: geometry.titlebar, search: geometry.search, row: geometry.row })) {
+          for (const [label, pair] of Object.entries({ stage: geometry.stage, titlebar: geometry.titlebar, row: geometry.row })) {
             assert.ok(Math.abs(pair[0] - pair[1]) < 1, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${textScale}% ${label} gaps symmetric (${pair[0]}/${pair[1]})`);
           }
-          assert.deepEqual(geometry.actions.map((action) => action.text), ['Invite', 'Settings'], `${engineName} ${width}px ${textScale}% keeps visible Invite then Settings`);
+          assert.deepEqual(geometry.actions.map((action) => action.label), ['Settings'], `${engineName} ${width}px ${textScale}% keeps only Settings in header`);
+          assert.ok(geometry.actions.every((action) => action.title === action.label), `${engineName} ${width}px icon controls retain tooltips`);
+          assert.ok(Math.abs(geometry.list.left) < 1 && Math.abs(geometry.list.right - geometry.viewport) < 1, `${engineName} ${width}px list meets viewport edges ${JSON.stringify(geometry.list)}`);
           assert.ok(geometry.actions.every((action) => action.width >= 44 && action.height >= 44), `${engineName} ${width}px ${textScale}% header actions retain 44px targets`);
-          assert.ok(geometry.actions.every((action) => action.labelContained), `${engineName} ${width}px ${textScale}% header labels remain fully contained ${JSON.stringify(geometry.actions)}`);
+          assert.ok(geometry.searchBox.width >= 120 && geometry.searchBox.height >= 44, `${engineName} ${width}px collapsed search remains recognizable ${JSON.stringify(geometry.searchBox)}`);
+          assert.ok(geometry.invite.width >= 44 && geometry.invite.height >= 44 && geometry.invite.left - geometry.searchBox.right >= 10, `${engineName} ${width}px bottom Search and Invite are disjoint 44px+ controls`);
+          assert.ok(geometry.bottomChrome.left >= 0 && geometry.bottomChrome.right <= geometry.viewport && geometry.bottomChrome.bottom <= 812, `${engineName} ${width}px transparent bottom wrapper is contained`);
           assert.ok(geometry.title.right <= geometry.actionGroup.left || geometry.title.bottom <= geometry.actionGroup.top, `${engineName} ${width}px ${textScale}% title and actions do not overlap`);
           assert.ok(geometry.actionGroup.left >= geometry.head.left && geometry.actionGroup.right <= geometry.head.right && geometry.actionGroup.bottom <= geometry.head.bottom, `${engineName} ${width}px ${textScale}% actions remain inside header ${JSON.stringify({ head: geometry.head, actions: geometry.actionGroup })}`);
           assert.equal(geometry.overflow, 0, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${textScale}% list has no horizontal overflow`);
+          assert.ok(geometry.divider && geometry.divider.content !== 'none' && geometry.divider.left >= geometry.divider.avatarRight,
+            `${engineName} ${width}px divider begins after avatar ${JSON.stringify(geometry.divider)}`);
+          assert.ok(geometry.divider.height >= 1 && geometry.divider.bottom >= 0 && !['transparent', 'rgba(0, 0, 0, 0)'].includes(geometry.divider.background),
+            `${engineName} ${width}px divider is paintable inside the clipped row ${JSON.stringify(geometry.divider)}`);
+          assert.equal(geometry.lastDividerContent, 'none', `${engineName} ${width}px last visible chat has no divider`);
           }
+        }
+        if (!dark) {
+          const invite = listPage.getByRole('button', { name: 'Invite' });
+          const colors = () => invite.evaluate((node) => ({ color: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor }));
+          const states = [['default', await colors()]];
+          await invite.hover(); states.push(['hover', await colors()]);
+          const box = await invite.boundingBox(); assert.ok(box, 'Invite has geometry for pressed contrast');
+          await listPage.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await listPage.mouse.down();
+          states.push(['pressed', await colors()]); await listPage.mouse.up();
+          for (const [state, pair] of states) assert.ok(contrastRatio(pair.color, pair.background) >= 3, `${engineName} light Invite icon ${state} contrast is 3:1 (${contrastRatio(pair.color, pair.background).toFixed(2)}:1, ${JSON.stringify(pair)})`);
+        }
+        if (await listPage.locator('[role="dialog"]').count()) {
+          await listPage.keyboard.press('Escape');
+          await listPage.locator('[role="dialog"]').waitFor({ state: 'detached' });
+        }
+        await listPage.setViewportSize({ width: 390, height: 812 });
+        const searchToggle = listPage.getByRole('button', { name: 'Search conversations' });
+        const searchInput = listPage.getByPlaceholder('Search people, agents, apps…');
+        const collapsedSearchWidth = await listPage.locator('.adaptive-search').evaluate((node) => node.getBoundingClientRect().width);
+        await searchToggle.click();
+        await listPage.waitForFunction(() => document.querySelector('.adaptive-search').getBoundingClientRect().width > 200);
+        await listPage.waitForFunction(() => document.activeElement === document.querySelector('.adaptive-search .field'));
+        assert.equal(await searchInput.evaluate((node) => node === document.activeElement), true, `${engineName} ${dark ? 'dark' : 'light'} search expands without losing focus`);
+        await searchInput.fill('Peer');
+        await listPage.getByRole('button', { name: 'Settings' }).focus();
+        assert.equal(await searchInput.inputValue(), 'Peer', `${engineName} nonempty search query survives blur`);
+        assert.ok(await listPage.locator('.adaptive-search').evaluate((node, collapsedWidth) => node.getBoundingClientRect().width > collapsedWidth, collapsedSearchWidth), `${engineName} nonempty search stays expanded`);
+        await searchInput.focus(); await searchInput.press('Escape');
+        assert.equal(await searchInput.inputValue(), '', `${engineName} first Escape explicitly clears search`);
+        assert.equal(await listPage.locator('.adaptive-search').evaluate((node) => node.classList.contains('expanded')), true, `${engineName} first Escape keeps empty search expanded`);
+        await searchInput.press('Escape');
+        await listPage.waitForFunction(() => document.querySelector('.adaptive-search').getBoundingClientRect().width <= 129);
+        assert.equal(await searchToggle.isVisible(), true, `${engineName} second Escape restores recognizable search control`);
+
+        const recentTab = listPage.getByRole('tab', { name: 'Recent' });
+        const identityTab = listPage.getByRole('tab', { name: 'By identity' });
+        await recentTab.click();
+        assert.equal(await recentTab.getAttribute('aria-selected'), 'true', `${engineName} segmented control supports tap`);
+        await recentTab.press('ArrowRight');
+        assert.equal(await identityTab.getAttribute('aria-selected'), 'true', `${engineName} segmented control supports arrow keys`);
+        await identityTab.press('Home'); assert.equal(await recentTab.getAttribute('aria-selected'), 'true', `${engineName} segmented control supports Home`);
+        await recentTab.press('End'); assert.equal(await identityTab.getAttribute('aria-selected'), 'true', `${engineName} segmented control supports End`);
+        const dragObserved = await listPage.locator('.conversation-list-modes').evaluate((node) => {
+          const box = node.getBoundingClientRect(); const target = node.querySelector('[aria-selected="true"]');
+          const fire = (to, type, x, y) => to.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 31, pointerType: 'touch', isPrimary: true, button: -1, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y }));
+          let down = null; node.addEventListener('pointerdown', (event) => { down = { button: event.button, pointerType: event.pointerType }; }, { capture: true, once: true });
+          fire(target, 'pointerdown', box.right - 30, box.top + box.height / 2);
+          fire(node, 'pointermove', box.left + box.width / 2 - 20, box.top + box.height / 2);
+          fire(node, 'pointermove', box.left + 30, box.top + box.height / 2);
+          fire(node, 'pointerup', box.left + 30, box.top + box.height / 2);
+          return down;
+        });
+        assert.deepEqual(dragObserved, { button: -1, pointerType: 'touch' }, `${engineName} segmented drag receives iOS touch semantics`);
+        assert.equal(await recentTab.getAttribute('aria-selected'), 'true', `${engineName} horizontal drag commits nearest segment`);
+        await listPage.locator('.conversation-list-modes').evaluate((node) => {
+          const box = node.getBoundingClientRect(); const target = node.querySelector('[aria-selected="true"]');
+          const fire = (to, type, x, y) => to.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 32, pointerType: 'touch', isPrimary: true, button: 0, buttons: 1, clientX: x, clientY: y }));
+          fire(target, 'pointerdown', box.left + 30, box.top + box.height / 2);
+          fire(node, 'pointermove', box.left + 32, box.top + box.height / 2 + 45);
+          fire(node, 'pointerup', box.left + 32, box.top + box.height / 2 + 45);
+        });
+        assert.equal(await recentTab.getAttribute('aria-selected'), 'true', `${engineName} vertical intent cancels without changing selection`);
+        assert.equal(await listPage.locator('.conversation-list-modes').evaluate((node) => node.classList.contains('dragging')), false, `${engineName} vertical intent leaves no drag state`);
+        const bottomInvite = listPage.getByRole('button', { name: 'Invite' });
+        await bottomInvite.click();
+        await listPage.getByRole('dialog').waitFor();
+        await listPage.keyboard.press('Escape');
+        await listPage.getByRole('dialog').waitFor({ state: 'detached' });
+        await listPage.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Invite');
+        assert.equal(await bottomInvite.evaluate((node) => node === document.activeElement), true, `${engineName} Invite dialog restores focus to bottom +`);
+        await listPage.emulateMedia({ contrast: 'more' });
+        const contrastMaterials = await listPage.evaluate(() => {
+          const read = (node, pseudo) => { const style = getComputedStyle(node, pseudo); return { border: style.borderTopColor, color: style.color, shadow: style.boxShadow, outline: style.outlineColor, outlineWidth: parseFloat(style.outlineWidth) }; };
+          const modes = document.querySelector('.conversation-list-modes');
+          return [read(document.querySelector('.adaptive-search')), read(document.querySelector('.list-bottom-invite')), read(modes), read(modes, '::before')];
+        });
+        assert.ok(contrastMaterials.every((item) => item.shadow === 'none' && item.outline === item.color && item.outlineWidth >= 1), `${engineName} increased-contrast list materials use currentColor boundaries without soft shadows ${JSON.stringify(contrastMaterials)}`);
+        await listPage.emulateMedia({ contrast: 'no-preference' });
+        await listPage.setViewportSize({ width: 390, height: 812 });
+        await listPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+        await listPage.locator('.composer textarea').waitFor();
+        const headTopology = await listPage.locator('.detail-head').evaluate((node) => {
+          const back = node.querySelector('.detail-back').getBoundingClientRect();
+          const center = node.querySelector('.conv-peer-status').getBoundingClientRect();
+          const avatar = node.querySelector('.conv-contact-avatar').getBoundingClientRect();
+          const style = getComputedStyle(node);
+          return { back: back.toJSON(), center: center.toJSON(), avatar: avatar.toJSON(), background: style.backgroundColor, border: style.borderTopWidth,
+            centerTabIndex: node.querySelector('.conv-peer-status').tabIndex, avatarName: node.querySelector('.conv-contact-avatar').getAttribute('aria-label') };
+        });
+        assert.ok(headTopology.center.left - headTopology.back.right >= 10 && headTopology.avatar.left - headTopology.center.right >= 10, `${engineName} top pieces remain independently separated`);
+        assert.ok(headTopology.back.width >= 44 && headTopology.avatar.width >= 44, `${engineName} Back/avatar retain 44px targets`);
+        assert.equal(headTopology.centerTabIndex, -1, `${engineName} center status capsule is noninteractive`);
+        assert.match(headTopology.avatarName, /^Open contact details for /, `${engineName} avatar is the sole named details action`);
+        assert.equal(headTopology.background, 'rgba(0, 0, 0, 0)', `${engineName} top wrapper owns no material`);
+        for (const width of [320, 390, 430]) {
+          await listPage.setViewportSize({ width, height: 812 });
+          const input = listPage.locator('.composer textarea');
+          await input.fill('');
+          await listPage.locator('.messages').focus();
+          const collapsed = await listPage.locator('.composer').evaluate((node) => {
+            const wrapperStyle = getComputedStyle(node.closest('.composer-wrap'));
+            const field = node.querySelector('textarea'); const fieldStyle = getComputedStyle(field);
+            const items = [node.querySelector('.composer-tool'), field, node.querySelector('.vr-mic')].map((item) => item.getBoundingClientRect());
+            return {
+              width: items[1].width, height: items[1].height, placeholder: field.placeholder,
+              placeholderColor: fieldStyle.getPropertyValue('--placeholder-color') || getComputedStyle(field, '::placeholder').color,
+              wrapperBackground: wrapperStyle.backgroundColor, wrapperBorder: wrapperStyle.borderTopWidth,
+              gaps: [items[1].left - items[0].right, items[2].left - items[1].right],
+              items: items.map((item) => item.toJSON()),
+            };
+          });
+          assert.ok(collapsed.width >= 112 && collapsed.height >= 44 && collapsed.height <= 45 && collapsed.placeholder.length > 0,
+            `${engineName} ${dark ? 'dark' : 'light'} ${width}px collapsed input stays recognizable ${JSON.stringify(collapsed)}`);
+          assert.ok(!['transparent', 'rgba(0, 0, 0, 0)'].includes(collapsed.placeholderColor),
+            `${engineName} ${dark ? 'dark' : 'light'} ${width}px collapsed placeholder remains visible (${collapsed.placeholderColor})`);
+          assert.equal(await listPage.getByRole('textbox', { name: collapsed.placeholder, exact: true }).count(), 1,
+            `${engineName} ${dark ? 'dark' : 'light'} ${width}px collapsed input retains its accessible name`);
+          assert.ok(collapsed.gaps.every((gap) => gap >= 8), `${engineName} ${dark ? 'dark' : 'light'} ${width}px independent controls retain gaps ${collapsed.gaps}`);
+          assert.equal(collapsed.wrapperBackground, 'rgba(0, 0, 0, 0)', `${engineName} ${dark ? 'dark' : 'light'} wrapper owns no material`);
+          assert.equal(collapsed.wrapperBorder, '0px', `${engineName} ${dark ? 'dark' : 'light'} wrapper owns no border`);
+          await input.focus();
+          const focusedWidth = await input.evaluate((node) => node.getBoundingClientRect().width);
+          assert.ok(focusedWidth > collapsed.width, `${engineName} ${dark ? 'dark' : 'light'} ${width}px focused input expands (${collapsed.width} -> ${focusedWidth})`);
+          for (const [state, value] of [['mic', ''], ['send', 'Ready to send']]) {
+            await input.fill(value);
+            const composerGap = await listPage.locator('.composer').evaluate((node) => {
+              const field = node.querySelector('textarea').getBoundingClientRect();
+              const trailing = node.querySelector('.vr-mic, .btn.primary').getBoundingClientRect();
+              return { gap: trailing.left - field.right, overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+            });
+            assert.ok(composerGap.gap >= 8, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${state} has >=8px after input (${composerGap.gap}px)`);
+            assert.equal(composerGap.overflow, 0, `${engineName} ${dark ? 'dark' : 'light'} ${width}px ${state} has no horizontal overflow`);
+          }
+        }
+        await listPage.setViewportSize({ width: 390, height: 812 });
+        await listPage.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+        await listPage.waitForFunction(() => {
+          const detail = document.querySelector('.detail-chat');
+          const head = document.querySelector('.detail-head');
+          const composer = document.querySelector('.composer-wrap');
+          return detail && head && composer
+            && parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-head-height')) === Math.round(head.getBoundingClientRect().height)
+            && parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-compose-height')) === Math.round(composer.getBoundingClientRect().height);
+        });
+        const zoomMetrics = await listPage.evaluate(() => {
+          const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+          const detail = document.querySelector('.detail-chat');
+          const head = box('.detail-head'); const composer = box('.composer-wrap');
+          const controls = [...document.querySelectorAll('.detail-head button, .composer-wrap button')].map((node) => node.getBoundingClientRect().toJSON());
+          const rows = [...document.querySelectorAll('.msg-row')].map((node) => node.getBoundingClientRect());
+          return {
+            overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            viewport: { width: innerWidth, height: innerHeight }, head: head.toJSON(), composer: composer.toJSON(), controls,
+            headReserve: parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-head-height')),
+            composeReserve: parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-compose-height')),
+            directionGap: rows[1].top - rows[0].bottom,
+            continuationGap: rows[2].top - rows[1].bottom,
+          };
+        });
+        assert.equal(zoomMetrics.overflow, 0, `${engineName} ${dark ? 'dark' : 'light'} 390px 200% conversation has no horizontal overflow`);
+        for (const overlay of [zoomMetrics.head, zoomMetrics.composer]) {
+          assert.ok(overlay.left >= 0 && overlay.right <= zoomMetrics.viewport.width && overlay.top >= 0 && overlay.bottom <= zoomMetrics.viewport.height,
+            `${engineName} ${dark ? 'dark' : 'light'} 200% overlay remains inside viewport ${JSON.stringify(overlay)}`);
+        }
+        assert.equal(zoomMetrics.headReserve, Math.round(zoomMetrics.head.height), `${engineName} ${dark ? 'dark' : 'light'} 200% header reserve follows ResizeObserver`);
+        assert.equal(zoomMetrics.composeReserve, Math.round(zoomMetrics.composer.height), `${engineName} ${dark ? 'dark' : 'light'} 200% composer reserve follows ResizeObserver`);
+        assert.ok(zoomMetrics.controls.every((control) => control.width >= 44 && control.height >= 44
+          && control.left >= 0 && control.right <= zoomMetrics.viewport.width && control.top >= 0 && control.bottom <= zoomMetrics.viewport.height),
+        `${engineName} ${dark ? 'dark' : 'light'} 200% overlay controls retain contained 44px targets ${JSON.stringify(zoomMetrics.controls)}`);
+        assert.ok(zoomMetrics.directionGap >= 8, `${engineName} ${dark ? 'dark' : 'light'} 200% direction turn retains >=8px (${zoomMetrics.directionGap}px)`);
+        assert.ok(zoomMetrics.continuationGap > 0 && zoomMetrics.continuationGap < zoomMetrics.directionGap,
+          `${engineName} ${dark ? 'dark' : 'light'} 200% continuation stays compact (${zoomMetrics.continuationGap}px vs ${zoomMetrics.directionGap}px)`);
+        const timeline = listPage.locator('.messages');
+        await timeline.evaluate((node) => { node.scrollTop = 0; });
+        const firstReachable = await listPage.evaluate(() => ({
+          row: document.querySelector('.msg-row').getBoundingClientRect().toJSON(),
+          head: document.querySelector('.detail-head').getBoundingClientRect().toJSON(),
+          scrollTop: document.querySelector('.messages').scrollTop,
+        }));
+        assert.ok(firstReachable.row.bottom > firstReachable.head.bottom && firstReachable.row.top < zoomMetrics.composer.top,
+          `${engineName} ${dark ? 'dark' : 'light'} 200% first message is reachable in the exposed canvas ${JSON.stringify(firstReachable)}`);
+        await timeline.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+        const lastReachable = await listPage.evaluate(() => ({
+          row: [...document.querySelectorAll('.msg-row')].at(-1).getBoundingClientRect().toJSON(),
+          composer: document.querySelector('.composer-wrap').getBoundingClientRect().toJSON(),
+          scrollTop: document.querySelector('.messages').scrollTop,
+        }));
+        assert.ok(lastReachable.row.top < lastReachable.composer.top && lastReachable.row.bottom > zoomMetrics.head.bottom,
+          `${engineName} ${dark ? 'dark' : 'light'} 200% last message is reachable in the exposed canvas ${JSON.stringify(lastReachable)}`);
+        if (captureDir && engineName === 'chromium') {
+          await listPage.goto(`${origin}/chats`, { waitUntil: 'domcontentloaded' });
+          await listPage.locator('.contact-row.grouped').first().waitFor();
+          await listPage.setViewportSize({ width: 390, height: 812 });
+          await listPage.evaluate(() => { document.documentElement.style.fontSize = '100%'; });
+          await settleAnimations(listPage);
+          assert.equal(await listPage.locator('[role="dialog"]').count(), 0, 'capture list has no open modal');
+          await listPage.getByRole('tab', { name: 'Recent' }).click();
+          await settleAnimations(listPage);
+          await listPage.screenshot({ path: join(captureDir, `mobile-list-collapsed-recent-${dark ? 'dark' : 'light'}.png`) });
+          await listPage.getByRole('button', { name: 'Search conversations' }).click();
+          await listPage.waitForFunction(() => document.activeElement === document.querySelector('.adaptive-search .field'));
+          await settleAnimations(listPage);
+          await listPage.screenshot({ path: join(captureDir, `mobile-list-search-focused-${dark ? 'dark' : 'light'}.png`) });
+          await listPage.locator('.adaptive-search .field').press('Escape');
+          await listPage.getByRole('tab', { name: 'By identity' }).click();
+          await settleAnimations(listPage);
+          await listPage.screenshot({ path: join(captureDir, `mobile-list-collapsed-identity-${dark ? 'dark' : 'light'}.png`) });
+          await listPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+          await listPage.locator('.composer textarea').waitFor();
+          await listPage.locator('.messages-inner').evaluate((node) => {
+            node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight - 80);
+          });
+          await settleAnimations(listPage);
+          await listPage.screenshot({ path: join(captureDir, `mobile-conversation-empty-${dark ? 'dark' : 'light'}.png`) });
+          await listPage.locator('.composer textarea').fill('Ready to send');
+          await listPage.waitForFunction(() => !document.querySelector('.composer .btn.primary')?.disabled);
+          await settleAnimations(listPage);
+          await listPage.locator('.messages-inner').evaluate((node) => {
+            node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight - 80);
+          });
+          await listPage.screenshot({ path: join(captureDir, `mobile-conversation-typed-${dark ? 'dark' : 'light'}.png`) });
         }
         await listContext.close();
       }

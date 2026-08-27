@@ -102,6 +102,10 @@ export function ChatList(props: {
 }) {
   const { contacts, roots, selected } = props;
   const [q, setQ] = useState('');
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const listRootRef = useRef<HTMLDivElement>(null);
+  const bottomChromeRef = useRef<HTMLDivElement>(null);
   const [listMode, setListMode] = useState<ConversationListMode>(
     () => readConversationListMode(),
   );
@@ -120,6 +124,45 @@ export function ChatList(props: {
     { id: 'recent', label: 'Recent' },
     { id: 'identity', label: 'By identity' },
   ];
+  const modeControlRef = useRef<HTMLDivElement>(null);
+  const modeGestureRef = useRef({ id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'pending' | 'drag' });
+  const suppressModeClickRef = useRef(false);
+  const clearModeGesture = (pointerId: number, commit: boolean) => {
+    const gesture = modeGestureRef.current;
+    if (gesture.id !== pointerId) return;
+    const control = modeControlRef.current;
+    if (commit && gesture.mode === 'drag' && control) {
+      const offset = parseFloat(control.style.getPropertyValue('--mode-drag-x')) || 0;
+      const endpoint = Math.max(0, (control.clientWidth - 8) / 2);
+      chooseMode(offset >= endpoint / 2 ? 'identity' : 'recent');
+      suppressModeClickRef.current = true;
+      window.setTimeout(() => { suppressModeClickRef.current = false; }, 0);
+    }
+    modeGestureRef.current = { id: -1, x0: 0, y0: 0, mode: 'idle' };
+    if (control?.hasPointerCapture?.(pointerId)) control.releasePointerCapture(pointerId);
+    control?.classList.remove('dragging');
+    control?.style.removeProperty('--mode-drag-x');
+  };
+  const onModePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || modeGestureRef.current.id !== -1) return;
+    modeGestureRef.current = { id: event.pointerId, x0: event.clientX, y0: event.clientY, mode: 'pending' };
+  };
+  const onModePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = modeGestureRef.current;
+    if (gesture.id !== event.pointerId || gesture.mode === 'idle') return;
+    const dx = event.clientX - gesture.x0; const dy = event.clientY - gesture.y0;
+    if (gesture.mode === 'pending') {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dy) > Math.abs(dx)) { clearModeGesture(event.pointerId, false); return; }
+      gesture.mode = 'drag';
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      event.currentTarget.classList.add('dragging');
+    }
+    event.preventDefault();
+    const endpoint = Math.max(0, (event.currentTarget.clientWidth - 8) / 2);
+    const start = listMode === 'identity' ? endpoint : 0;
+    event.currentTarget.style.setProperty('--mode-drag-x', `${Math.min(endpoint, Math.max(0, start + dx))}px`);
+  };
   const moveModeFocus = (
     event: KeyboardEvent<HTMLButtonElement>,
     current: ConversationListMode,
@@ -139,35 +182,49 @@ export function ChatList(props: {
     document.getElementById(`conversation-list-${next}`)?.focus();
   };
 
+  useLayoutEffect(() => {
+    const root = listRootRef.current;
+    const chrome = bottomChromeRef.current;
+    if (!root || !chrome) return;
+    const update = () => root.style.setProperty('--list-bottom-chrome-height', `${chrome.getBoundingClientRect().height}px`);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(chrome);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--list-bottom-chrome-height');
+    };
+  }, []);
+
   return (
-    <div className="listcol">
+    <div className="listcol" ref={listRootRef}>
       <div className="listcol-head">
         <div className="listcol-titlebar">
           <h2 id="chat-list-title" className="listcol-title messenger-lockup" tabIndex={-1}>
-            <span className="messenger-brand-ours">Ours</span>{' '}
-            <span className="messenger-brand-product">Messenger</span>
+            <span className="messenger-brand-ours">Ours</span>
+            <span className="messenger-brand-product">messenger</span>
           </h2>
           <div className="listcol-actions">
-            <button className="btn sm primary" onClick={props.onInvite}>
-              <Icon name="invite" size={15} />
-              Invite
+            <button className="btn icon-btn desktop-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
+              <Icon name="invite" size={18} />
             </button>
-            <button className="btn sm" onClick={props.onSettings}>
-              <Icon name="settings" size={15} />
-              Settings
+            <button className="icon-btn" aria-label="Settings" title="Settings" onClick={props.onSettings}>
+              <Icon name="settings" size={18} />
             </button>
           </div>
         </div>
-        <div className="search">
-          <Icon name="search" />
-          <input
-            className="field"
-            placeholder="Search people, agents, apps…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        </div>
-        <div className="conversation-list-modes" role="tablist" aria-label="Conversation list layout">
+        <div
+          ref={modeControlRef}
+          className="conversation-list-modes"
+          role="tablist"
+          aria-label="Conversation list layout"
+          data-mode={listMode}
+          onPointerDown={onModePointerDown}
+          onPointerMove={onModePointerMove}
+          onPointerUp={(event) => clearModeGesture(event.pointerId, true)}
+          onPointerCancel={(event) => clearModeGesture(event.pointerId, false)}
+          onLostPointerCapture={(event) => clearModeGesture(event.pointerId, false)}
+        >
           {modeOptions.map((option) => (
             <button
               key={option.id}
@@ -178,7 +235,10 @@ export function ChatList(props: {
               aria-controls="conversation-list-panel"
               tabIndex={listMode === option.id ? 0 : -1}
               className={listMode === option.id ? 'active' : ''}
-              onClick={() => chooseMode(option.id)}
+              onClick={(event) => {
+                if (suppressModeClickRef.current) { event.preventDefault(); return; }
+                chooseMode(option.id);
+              }}
               onKeyDown={(event) => moveModeFocus(event, option.id)}
             >
               {option.label}
@@ -246,6 +306,32 @@ export function ChatList(props: {
             No contacts yet — share an invite to start.
           </p>
         )}
+      </div>
+      <div className="list-bottom-chrome" ref={bottomChromeRef}>
+        <div className={`search adaptive-search${searchExpanded || q ? ' expanded' : ''}`} role="search">
+          <button type="button" className="adaptive-search-toggle" aria-label="Search conversations" title="Search conversations" onClick={() => {
+            setSearchExpanded(true);
+            requestAnimationFrame(() => searchInputRef.current?.focus());
+          }}><Icon name="search" /><span>Search</span></button>
+          <input
+            ref={searchInputRef}
+            className="field"
+            placeholder="Search people, agents, apps…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onFocus={() => setSearchExpanded(true)}
+            onBlur={() => { if (!q) setSearchExpanded(false); }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              if (q) setQ('');
+              else { setSearchExpanded(false); event.currentTarget.blur(); }
+            }}
+          />
+        </div>
+        <button type="button" className="icon-btn list-bottom-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
+          <Icon name="invite" size={20} />
+        </button>
       </div>
     </div>
   );
@@ -399,7 +485,7 @@ function SwipeReplyRow(props: {
   const onDown = (e: React.PointerEvent) => {
     const target = e.target as Element;
     const selection = window.getSelection?.();
-    if (!canReply || !e.isPrimary || e.pointerType === 'mouse' || e.button !== 0 || st.current.id !== -1
+    if (!canReply || !e.isPrimary || e.pointerType === 'mouse' || (e.pointerType === 'pen' && e.button !== 0) || st.current.id !== -1
       || (selection && !selection.isCollapsed)
       || target.closest('a, button, input, textarea, select, [role="button"], audio, video, img, [draggable="true"], .filecard, .filecard-bubble, .image-bubble, .voice-bubble, .ours-message-file, .attachment')) return;
     st.current = {
@@ -534,6 +620,9 @@ export function Conversation(props: {
   const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const detailHeadRef = useRef<HTMLDivElement>(null);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const unreadPlacedRef = useRef(false);
@@ -556,6 +645,35 @@ export function Conversation(props: {
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
   const newestMessageRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const detail = detailRef.current;
+    const head = detailHeadRef.current;
+    const composer = composerWrapRef.current;
+    if (!detail || !head || !composer) return;
+    let headHeight = -1;
+    let composerHeight = -1;
+    const measure = () => {
+      const nextHead = Math.round(head.getBoundingClientRect().height);
+      const nextComposer = Math.round(composer.getBoundingClientRect().height);
+      if (nextHead !== headHeight) {
+        headHeight = nextHead;
+        detail.style.setProperty('--conversation-head-height', `${nextHead}px`);
+      }
+      if (nextComposer !== composerHeight) {
+        composerHeight = nextComposer;
+        detail.style.setProperty('--conversation-compose-height', `${nextComposer}px`);
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(head);
+    observer.observe(composer);
+    return () => {
+      observer.disconnect();
+      detail.style.removeProperty('--conversation-head-height');
+      detail.style.removeProperty('--conversation-compose-height');
+    };
+  }, [contact?.id]);
   useEffect(() => {
     setDraft('');
     setError(null);
@@ -950,16 +1068,14 @@ export function Conversation(props: {
   };
 
   return (
-    <div className="detail detail-chat">
-      <div className="detail-head">
+    <div className="detail detail-chat" ref={detailRef}>
+      <div className="detail-head" ref={detailHeadRef}>
         <div className="conv-peer">
-          <button className="icon-btn detail-back" onClick={props.onBack}>
+          <button className="icon-btn detail-back" aria-label="Back to conversations" onClick={props.onBack}>
             <Icon name="back" />
           </button>
-          <button type="button" className="conv-contact-trigger" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
-            <span className="avatar accent">{contact.initials}</span>
-            <span className="conv-peer-meta">
-              <span className="conv-peer-name">{contact.name}</span>
+          <div className="conv-peer-status">
+            <span className="conv-peer-name">{contact.name}</span>
             {/* Opening the app from a notification lands here before the
                 messages do. An empty thread with no explanation reads as a
                 lost message, so the header says what is happening — inline,
@@ -971,7 +1087,9 @@ export function Conversation(props: {
               </div>
             )}
             {!props.syncing && <span className="conv-contact-status"><Icon name="lock" size={11} />Encrypted connection</span>}
-            </span>
+          </div>
+          <button type="button" className="conv-contact-trigger conv-contact-avatar" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
+            <span className="avatar accent" aria-hidden>{contact.initials}</span>
           </button>
         </div>
       </div>
@@ -1235,7 +1353,7 @@ export function Conversation(props: {
           )}
         </div>
       )}
-      <div className="composer-wrap">
+      <div className="composer-wrap" ref={composerWrapRef}>
         {replyTo && (
           <div className="reply-bar">
             <div className="reply-bar-line" />
