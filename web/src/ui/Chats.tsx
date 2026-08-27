@@ -102,8 +102,6 @@ export function ChatList(props: {
 }) {
   const { contacts, roots, selected } = props;
   const [q, setQ] = useState('');
-  const [searchExpanded, setSearchExpanded] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const listRootRef = useRef<HTMLDivElement>(null);
   const bottomChromeRef = useRef<HTMLDivElement>(null);
   const [listMode, setListMode] = useState<ConversationListMode>(
@@ -308,24 +306,17 @@ export function ChatList(props: {
         )}
       </div>
       <div className="list-bottom-chrome" ref={bottomChromeRef}>
-        <div className={`search adaptive-search${searchExpanded || q ? ' expanded' : ''}`} role="search">
-          <button type="button" className="adaptive-search-toggle" aria-label="Search conversations" title="Search conversations" onClick={() => {
-            setSearchExpanded(true);
-            requestAnimationFrame(() => searchInputRef.current?.focus());
-          }}><Icon name="search" /><span>Search</span></button>
+        <div className="search adaptive-search" role="search">
+          <span className="adaptive-search-icon" aria-hidden><Icon name="search" /></span>
           <input
-            ref={searchInputRef}
             className="field"
             placeholder="Search people, agents, apps…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onFocus={() => setSearchExpanded(true)}
-            onBlur={() => { if (!q) setSearchExpanded(false); }}
             onKeyDown={(event) => {
               if (event.key !== 'Escape') return;
               event.preventDefault();
-              if (q) setQ('');
-              else { setSearchExpanded(false); event.currentTarget.blur(); }
+              setQ('');
             }}
           />
         </div>
@@ -652,6 +643,7 @@ export function Conversation(props: {
     if (!detail || !head || !composer) return;
     let headHeight = -1;
     let composerHeight = -1;
+    let reserveFrame: number | null = null;
     const measure = () => {
       const nextHead = Math.round(head.getBoundingClientRect().height);
       const nextComposer = Math.round(composer.getBoundingClientRect().height);
@@ -660,8 +652,17 @@ export function Conversation(props: {
         detail.style.setProperty('--conversation-head-height', `${nextHead}px`);
       }
       if (nextComposer !== composerHeight) {
+        const preserveBottom = pinnedToBottomRef.current;
         composerHeight = nextComposer;
         detail.style.setProperty('--conversation-compose-height', `${nextComposer}px`);
+        if (preserveBottom) {
+          if (reserveFrame !== null) cancelAnimationFrame(reserveFrame);
+          reserveFrame = requestAnimationFrame(() => {
+            reserveFrame = null;
+            const scroller = messageScrollRef.current;
+            if (scroller && pinnedToBottomRef.current) scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+          });
+        }
       }
     };
     measure();
@@ -670,6 +671,7 @@ export function Conversation(props: {
     observer.observe(composer);
     return () => {
       observer.disconnect();
+      if (reserveFrame !== null) cancelAnimationFrame(reserveFrame);
       detail.style.removeProperty('--conversation-head-height');
       detail.style.removeProperty('--conversation-compose-height');
     };
@@ -1089,7 +1091,7 @@ export function Conversation(props: {
             {!props.syncing && <span className="conv-contact-status"><Icon name="lock" size={11} />Encrypted connection</span>}
           </div>
           <button type="button" className="conv-contact-trigger conv-contact-avatar" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
-            <span className="avatar accent" aria-hidden>{contact.initials}</span>
+            <span className="conv-contact-initials" aria-hidden>{contact.initials}</span>
           </button>
         </div>
       </div>

@@ -389,22 +389,22 @@
   .signal-stage .detail-head .conv-peer { width: 100%; gap: 10px; }
   .signal-stage .detail-back {
     display: inline-grid;
-    flex: 0 0 54px;
-    width: 54px;
-    height: 54px;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
     border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
     border-radius: 18px;
     background: color-mix(in srgb, var(--surface) 78%, transparent);
     box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
     backdrop-filter: blur(22px) saturate(118%);
   }
-  .signal-stage .messages-inner {
-    padding: calc(var(--conversation-head-height) + max(8px, env(safe-area-inset-top, 0px)) + 12px) 10px calc(var(--conversation-compose-height) + max(8px, env(safe-area-inset-bottom, 0px)) + 12px);
+  .signal-stage .detail-chat .messages-inner {
+    padding: calc(var(--conversation-head-height) + max(8px, env(safe-area-inset-top, 0px)) + 12px) 10px calc(var(--conversation-compose-height) + max(8px, env(safe-area-inset-bottom, 0px)) + 20px);
   }
   .signal-stage .detail-head .conv-peer-status {
     flex: 1 1 auto;
     min-width: 0;
-    height: 54px;
+    height: 44px;
     align-content: center;
     justify-items: center;
     padding-inline: 8px;
@@ -416,13 +416,14 @@
   }
   .signal-stage .detail-head .conv-peer-name { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
   .signal-stage .detail-head .conv-contact-avatar {
-    flex: 0 0 54px; width: 54px; height: 54px; border-radius: 50%;
-    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    flex: 0 0 44px; width: 44px; height: 44px; border-radius: 50%;
+    border: 0;
+    background: var(--accent-fill);
+    color: var(--on-accent);
     box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
     backdrop-filter: blur(22px) saturate(118%);
   }
-  .signal-stage .detail-head .conv-contact-avatar .avatar { width: 44px; height: 44px; }
+  .signal-stage .detail-head .conv-contact-initials { display: contents; background: transparent; border: 0; box-shadow: none; }
   .signal-stage .composer-wrap {
     position: absolute;
     z-index: 10;
@@ -465,22 +466,12 @@
     color: var(--on-accent);
   }
   .signal-stage .composer .field {
-    flex: 0 1 clamp(112px, 34vw, 128px);
-    width: clamp(112px, 34vw, 128px);
-    min-width: 112px;
-    border-radius: 16px;
-    transition: flex-basis var(--dur-standard) var(--ease-interface), width var(--dur-standard) var(--ease-interface);
-  }
-  .signal-stage .composer .field:placeholder-shown:not(:focus) {
-    height: 44px !important;
-    overflow: hidden;
-    white-space: nowrap;
-  }
-  .signal-stage .composer .field:focus,
-  .signal-stage .composer .field:not(:placeholder-shown),
-  .signal-stage .composer-wrap:has(> .reply-bar, > .attach-preview, > .attachment-processing) .composer .field {
     flex: 1 1 auto;
     width: auto;
+    min-width: 112px;
+    height: 44px;
+    min-height: 44px;
+    border-radius: 16px;
   }
   .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing) {
     margin: 0 0 10px;
@@ -494,6 +485,7 @@
   }
   .signal-stage .msg-row:not(.cont-top) { margin-top: 10px; }
   .signal-stage .msg-row.cont-top { margin-top: 2px; }
+  .signal-stage .msg-row { touch-action: pan-y; }
   .signal-stage .jump-latest {
     bottom: calc(var(--conversation-compose-height) + max(8px, env(safe-area-inset-bottom, 0px)) + 16px);
   }
@@ -523,9 +515,9 @@
   }
   .signal-stage.show-detail > .listcol .list-bottom-chrome { display: none; }
   .list-bottom-chrome > * { pointer-events: auto; }
-  .listcol > .listcol-scroll { padding-bottom: calc(var(--list-bottom-chrome-height, 54px) + 12px); }
+  .listcol > .listcol-scroll { padding-bottom: calc(var(--list-bottom-chrome-height, 46px) + 12px); }
   .list-bottom-invite {
-    flex: 0 0 54px; width: 54px; height: 54px; border-radius: 50%;
+    flex: 0 0 46px; width: 46px; height: 46px; border-radius: 50%;
     border: 1px solid var(--accent-fill);
     background: var(--accent-fill);
     color: var(--on-accent);
@@ -533,8 +525,8 @@
     backdrop-filter: blur(22px) saturate(118%);
   }
   .adaptive-search {
-    flex: 0 0 128px;
-    width: 128px;
+    flex: 1 1 auto;
+    width: auto;
     min-height: 44px;
     overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
@@ -542,21 +534,14 @@
     background: color-mix(in srgb, var(--surface) 78%, transparent);
     box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 7%, transparent);
     backdrop-filter: blur(18px) saturate(112%);
-    transition: width var(--dur-standard) var(--ease-interface);
   }
-  .adaptive-search.expanded { flex: 1 1 auto; width: auto; }
-  .adaptive-search .adaptive-search-toggle {
-    display: flex; flex: 0 0 128px; width: 128px; height: 44px; align-items: center; justify-content: center; gap: 7px;
-    padding: 0; border: 0; background: transparent; color: var(--text-2);
+  .adaptive-search .adaptive-search-icon {
+    display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; color: var(--text-2);
   }
-  .adaptive-search .adaptive-search-toggle .ic { position: static; width: 18px; height: 18px; pointer-events: none; }
-  .adaptive-search.expanded .adaptive-search-toggle { flex-basis: 44px; width: 44px; }
-  .adaptive-search.expanded .adaptive-search-toggle span { display: none; }
+  .adaptive-search .adaptive-search-icon .ic { position: static; width: 18px; height: 18px; pointer-events: none; }
   .adaptive-search .field {
-    width: 0; min-width: 0; padding-inline: 0; border: 0; opacity: 0; pointer-events: none;
-    transition: opacity var(--dur-immediate) linear;
+    flex: 1 1 auto; width: auto; min-width: 0; padding: 0 12px 0 2px; border: 0; opacity: 1;
   }
-  .adaptive-search.expanded .field { flex: 1 1 auto; width: auto; padding: 0 12px 0 2px; opacity: 1; pointer-events: auto; }
 
   .conversation-list-modes {
     position: relative; isolation: isolate; min-height: 44px; padding: 4px; border-radius: 18px;
@@ -575,6 +560,42 @@
   .conversation-list-modes.dragging::before { transform: translateX(var(--mode-drag-x, 0)); transition: none; }
   .conversation-list-modes button { position: relative; z-index: 1; min-height: 44px; background: transparent !important; box-shadow: none !important; }
   .conversation-list-modes button[aria-selected='true'] { color: var(--text); font-weight: 760; }
+
+  /* One semantic Liquid Glass role, individually owned. */
+  :is(
+    .jump-latest,
+    .signal-stage .detail-back,
+    .signal-stage .detail-head .conv-peer-status,
+    .signal-stage .detail-head .conv-contact-avatar,
+    .signal-stage .composer > .composer-tool,
+    .signal-stage .composer > .field,
+    .signal-stage .composer > .vr-mic,
+    .signal-stage .composer > .btn.primary,
+    .signal-stage .composer-wrap > .reply-bar,
+    .signal-stage .composer-wrap > .attach-preview,
+    .signal-stage .composer-wrap > .attachment-processing,
+    .signal-stage .voice-rec-overlay,
+    .adaptive-search,
+    .list-bottom-invite,
+    .conversation-list-modes
+  ) {
+    border-color: var(--material-floating-border);
+    background: var(--material-floating);
+    box-shadow: var(--material-floating-shadow);
+    -webkit-backdrop-filter: blur(var(--material-floating-blur)) saturate(115%);
+    backdrop-filter: blur(var(--material-floating-blur)) saturate(115%);
+  }
+  .conversation-list-modes::before {
+    border-color: var(--material-floating-border);
+    background: var(--material-floating);
+    box-shadow: var(--material-floating-shadow);
+    -webkit-backdrop-filter: blur(var(--material-floating-blur)) saturate(115%);
+    backdrop-filter: blur(var(--material-floating-blur)) saturate(115%);
+  }
+  :is(.signal-stage .detail-head .conv-contact-avatar, .signal-stage .composer > .btn.primary, .list-bottom-invite) {
+    background: var(--material-floating-accent);
+    color: var(--text);
+  }
 
   .conversation-group > .contact-row:not(:last-child)::after {
     content: ''; position: absolute; right: 0; bottom: 0; left: 64px; height: 1px;
@@ -666,12 +687,13 @@
   .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing),
   .signal-stage .voice-rec-overlay {
     background: var(--surface) !important;
+    -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
   .adaptive-search,
   .list-bottom-invite,
   .conversation-list-modes,
-  .conversation-list-modes::before { background: var(--surface) !important; backdrop-filter: none; }
+  .conversation-list-modes::before { background: var(--surface) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .list-bottom-invite { background: var(--accent-fill) !important; color: var(--on-accent); }
 }
 
@@ -702,11 +724,12 @@
     background: Canvas;
     color: CanvasText;
     box-shadow: none;
+    -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
   .adaptive-search,
   .list-bottom-invite,
-  .conversation-list-modes { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
+  .conversation-list-modes { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .conversation-list-modes::before { border: 2px solid Highlight; background: Canvas; box-shadow: none; }
   .conversation-group > .contact-row:not(:last-child)::after { background: CanvasText; }
 }
@@ -1016,8 +1039,8 @@
   background-color: var(--accent-deep);
 }
 .list-bottom-invite.icon-btn,
-.list-bottom-invite.icon-btn:hover { color: var(--on-accent); background-color: var(--accent-fill); }
-.list-bottom-invite.icon-btn:active:not(:disabled) { color: var(--on-accent); background-color: var(--accent-deep); }
+.list-bottom-invite.icon-btn:hover { color: var(--text); background-color: var(--material-floating-accent); }
+.list-bottom-invite.icon-btn:active:not(:disabled) { color: var(--text); background-color: var(--material-floating-accent); }
 
 @media (pointer: coarse) {
   :is(.btn, .btn.sm, .icon-btn, .rail-btn, .command-me, .tab, .voice-play, .composer .voice-btn, .pending-actions .linkbtn) {
