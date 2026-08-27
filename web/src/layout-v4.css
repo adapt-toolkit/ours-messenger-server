@@ -332,7 +332,7 @@
     position: relative;
     grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     gap: 0;
-    padding: 0 0 var(--mobile-stage-gutter);
+    padding: 0;
     border: 0;
     border-radius: 0;
   }
@@ -341,23 +341,26 @@
   .theme-dark .signal-stage > .listcol {
     grid-column: 1;
     grid-row: 1;
-    margin-inline: var(--mobile-stage-gutter);
-    border: 1px solid var(--line);
-    border-radius: 18px;
+    margin-inline: 0;
+    border: 0;
+    border-radius: 0;
     box-shadow: none;
   }
 
   .signal-stage > .detail,
   .theme-dark .signal-stage > .detail {
+    --conversation-head-height: 82px;
+    --conversation-compose-height: 76px;
     position: absolute;
     z-index: 5;
     grid-column: 1;
     grid-row: 1;
-    inset: 0 var(--mobile-stage-gutter) var(--mobile-stage-gutter);
+    inset: 0;
     transform: translateX(100%);
     opacity: 0.72;
-    border: 1px solid var(--line);
-    border-radius: 18px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
     transition: transform var(--dur-emphasis) var(--ease-interface), opacity var(--dur-standard) var(--ease-interface);
   }
 
@@ -369,10 +372,131 @@
 
   /* Reserve the header's syncing-status height so refresh feedback never
      pushes the conversation viewport down for a single frame. */
-  .signal-stage .detail-head { min-height: 82px; padding: 7px 10px; }
-  .signal-stage .detail-back { display: inline-grid; }
-  .signal-stage .messages-inner { padding: 17px 10px 14px; }
-  .signal-stage .composer { margin: 8px; }
+  .signal-stage .detail-head {
+    position: absolute;
+    z-index: 10;
+    top: max(8px, env(safe-area-inset-top, 0px));
+    right: max(8px, env(safe-area-inset-right, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    min-height: 70px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  .signal-stage .detail-head .conv-peer { width: 100%; gap: 10px; }
+  .signal-stage .detail-back {
+    display: inline-grid;
+    flex: 0 0 54px;
+    width: 54px;
+    height: 54px;
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
+    backdrop-filter: blur(22px) saturate(118%);
+  }
+  .signal-stage .messages-inner {
+    padding: calc(var(--conversation-head-height) + max(8px, env(safe-area-inset-top, 0px)) + 12px) 10px calc(var(--conversation-compose-height) + max(8px, env(safe-area-inset-bottom, 0px)) + 12px);
+  }
+  .signal-stage .detail-head .conv-peer-status {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 54px;
+    align-content: center;
+    justify-items: center;
+    padding-inline: 8px;
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
+    backdrop-filter: blur(22px) saturate(118%);
+  }
+  .signal-stage .detail-head .conv-peer-name { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
+  .signal-stage .detail-head .conv-contact-avatar {
+    flex: 0 0 54px; width: 54px; height: 54px; border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
+    backdrop-filter: blur(22px) saturate(118%);
+  }
+  .signal-stage .detail-head .conv-contact-avatar .avatar { width: 44px; height: 44px; }
+  .signal-stage .composer-wrap {
+    position: absolute;
+    z-index: 10;
+    right: max(8px, env(safe-area-inset-right, 0px));
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  .signal-stage .composer,
+  .theme-dark .signal-stage .composer,
+  .theme-dark .signal-stage .composer:focus-within {
+    margin: 0;
+    gap: 10px;
+    padding: 0;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    transform: none;
+  }
+  .signal-stage .composer > :is(.composer-tool, .field, .vr-mic, .btn.primary),
+  .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing),
+  .signal-stage .voice-rec-overlay {
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
+    backdrop-filter: blur(22px) saturate(118%);
+  }
+  .signal-stage .composer > :is(.composer-tool, .vr-mic, .btn.primary) { border-radius: 16px; }
+  .signal-stage .composer > .btn.primary {
+    border-color: var(--accent-fill);
+    background: var(--accent-fill);
+    color: var(--on-accent);
+  }
+  .signal-stage .composer .field {
+    flex: 0 1 clamp(112px, 34vw, 128px);
+    width: clamp(112px, 34vw, 128px);
+    min-width: 112px;
+    border-radius: 16px;
+    transition: flex-basis var(--dur-standard) var(--ease-interface), width var(--dur-standard) var(--ease-interface);
+  }
+  .signal-stage .composer .field:placeholder-shown:not(:focus) {
+    height: 44px !important;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .signal-stage .composer .field:focus,
+  .signal-stage .composer .field:not(:placeholder-shown),
+  .signal-stage .composer-wrap:has(> .reply-bar, > .attach-preview, > .attachment-processing) .composer .field {
+    flex: 1 1 auto;
+    width: auto;
+  }
+  .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing) {
+    margin: 0 0 10px;
+    border-radius: 18px;
+  }
+  .signal-stage .composer.recording { padding-top: 64px; }
+  .signal-stage .composer.recording .voice-rec-overlay {
+    inset: 0 0 auto;
+    min-height: 54px;
+    border-radius: 18px;
+  }
+  .signal-stage .msg-row:not(.cont-top) { margin-top: 10px; }
+  .signal-stage .msg-row.cont-top { margin-top: 2px; }
+  .signal-stage .jump-latest {
+    bottom: calc(var(--conversation-compose-height) + max(8px, env(safe-area-inset-bottom, 0px)) + 16px);
+  }
 
   .contact-row.grouped,
   .theme-dark .contact-row.grouped {
@@ -381,6 +505,81 @@
   }
 
   .listcol-actions .btn { min-height: 44px; }
+  .listcol-titlebar { flex-wrap: nowrap; gap: 12px; }
+  .messenger-lockup { flex-direction: column; align-items: flex-start; gap: 0; white-space: normal; }
+  .messenger-lockup > span { display: block; line-height: 0.92; }
+  .messenger-brand-ours { font-size: 1.18rem; }
+  .messenger-brand-product { font-size: 0.78rem; letter-spacing: 0.02em; }
+  .listcol-actions { width: auto; flex-wrap: nowrap; gap: 10px; }
+  .listcol-actions .icon-btn { flex: 0 0 44px; width: 44px; height: 44px; border-radius: 16px; }
+  .listcol-actions .desktop-invite { display: none; }
+
+  .signal-stage .list-bottom-chrome {
+    position: absolute; z-index: 12; right: 0; bottom: 0; left: 0;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px));
+    background: transparent; border: 0; box-shadow: none; backdrop-filter: none;
+    pointer-events: none;
+  }
+  .signal-stage.show-detail > .listcol .list-bottom-chrome { display: none; }
+  .list-bottom-chrome > * { pointer-events: auto; }
+  .listcol > .listcol-scroll { padding-bottom: calc(var(--list-bottom-chrome-height, 54px) + 12px); }
+  .list-bottom-invite {
+    flex: 0 0 54px; width: 54px; height: 54px; border-radius: 50%;
+    border: 1px solid var(--accent-fill);
+    background: var(--accent-fill);
+    color: var(--on-accent);
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--text) 10%, transparent);
+    backdrop-filter: blur(22px) saturate(118%);
+  }
+  .adaptive-search {
+    flex: 0 0 128px;
+    width: 128px;
+    min-height: 44px;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 7%, transparent);
+    backdrop-filter: blur(18px) saturate(112%);
+    transition: width var(--dur-standard) var(--ease-interface);
+  }
+  .adaptive-search.expanded { flex: 1 1 auto; width: auto; }
+  .adaptive-search .adaptive-search-toggle {
+    display: flex; flex: 0 0 128px; width: 128px; height: 44px; align-items: center; justify-content: center; gap: 7px;
+    padding: 0; border: 0; background: transparent; color: var(--text-2);
+  }
+  .adaptive-search .adaptive-search-toggle .ic { position: static; width: 18px; height: 18px; pointer-events: none; }
+  .adaptive-search.expanded .adaptive-search-toggle { flex-basis: 44px; width: 44px; }
+  .adaptive-search.expanded .adaptive-search-toggle span { display: none; }
+  .adaptive-search .field {
+    width: 0; min-width: 0; padding-inline: 0; border: 0; opacity: 0; pointer-events: none;
+    transition: opacity var(--dur-immediate) linear;
+  }
+  .adaptive-search.expanded .field { flex: 1 1 auto; width: auto; padding: 0 12px 0 2px; opacity: 1; pointer-events: auto; }
+
+  .conversation-list-modes {
+    position: relative; isolation: isolate; min-height: 44px; padding: 4px; border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 68%, transparent);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 7%, transparent);
+    backdrop-filter: blur(20px) saturate(118%); touch-action: pan-y;
+  }
+  .conversation-list-modes::before {
+    content: ''; position: absolute; z-index: -1; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px);
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-radius: 14px;
+    background: color-mix(in srgb, var(--surface) 84%, transparent);
+    box-shadow: 0 5px 16px color-mix(in srgb, var(--text) 10%, transparent);
+    transform: translateX(0); transition: transform 360ms cubic-bezier(0.22, 0.86, 0.3, 1);
+  }
+  .conversation-list-modes[data-mode='identity']::before { transform: translateX(100%); }
+  .conversation-list-modes.dragging::before { transform: translateX(var(--mode-drag-x, 0)); transition: none; }
+  .conversation-list-modes button { position: relative; z-index: 1; min-height: 44px; background: transparent !important; box-shadow: none !important; }
+  .conversation-list-modes button[aria-selected='true'] { color: var(--text); font-weight: 760; }
+
+  .conversation-group > .contact-row:not(:last-child)::after {
+    content: ''; position: absolute; right: 0; bottom: 0; left: 64px; height: 1px;
+    background: var(--line); pointer-events: none;
+  }
 
   .operations-stage > .listcol {
     grid-template: auto minmax(0, 1fr) / minmax(0, 1fr);
@@ -405,11 +604,14 @@
 /* Calm workspace chrome: translucency is reserved for controls that float
    above content; the reading surfaces and bubbles remain opaque. */
 .messenger-lockup { display: inline-flex; align-items: baseline; gap: 0.28em; }
+.list-bottom-chrome { display: none; }
 .messenger-brand-ours { color: var(--accent); }
 .messenger-brand-product { color: var(--text); }
 .listcol-actions .btn,
 .listcol-actions .icon-btn,
 .conv-contact-trigger,
+.conv-peer-status,
+.conv-contact-avatar,
 .contact-action-group,
 .contact-identity {
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
@@ -417,7 +619,15 @@
   box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 7%, transparent);
   backdrop-filter: blur(18px) saturate(112%);
 }
+.listcol-actions .btn.primary {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}
 .conv-contact-trigger { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 4px 8px; border-radius: 15px; color: inherit; text-align: left; cursor: pointer; }
+.conv-peer-status { display: grid; min-width: 0; padding: 4px 10px; border-radius: 15px; }
+.conv-contact-avatar { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; padding: 0; border-radius: 50%; color: inherit; cursor: pointer; }
+.conv-contact-avatar .avatar { width: 36px; height: 36px; }
 .conv-contact-trigger:disabled { cursor: default; opacity: 1; }
 .conv-contact-trigger .conv-peer-meta { display: grid; }
 .conv-contact-status { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: 0.72rem; }
@@ -439,21 +649,78 @@
 .contact-remove { display: flex; width: 100%; min-height: 50px; align-items: center; justify-content: center; gap: 8px; margin-top: 24px; border: 1px solid var(--danger); border-radius: 16px; background: transparent; color: var(--danger); }
 
 @media (prefers-reduced-transparency: reduce) {
-  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { background: var(--surface-2) !important; backdrop-filter: none; }
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .conv-peer-status, .conv-contact-avatar, .contact-action-group, .contact-identity) { background: var(--surface-2) !important; backdrop-filter: none; }
   .listcol-actions .btn.primary { background: var(--accent-fill) !important; }
 }
 @media (prefers-contrast: more) {
-  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity) { border-color: currentColor; box-shadow: none; }
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .conv-peer-status, .conv-contact-avatar, .contact-action-group, .contact-identity) { border-color: currentColor; box-shadow: none; }
 }
 @media (forced-colors: active) {
-  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .contact-action-group, .contact-identity, .contact-remove) { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
+  :is(.listcol-actions .btn, .listcol-actions .icon-btn, .conv-contact-trigger, .conv-peer-status, .conv-contact-avatar, .contact-action-group, .contact-identity, .contact-remove) { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
+}
+
+@media (max-width: 860px) and (prefers-reduced-transparency: reduce) {
+  .signal-stage .detail-back,
+  .signal-stage .detail-head :is(.conv-peer-status, .conv-contact-avatar),
+  .signal-stage .composer > :is(.composer-tool, .field, .vr-mic, .btn.primary),
+  .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing),
+  .signal-stage .voice-rec-overlay {
+    background: var(--surface) !important;
+    backdrop-filter: none;
+  }
+  .adaptive-search,
+  .list-bottom-invite,
+  .conversation-list-modes,
+  .conversation-list-modes::before { background: var(--surface) !important; backdrop-filter: none; }
+  .list-bottom-invite { background: var(--accent-fill) !important; color: var(--on-accent); }
+}
+
+@media (max-width: 860px) and (prefers-contrast: more) {
+  .signal-stage .detail-back,
+  .signal-stage .detail-head :is(.conv-peer-status, .conv-contact-avatar),
+  .signal-stage .composer > :is(.composer-tool, .field, .vr-mic, .btn.primary),
+  .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing),
+  .signal-stage .voice-rec-overlay,
+  .signal-stage .adaptive-search,
+  .signal-stage .list-bottom-invite,
+  .signal-stage .conversation-list-modes,
+  .signal-stage .conversation-list-modes::before {
+    border: 1px solid currentColor !important;
+    box-shadow: none !important;
+    outline: 1px solid currentColor;
+    outline-offset: -1px;
+  }
+}
+
+@media (max-width: 860px) and (forced-colors: active) {
+  .signal-stage .detail-back,
+  .signal-stage .detail-head :is(.conv-peer-status, .conv-contact-avatar),
+  .signal-stage .composer > :is(.composer-tool, .field, .vr-mic, .btn.primary),
+  .signal-stage .composer-wrap > :is(.reply-bar, .attach-preview, .attachment-processing),
+  .signal-stage .voice-rec-overlay {
+    border: 1px solid ButtonText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  .adaptive-search,
+  .list-bottom-invite,
+  .conversation-list-modes { border: 1px solid ButtonText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
+  .conversation-list-modes::before { border: 2px solid Highlight; background: Canvas; box-shadow: none; }
+  .conversation-group > .contact-row:not(:last-child)::after { background: CanvasText; }
+}
+
+@media (max-width: 860px) and (prefers-reduced-motion: reduce) {
+  .signal-stage .composer .field { transition: none; }
+  .adaptive-search,
+  .conversation-list-modes::before { transition: none; }
 }
 
 @media (max-width: 480px) {
   .command-modes .rail-btn { padding-inline: 7px; }
-  .listcol-titlebar { flex-wrap: wrap; gap: 10px; }
-  .listcol-actions { width: 100%; flex-wrap: wrap; }
-  .listcol-actions .btn { flex: 1 0 auto; justify-content: center; min-width: 44px; }
+  .listcol-titlebar { flex-wrap: nowrap; gap: 10px; }
+  .listcol-actions { width: auto; flex-wrap: nowrap; }
 }
 
 /* Markdown review and per-chat shared media. These dialogs intentionally live
@@ -748,6 +1015,9 @@
 :is(.btn.primary, .voice-play):active:not(:disabled) {
   background-color: var(--accent-deep);
 }
+.list-bottom-invite.icon-btn,
+.list-bottom-invite.icon-btn:hover { color: var(--on-accent); background-color: var(--accent-fill); }
+.list-bottom-invite.icon-btn:active:not(:disabled) { color: var(--on-accent); background-color: var(--accent-deep); }
 
 @media (pointer: coarse) {
   :is(.btn, .btn.sm, .icon-btn, .rail-btn, .command-me, .tab, .voice-play, .composer .voice-btn, .pending-actions .linkbtn) {
