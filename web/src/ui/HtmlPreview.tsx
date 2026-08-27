@@ -12,14 +12,12 @@ import DialogShell from './DialogShell';
 import { FileRecord, fmtSize, getFileBytes } from './fileStore';
 import {
   attachmentBlobMime,
-  buildSandboxedHtmlDocument,
   HTML_PREVIEW_SANDBOX,
 } from './htmlPreviewCore.mjs';
 import { Icon } from './icons';
 
 export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
   const { rec } = props;
-  const [doc, setDoc] = useState('');
   const [url, setUrl] = useState<string | null>(null);
   const [size, setSize] = useState(0);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
@@ -35,7 +33,6 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
           setLoadState('missing');
           return;
         }
-        setDoc(buildSandboxedHtmlDocument(new TextDecoder('utf-8').decode(bytes)));
         setSize(bytes.byteLength);
         objectUrl = URL.createObjectURL(
           new Blob([bytes as BlobPart], { type: attachmentBlobMime(rec.mime, rec.filename) }),
@@ -55,7 +52,7 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
   return (
     <DialogShell
       title={rec.filename}
-      description="HTML preview · sandboxed, static rendering only"
+      description="Transformed safe preview · external navigation disabled"
       onClose={props.onClose}
       wide
       className="markdown-modal html-modal"
@@ -82,11 +79,12 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
           {loadState === 'error' && <div className="markdown-empty">The file could not be opened.</div>}
           {loadState === 'ready' && (
             <iframe
+              key={rec.id}
               className="html-preview-iframe"
               title={`Sandboxed preview of ${rec.filename}`}
               sandbox={HTML_PREVIEW_SANDBOX}
               referrerPolicy="no-referrer"
-              srcDoc={doc}
+              src={`/api/html-preview/${encodeURIComponent(rec.id)}`}
             />
           )}
         </div>
