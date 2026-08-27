@@ -10,9 +10,16 @@ const types = new Map([['.css', 'text/css; charset=utf-8'], ['.html', 'text/html
 const streams = new Set();
 const captureDir = process.env.MOBILE_CAPTURE_DIR ? resolve(process.env.MOBILE_CAPTURE_DIR) : null;
 if (captureDir) mkdirSync(captureDir, { recursive: true });
+const mobileLayoutSource = readFileSync(resolve(new URL('../web/src/layout-v4.css', import.meta.url).pathname), 'utf8');
+assert.match(mobileLayoutSource, /-webkit-backdrop-filter:\s*blur\(var\(--material-floating-blur\)\)\s+saturate\(115%\)/, 'shared material directly declares the WebKit filter');
+assert.match(mobileLayoutSource, /(?<!-webkit-)backdrop-filter:\s*blur\(var\(--material-floating-blur\)\)\s+saturate\(115%\)/, 'shared material directly declares the standard filter');
 const contrastRatio = (foreground, background) => {
   const channel = (value) => { const unit = value / 255; return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4; };
-  const luminance = (color) => { const [r, g, b] = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const luminance = (color) => {
+    const normalized = color.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const [r, g, b] = (color.startsWith('color(srgb') ? normalized.map((value) => value * 255) : normalized).map(channel);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
   const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
   return (lighter + 0.05) / (darker + 0.05);
 };
@@ -68,6 +75,13 @@ const settleAnimations = (page) => page.evaluate(() => document.getAnimations().
     animation.cancel();
   }
 }));
+const settleConversation = async (page) => {
+  await page.waitForFunction(() => document.querySelectorAll('.message-motion').length >= 8);
+  await settleAnimations(page);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await settleAnimations(page);
+  await page.waitForFunction(() => [...document.querySelectorAll('.message-motion')].every((node) => Number(getComputedStyle(node).opacity) > 0.99));
+};
 const fireGesture = (row, points, downTargetSelector, button = 0, pointerType = 'touch') => row.evaluate((node, { points: path, downTarget, pointerButton, pointerKind }) => {
   const fire = (target, eventType, x, y) => target.dispatchEvent(new PointerEvent(eventType, {
     bubbles: true, cancelable: true, pointerId: 7, pointerType: pointerKind, isPrimary: true,
@@ -102,6 +116,29 @@ const fireNativeTouch = async (page, selector, direction) => {
   await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await session.detach();
   return page.evaluate(() => globalThis.__nativeSwipeEvents);
+};
+const fireNativeModeDrag = async (page, fromRatio, toRatio, vertical = false) => {
+  const control = page.locator('.conversation-list-modes');
+  const box = await control.boundingBox(); assert.ok(box, 'segmented control has native-touch geometry');
+  const x0 = box.x + box.width * fromRatio; const y0 = box.y + box.height / 2;
+  await control.evaluate((node) => {
+    globalThis.__nativeModeEvents = [];
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(type, (event) => {
+      globalThis.__nativeModeEvents.push({ type, pointerType: event.pointerType, button: event.button });
+    });
+  });
+  const session = await page.context().newCDPSession(page);
+  const point = (x, y) => [{ x, y, radiusX: 1, radiusY: 1, force: 1, id: 1 }];
+  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(x0, y0) });
+  for (const ratio of [0.2, 0.45, 0.7, 1]) {
+    const x = vertical ? x0 + 2 : x0 + (box.width * toRatio - box.width * fromRatio) * ratio;
+    const y = vertical ? y0 + 70 * ratio : y0;
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(x, y) });
+  }
+  const mid = await control.evaluate((node) => ({ dragging: node.classList.contains('dragging'), offset: node.style.getPropertyValue('--mode-drag-x') }));
+  await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await session.detach();
+  return { mid, events: await page.evaluate(() => globalThis.__nativeModeEvents) };
 };
 
 try {
@@ -235,7 +272,7 @@ try {
       assert.ok(lightMetrics.sendDelta < 0.1, `${engineName} light compact send remains centered`);
       await light.close();
 
-      if (captureDir && engineName === 'chromium') messages.push(...Array.from({ length: 8 }, (_, index) => ({
+      if (!messages.some((message) => message.wire_id === 'MOBILE-CAPTURE-1')) messages.push(...Array.from({ length: 8 }, (_, index) => ({
         dir: index % 2 ? 'out' : 'in',
         text: `Workspace note ${index + 1}: a calm, readable message moving beneath the floating controls.`,
         date: `2026-08-26T08:${String(index + 2).padStart(2, '0')}:00Z`, read: true,
@@ -292,7 +329,7 @@ try {
           assert.ok(geometry.actions.every((action) => action.title === action.label), `${engineName} ${width}px icon controls retain tooltips`);
           assert.ok(Math.abs(geometry.list.left) < 1 && Math.abs(geometry.list.right - geometry.viewport) < 1, `${engineName} ${width}px list meets viewport edges ${JSON.stringify(geometry.list)}`);
           assert.ok(geometry.actions.every((action) => action.width >= 44 && action.height >= 44), `${engineName} ${width}px ${textScale}% header actions retain 44px targets`);
-          assert.ok(geometry.searchBox.width >= 120 && geometry.searchBox.height >= 44, `${engineName} ${width}px collapsed search remains recognizable ${JSON.stringify(geometry.searchBox)}`);
+          assert.ok(geometry.searchBox.width >= 200 && geometry.searchBox.height >= 44, `${engineName} ${width}px search stays fixed open ${JSON.stringify(geometry.searchBox)}`);
           assert.ok(geometry.invite.width >= 44 && geometry.invite.height >= 44 && geometry.invite.left - geometry.searchBox.right >= 10, `${engineName} ${width}px bottom Search and Invite are disjoint 44px+ controls`);
           assert.ok(geometry.bottomChrome.left >= 0 && geometry.bottomChrome.right <= geometry.viewport && geometry.bottomChrome.bottom <= 812, `${engineName} ${width}px transparent bottom wrapper is contained`);
           assert.ok(geometry.title.right <= geometry.actionGroup.left || geometry.title.bottom <= geometry.actionGroup.top, `${engineName} ${width}px ${textScale}% title and actions do not overlap`);
@@ -320,23 +357,16 @@ try {
           await listPage.locator('[role="dialog"]').waitFor({ state: 'detached' });
         }
         await listPage.setViewportSize({ width: 390, height: 812 });
-        const searchToggle = listPage.getByRole('button', { name: 'Search conversations' });
         const searchInput = listPage.getByPlaceholder('Search people, agents, apps…');
-        const collapsedSearchWidth = await listPage.locator('.adaptive-search').evaluate((node) => node.getBoundingClientRect().width);
-        await searchToggle.click();
-        await listPage.waitForFunction(() => document.querySelector('.adaptive-search').getBoundingClientRect().width > 200);
-        await listPage.waitForFunction(() => document.activeElement === document.querySelector('.adaptive-search .field'));
-        assert.equal(await searchInput.evaluate((node) => node === document.activeElement), true, `${engineName} ${dark ? 'dark' : 'light'} search expands without losing focus`);
+        const fixedSearchWidth = await listPage.locator('.adaptive-search').evaluate((node) => node.getBoundingClientRect().width);
+        assert.ok(fixedSearchWidth > 200 && await searchInput.isVisible(), `${engineName} fixed-open search is visible`);
         await searchInput.fill('Peer');
         await listPage.getByRole('button', { name: 'Settings' }).focus();
         assert.equal(await searchInput.inputValue(), 'Peer', `${engineName} nonempty search query survives blur`);
-        assert.ok(await listPage.locator('.adaptive-search').evaluate((node, collapsedWidth) => node.getBoundingClientRect().width > collapsedWidth, collapsedSearchWidth), `${engineName} nonempty search stays expanded`);
+        assert.ok(Math.abs(await listPage.locator('.adaptive-search').evaluate((node) => node.getBoundingClientRect().width) - fixedSearchWidth) < 1, `${engineName} search width is stable with content`);
         await searchInput.focus(); await searchInput.press('Escape');
-        assert.equal(await searchInput.inputValue(), '', `${engineName} first Escape explicitly clears search`);
-        assert.equal(await listPage.locator('.adaptive-search').evaluate((node) => node.classList.contains('expanded')), true, `${engineName} first Escape keeps empty search expanded`);
-        await searchInput.press('Escape');
-        await listPage.waitForFunction(() => document.querySelector('.adaptive-search').getBoundingClientRect().width <= 129);
-        assert.equal(await searchToggle.isVisible(), true, `${engineName} second Escape restores recognizable search control`);
+        assert.equal(await searchInput.inputValue(), '', `${engineName} Escape explicitly clears search`);
+        assert.ok(Math.abs(await listPage.locator('.adaptive-search').evaluate((node) => node.getBoundingClientRect().width) - fixedSearchWidth) < 1, `${engineName} empty search remains fixed open`);
 
         const recentTab = listPage.getByRole('tab', { name: 'Recent' });
         const identityTab = listPage.getByRole('tab', { name: 'By identity' });
@@ -367,6 +397,18 @@ try {
         });
         assert.equal(await recentTab.getAttribute('aria-selected'), 'true', `${engineName} vertical intent cancels without changing selection`);
         assert.equal(await listPage.locator('.conversation-list-modes').evaluate((node) => node.classList.contains('dragging')), false, `${engineName} vertical intent leaves no drag state`);
+        if (engineName === 'chromium') {
+          const nativeForward = await fireNativeModeDrag(listPage, 0.25, 0.82);
+          assert.ok(nativeForward.mid.dragging && nativeForward.mid.offset, `native segmented hold-drag moves lens before release ${JSON.stringify(nativeForward)}`);
+          assert.ok(nativeForward.events.some((event) => event.type === 'pointerup') && !nativeForward.events.some((event) => event.type === 'pointercancel'), `native horizontal segmented drag completes ${JSON.stringify(nativeForward.events)}`);
+          assert.equal(await identityTab.getAttribute('aria-selected'), 'true', 'native segmented drag commits By identity');
+          const nativeReverse = await fireNativeModeDrag(listPage, 0.75, 0.18);
+          assert.ok(nativeReverse.mid.dragging, `native reverse drag moves lens ${JSON.stringify(nativeReverse)}`);
+          assert.equal(await recentTab.getAttribute('aria-selected'), 'true', 'native reverse drag commits Recent');
+          const nativeVertical = await fireNativeModeDrag(listPage, 0.25, 0.25, true);
+          assert.equal(await recentTab.getAttribute('aria-selected'), 'true', 'native vertical intent does not change segment');
+          assert.equal(nativeVertical.mid.dragging, false, `native vertical intent never owns lens ${JSON.stringify(nativeVertical)}`);
+        }
         const bottomInvite = listPage.getByRole('button', { name: 'Invite' });
         await bottomInvite.click();
         await listPage.getByRole('dialog').waitFor();
@@ -382,21 +424,84 @@ try {
         });
         assert.ok(contrastMaterials.every((item) => item.shadow === 'none' && item.outline === item.color && item.outlineWidth >= 1), `${engineName} increased-contrast list materials use currentColor boundaries without soft shadows ${JSON.stringify(contrastMaterials)}`);
         await listPage.emulateMedia({ contrast: 'no-preference' });
+        const listMaterials = await listPage.evaluate(() => {
+          const probe = (value) => { const node = document.createElement('i'); node.style.background = value; document.body.append(node); const result = getComputedStyle(node).backgroundColor; node.remove(); return result; };
+          const read = (selector, pseudo) => { const style = getComputedStyle(document.querySelector(selector), pseudo); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; };
+          return { regular: probe('var(--material-floating)'), accent: probe('var(--material-floating-accent)'),
+            search: read('.adaptive-search'), modes: read('.conversation-list-modes'), lens: read('.conversation-list-modes', '::before'), invite: read('.list-bottom-invite') };
+        });
+        for (const item of [listMaterials.search, listMaterials.modes, listMaterials.lens]) {
+          assert.equal(item.background, listMaterials.regular, `${engineName} list glass resolves the floating role ${JSON.stringify(listMaterials)}`);
+          assert.notEqual(item.filter, 'none', `${engineName} list glass exposes standard backdrop filter`);
+          if (item.webkitFilter) assert.notEqual(item.webkitFilter, 'none', `${engineName} list glass exposes computed WebKit backdrop filter`);
+          assert.ok(item.alpha < 1, `${engineName} list glass stays translucent ${JSON.stringify(item)}`);
+        }
+        assert.equal(listMaterials.invite.background, listMaterials.accent, `${engineName} Invite resolves translucent floating accent role`);
+        assert.ok(listMaterials.invite.alpha < 1 && listMaterials.invite.filter !== 'none', `${engineName} Invite is filtered translucent glass ${JSON.stringify(listMaterials.invite)}`);
+        if (listMaterials.invite.webkitFilter) assert.notEqual(listMaterials.invite.webkitFilter, 'none', `${engineName} Invite exposes computed WebKit filter`);
         await listPage.setViewportSize({ width: 390, height: 812 });
         await listPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
         await listPage.locator('.composer textarea').waitFor();
+        await listPage.waitForFunction(() => {
+          const detail = document.querySelector('.detail-chat'); const composer = document.querySelector('.composer-wrap');
+          return detail && composer && parseFloat(getComputedStyle(detail).getPropertyValue('--conversation-compose-height')) === Math.round(composer.getBoundingClientRect().height);
+        });
+        await settleAnimations(listPage);
+        const naturalOpen = await listPage.evaluate(() => {
+          const scroller = document.querySelector('.messages'); const last = [...document.querySelectorAll('.msg-row')].at(-1);
+          const composer = document.querySelector('.composer-wrap').getBoundingClientRect(); const row = last.getBoundingClientRect();
+          return { row: row.toJSON(), composer: composer.toJSON(), scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight,
+            clientHeight: scroller.clientHeight, reserve: getComputedStyle(document.querySelector('.detail-chat')).getPropertyValue('--conversation-compose-height'),
+            paddingBottom: getComputedStyle(document.querySelector('.messages-inner')).paddingBottom };
+        });
+        assert.ok(naturalOpen.row.bottom <= naturalOpen.composer.top - 8, `${engineName} ${dark ? 'dark' : 'light'} natural first open fully exposes final message ${JSON.stringify(naturalOpen)}`);
+        assert.ok(Math.abs(naturalOpen.scrollTop - Math.max(0, naturalOpen.scrollHeight - naturalOpen.clientHeight)) < 2, `${engineName} natural first open remains bottom-anchored ${JSON.stringify(naturalOpen)}`);
+        await listPage.locator('.messages').evaluate((node) => { node.scrollTop = 0; });
+        await listPage.locator('.jump-latest').waitFor();
+        const awayBefore = await listPage.locator('.messages').evaluate((node) => ({ top: node.scrollTop, max: node.scrollHeight - node.clientHeight }));
+        await listPage.locator('.msg-reply').first().click();
+        await listPage.getByTitle('Cancel reply').waitFor();
+        await listPage.waitForFunction((height) => parseFloat(getComputedStyle(document.querySelector('.detail-chat')).getPropertyValue('--conversation-compose-height')) > height, Number.parseFloat(naturalOpen.reserve));
+        await listPage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        const awayAfter = await listPage.locator('.messages').evaluate((node) => ({ top: node.scrollTop, max: node.scrollHeight - node.clientHeight }));
+        assert.ok(awayAfter.max - awayAfter.top > 100 && awayAfter.top < awayAfter.max, `${engineName} composer reserve growth does not force an away reader to bottom ${JSON.stringify({ awayBefore, awayAfter })}`);
+        await listPage.getByTitle('Cancel reply').click();
+        const conversationMaterials = await listPage.evaluate(() => {
+          const probe = (value) => { const node = document.createElement('i'); node.style.background = value; document.body.append(node); const result = getComputedStyle(node).backgroundColor; node.remove(); return result; };
+          const read = (selector) => { const style = getComputedStyle(document.querySelector(selector)); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; };
+          return { regular: probe('var(--material-floating)'), accent: probe('var(--material-floating-accent)'),
+            jump: read('.jump-latest'), back: read('.detail-back'), status: read('.conv-peer-status'), attach: read('.composer-tool'), field: read('.composer .field'), mic: read('.vr-mic'), avatar: read('.conv-contact-avatar') };
+        });
+        for (const [name, item] of Object.entries(conversationMaterials).filter(([name]) => !['regular', 'accent', 'avatar'].includes(name))) {
+          assert.equal(item.background, conversationMaterials.regular, `${engineName} ${name} resolves shared floating role`);
+          assert.notEqual(item.filter, 'none', `${engineName} ${name} has standard backdrop filter`);
+          if (item.webkitFilter) assert.notEqual(item.webkitFilter, 'none', `${engineName} ${name} has computed WebKit backdrop filter`);
+        }
+        assert.equal(conversationMaterials.avatar.background, conversationMaterials.accent, `${engineName} avatar resolves floating accent role`);
+        assert.ok(conversationMaterials.avatar.alpha < 1 && conversationMaterials.avatar.filter !== 'none', `${engineName} avatar is filtered translucent glass ${JSON.stringify(conversationMaterials.avatar)}`);
+        if (conversationMaterials.avatar.webkitFilter) assert.notEqual(conversationMaterials.avatar.webkitFilter, 'none', `${engineName} avatar exposes computed WebKit filter`);
+        await listPage.locator('.composer textarea').fill('Material check');
+        const sendMaterial = await listPage.locator('.composer .btn.primary').evaluate((node) => { const style = getComputedStyle(node); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; });
+        assert.equal(sendMaterial.background, conversationMaterials.accent, `${engineName} Send resolves floating accent role`);
+        assert.ok(sendMaterial.alpha < 1 && sendMaterial.filter !== 'none', `${engineName} Send is filtered translucent glass ${JSON.stringify(sendMaterial)}`);
+        if (sendMaterial.webkitFilter) assert.notEqual(sendMaterial.webkitFilter, 'none', `${engineName} Send exposes computed WebKit filter`);
+        await listPage.locator('.composer textarea').fill('');
+        await listPage.locator('.messages').evaluate((node) => { node.scrollTop = node.scrollHeight; });
         const headTopology = await listPage.locator('.detail-head').evaluate((node) => {
           const back = node.querySelector('.detail-back').getBoundingClientRect();
           const center = node.querySelector('.conv-peer-status').getBoundingClientRect();
           const avatar = node.querySelector('.conv-contact-avatar').getBoundingClientRect();
+          const inner = node.querySelector('.conv-contact-initials'); const innerStyle = getComputedStyle(inner);
           const style = getComputedStyle(node);
           return { back: back.toJSON(), center: center.toJSON(), avatar: avatar.toJSON(), background: style.backgroundColor, border: style.borderTopWidth,
-            centerTabIndex: node.querySelector('.conv-peer-status').tabIndex, avatarName: node.querySelector('.conv-contact-avatar').getAttribute('aria-label') };
+            centerTabIndex: node.querySelector('.conv-peer-status').tabIndex, avatarName: node.querySelector('.conv-contact-avatar').getAttribute('aria-label'),
+            inner: { background: innerStyle.backgroundColor, border: innerStyle.borderTopWidth, shadow: innerStyle.boxShadow } };
         });
         assert.ok(headTopology.center.left - headTopology.back.right >= 10 && headTopology.avatar.left - headTopology.center.right >= 10, `${engineName} top pieces remain independently separated`);
         assert.ok(headTopology.back.width >= 44 && headTopology.avatar.width >= 44, `${engineName} Back/avatar retain 44px targets`);
         assert.equal(headTopology.centerTabIndex, -1, `${engineName} center status capsule is noninteractive`);
         assert.match(headTopology.avatarName, /^Open contact details for /, `${engineName} avatar is the sole named details action`);
+        assert.deepEqual(headTopology.inner, { background: 'rgba(0, 0, 0, 0)', border: '0px', shadow: 'none' }, `${engineName} avatar initials create no inset square or second ring`);
         assert.equal(headTopology.background, 'rgba(0, 0, 0, 0)', `${engineName} top wrapper owns no material`);
         for (const width of [320, 390, 430]) {
           await listPage.setViewportSize({ width, height: 812 });
@@ -415,8 +520,8 @@ try {
               items: items.map((item) => item.toJSON()),
             };
           });
-          assert.ok(collapsed.width >= 112 && collapsed.height >= 44 && collapsed.height <= 45 && collapsed.placeholder.length > 0,
-            `${engineName} ${dark ? 'dark' : 'light'} ${width}px collapsed input stays recognizable ${JSON.stringify(collapsed)}`);
+          assert.ok(collapsed.width >= 160 && collapsed.height >= 44 && collapsed.height <= 45 && collapsed.placeholder.length > 0,
+            `${engineName} ${dark ? 'dark' : 'light'} ${width}px fixed-open input stays recognizable ${JSON.stringify(collapsed)}`);
           assert.ok(!['transparent', 'rgba(0, 0, 0, 0)'].includes(collapsed.placeholderColor),
             `${engineName} ${dark ? 'dark' : 'light'} ${width}px collapsed placeholder remains visible (${collapsed.placeholderColor})`);
           assert.equal(await listPage.getByRole('textbox', { name: collapsed.placeholder, exact: true }).count(), 1,
@@ -426,7 +531,7 @@ try {
           assert.equal(collapsed.wrapperBorder, '0px', `${engineName} ${dark ? 'dark' : 'light'} wrapper owns no border`);
           await input.focus();
           const focusedWidth = await input.evaluate((node) => node.getBoundingClientRect().width);
-          assert.ok(focusedWidth > collapsed.width, `${engineName} ${dark ? 'dark' : 'light'} ${width}px focused input expands (${collapsed.width} -> ${focusedWidth})`);
+          assert.ok(Math.abs(focusedWidth - collapsed.width) < 1, `${engineName} ${dark ? 'dark' : 'light'} ${width}px input width is stable on focus (${collapsed.width} -> ${focusedWidth})`);
           for (const [state, value] of [['mic', ''], ['send', 'Ready to send']]) {
             await input.fill(value);
             const composerGap = await listPage.locator('.composer').evaluate((node) => {
@@ -503,7 +608,7 @@ try {
           await listPage.getByRole('tab', { name: 'Recent' }).click();
           await settleAnimations(listPage);
           await listPage.screenshot({ path: join(captureDir, `mobile-list-collapsed-recent-${dark ? 'dark' : 'light'}.png`) });
-          await listPage.getByRole('button', { name: 'Search conversations' }).click();
+          await listPage.locator('.adaptive-search .field').focus();
           await listPage.waitForFunction(() => document.activeElement === document.querySelector('.adaptive-search .field'));
           await settleAnimations(listPage);
           await listPage.screenshot({ path: join(captureDir, `mobile-list-search-focused-${dark ? 'dark' : 'light'}.png`) });
@@ -513,17 +618,14 @@ try {
           await listPage.screenshot({ path: join(captureDir, `mobile-list-collapsed-identity-${dark ? 'dark' : 'light'}.png`) });
           await listPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
           await listPage.locator('.composer textarea').waitFor();
-          await listPage.locator('.messages-inner').evaluate((node) => {
-            node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight - 80);
-          });
-          await settleAnimations(listPage);
+          await settleConversation(listPage);
+          await listPage.locator('.messages').evaluate((node) => { node.scrollTop = Math.max(1, Math.round((node.scrollHeight - node.clientHeight) / 2)); });
+          await listPage.locator('.jump-latest').waitFor();
+          await settleConversation(listPage);
           await listPage.screenshot({ path: join(captureDir, `mobile-conversation-empty-${dark ? 'dark' : 'light'}.png`) });
           await listPage.locator('.composer textarea').fill('Ready to send');
           await listPage.waitForFunction(() => !document.querySelector('.composer .btn.primary')?.disabled);
-          await settleAnimations(listPage);
-          await listPage.locator('.messages-inner').evaluate((node) => {
-            node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight - 80);
-          });
+          await settleConversation(listPage);
           await listPage.screenshot({ path: join(captureDir, `mobile-conversation-typed-${dark ? 'dark' : 'light'}.png`) });
         }
         await listContext.close();

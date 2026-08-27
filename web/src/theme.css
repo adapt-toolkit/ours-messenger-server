@@ -52,6 +52,13 @@
   --material-overlay: color-mix(in srgb, var(--bg) 54%, transparent);
   --material-solid: var(--surface);
   --material-blur: 14px;
+  /* Floating controls share one translucent role. Structural chrome keeps the
+     denser material above so long-form reading surfaces do not inherit glass. */
+  --material-floating: color-mix(in srgb, var(--surface) 68%, transparent);
+  --material-floating-accent: color-mix(in srgb, var(--accent) 14%, var(--material-floating));
+  --material-floating-border: color-mix(in srgb, var(--line-strong) 68%, transparent);
+  --material-floating-blur: 20px;
+  --material-floating-shadow: var(--shadow-md);
 
   /* the one primary action per screen gets a soft colored halo */
   --glow-accent: 0 6px 22px color-mix(in oklab, var(--accent) 32%, transparent),
@@ -106,6 +113,9 @@
   --accent-soft: color-mix(in oklab, var(--accent) 20%, var(--surface));
   --accent-line: color-mix(in oklab, var(--accent) 42%, var(--line));
   --on-accent:   oklch(0.18 0.02 200);
+  --material-floating: color-mix(in srgb, var(--surface) 72%, transparent);
+  --material-floating-accent: color-mix(in srgb, var(--accent) 16%, var(--material-floating));
+  --material-floating-border: color-mix(in srgb, var(--line-strong) 72%, transparent);
 
   --accent-2:      #f0a468;
   --accent-2-deep: color-mix(in oklab, var(--accent-2) 85%, #fff);
