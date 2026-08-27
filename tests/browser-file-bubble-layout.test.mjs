@@ -143,7 +143,48 @@ for (const { label, filename } of CASES) {
   }
 }
 
+// The media row and the history row are joined by wire id before FileBubble is
+// rendered. Pin that image-specific seam: an outgoing photo must keep the real
+// history receipt and render it in the same footer as its timestamp.
+{
+  const context = await browser.newContext({ viewport: NARROW, serviceWorkers: 'block' });
+  await context.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.pathname === '/api/events') return route.fallback();
+    if (url.pathname === '/api/identity') return json({ name: 'Me', cid: 'ME-CID' });
+    if (url.pathname === '/api/build-info') return json({ name: '@ours.network/messenger-server', version: '0.1.0', sha: 'fixture' });
+    if (url.pathname === '/api/contacts') return json({ contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [] });
+    if (url.pathname === '/api/conversations/PEER/page') return json({
+      contact: 'PEER',
+      messages: [{ dir: 'out', text: '', date: '2026-08-15T00:00:00.000Z', read: true, wire_id: 'WIRE-PHOTO', receipt: 'read' }],
+      total: 1, unread: 0, hasMore: false, nextBefore: null,
+    });
+    if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
+    if (url.pathname === '/api/conversations/PEER/files') return json({
+      contact: 'PEER',
+      files: [{
+        wire_id: 'WIRE-PHOTO', contact_id: 'PEER', dir: 'out', filename: 'photo.png',
+        mime: 'image/png', size: 68, date: '2026-08-15T00:00:00.000Z', available: true,
+      }],
+    });
+    if (url.pathname === '/api/media/WIRE-PHOTO') return route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+    });
+    return json({}, 404);
+  });
+  const page = await context.newPage();
+  await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  await page.locator('.image-bubble img').waitFor({ timeout: 20_000 });
+  const footer = page.locator('.image-bubble .bubble-at');
+  assert.equal(await footer.locator('[data-receipt-status="read"]').count(), 1,
+    'an outgoing photo renders its real read receipt beside the timestamp');
+  await context.close();
+}
+
 console.table?.(report);
 await browser.close();
 server.close();
-console.log('browser-file-bubble-layout OK — the card fills its frame and the action pins right at every name length and width');
+console.log('browser-file-bubble-layout OK — file actions align and outgoing photos retain their real receipt footer');

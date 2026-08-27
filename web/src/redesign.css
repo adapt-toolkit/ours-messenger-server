@@ -140,6 +140,16 @@
   }
 }
 
+/* Unlayered so this runtime viewport contract wins over the legacy unlayered
+   `height: 100%` shell rule in app.css. */
+#root {
+  position: fixed;
+  top: var(--app-viewport-top, 0px);
+  right: 0;
+  left: 0;
+  height: var(--app-viewport-height, 100%);
+}
+
 /* ---------- shell ---------- */
 
 .app {
@@ -678,6 +688,17 @@
   background: var(--surface-2);
   line-height: 1.4;
   resize: none;
+}
+
+.composer-editor {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.composer-editor:empty::before {
+  color: var(--text-3);
+  content: attr(data-placeholder);
+  pointer-events: none;
 }
 
 .composer .composer-tool {
