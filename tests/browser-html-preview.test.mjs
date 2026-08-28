@@ -140,14 +140,18 @@ try {
   await page.waitForTimeout(100); assert.equal(hostileRequests, 0); assert.deepEqual(messages.filter((line) => /script-ran|event-ran|js-ran/.test(line)), []);
   assert.deepEqual(previewRequests, ['HTML-ONE']);
   await fullscreenClose.click(); await iframe.waitFor({ state: 'detached' });
-  await triggers.first().waitFor({ state: 'visible' }); assert.equal(await triggers.first().evaluate((node) => node === document.activeElement), true, 'fullscreen X returns focus to the originating preview trigger');
+  await triggers.first().waitFor({ state: 'visible' });
+  const firstTrigger = await triggers.first().elementHandle(); assert.ok(firstTrigger);
+  await page.waitForFunction((node) => document.activeElement === node, firstTrigger);
+  assert.equal(await triggers.first().evaluate((node) => node === document.activeElement), true, 'fullscreen X returns focus to the originating preview trigger');
   await triggers.nth(1).click(); await page.frameLocator('.html-preview-iframe').locator('text=Second specification').waitFor();
   assert.equal(await page.locator('.html-preview-iframe').getAttribute('src'), '/api/html-preview/HTML-TWO');
   assert.equal(await page.locator('iframe[src*="HTML-ONE"]').count(), 0, 'old iframe navigation is gone');
   await page.getByRole('button', { name: 'Close 2.html' }).click(); assert.equal(await page.locator('.html-preview-iframe').count(), 0);
   await triggers.nth(1).click(); await page.frameLocator('.html-preview-iframe').locator('text=Second specification').waitFor();
   await page.keyboard.press('Escape'); assert.equal(await page.locator('.html-preview-iframe').count(), 0, 'Escape closes the HTML viewer');
-  await page.waitForFunction(() => document.activeElement?.getAttribute('title') === 'Preview HTML');
+  const secondTrigger = await triggers.nth(1).elementHandle(); assert.ok(secondTrigger);
+  await page.waitForFunction((node) => document.activeElement === node, secondTrigger);
   assert.equal(await triggers.nth(1).evaluate((node) => node === document.activeElement), true, 'Escape returns focus to the originating preview trigger');
 
   const direct = await context.newPage(); await direct.goto(`${origin}/api/html-preview/HTML-ONE`); await direct.locator('.title').waitFor();
