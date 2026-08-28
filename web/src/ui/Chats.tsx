@@ -1,6 +1,6 @@
 // Chats section — grouped contact list + conversation. Ported from the design
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
-import { ReactNode, type KeyboardEvent, type Ref, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
 import { ContactVM, RootMetaVM, fmtTime } from './viewmodel';
 import type { ChatMessage } from './chatTypes';
@@ -14,7 +14,6 @@ import { compressImageForSend } from './imageCompression';
 import { isCompressibleImage } from './imageCompressionCore.mjs';
 import { MessageReceipt } from './MessageReceipt';
 import { MessageMarkdown } from './MessageMarkdown';
-import { ComposerEditor, useIOSContentEditable } from './ComposerEditor';
 import { ApiError } from '../api';
 import { AnimatePresence, motion } from 'framer-motion';
 import { interfaceSpring } from './motionSystem';
@@ -611,8 +610,7 @@ export function Conversation(props: {
   const [processingFile, setProcessingFile] = useState(false);
   const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const composerInputRef = useRef<HTMLTextAreaElement | HTMLDivElement>(null);
-  const iosContentEditable = useIOSContentEditable();
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const detailHeadRef = useRef<HTMLDivElement>(null);
   const composerWrapRef = useRef<HTMLDivElement>(null);
@@ -1406,35 +1404,24 @@ export function Conversation(props: {
               </button>
             </>
           )}
-          {iosContentEditable ? (
-            <ComposerEditor
-              ref={composerInputRef as Ref<HTMLDivElement>}
-              value={draft}
-              placeholder={(replyTo ? 'Reply to ' + replyTo.author : 'Message ' + contact.name) + '…'}
-              busy={sending}
-              onChange={setDraft}
-              onSend={() => void send()}
-            />
-          ) : (
-            <textarea
-              ref={composerInputRef as Ref<HTMLTextAreaElement>}
-              className="field"
-              rows={1}
-              placeholder={(replyTo ? 'Reply to ' + replyTo.author : 'Message ' + contact.name) + '…'}
-              value={draft}
-              aria-busy={sending}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  const mobileComposer = window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 860;
-                  if (!mobileComposer && !e.shiftKey) {
-                    e.preventDefault();
-                    void send();
-                  }
-                } else if (e.key === 'Escape') setReplyTo(null);
-              }}
-            />
-          )}
+          <textarea
+            ref={composerInputRef}
+            className="field"
+            rows={1}
+            placeholder={(replyTo ? 'Reply to ' + replyTo.author : 'Message ' + contact.name) + '…'}
+            value={draft}
+            aria-busy={sending}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const mobileComposer = window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 860;
+                if (!mobileComposer && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              } else if (e.key === 'Escape') setReplyTo(null);
+            }}
+          />
           {props.onSendFile && !draft.trim() && !pendingAtt && !processingFile && !sendingFile ? <VoiceComposer
             key={contact.id}
             disabled={sendingFile || processingFile || !!pendingAtt}
