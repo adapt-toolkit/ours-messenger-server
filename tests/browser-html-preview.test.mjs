@@ -85,6 +85,29 @@ try {
   assert.equal(styles.color, 'rgb(21, 33, 58)'); assert.equal(styles.background, 'rgb(251, 252, 255)');
   assert.notEqual(styles.grid, 'none'); assert.equal(styles.titleSize, '43px'); assert.equal(styles.cardRadius, '22px');
   assert.ok(styles.sheets.reduce((sum, count) => sum + count, 0) >= 5); assert.ok(styles.parentDenied && styles.storageDenied && styles.cookieDenied && styles.scriptRan === null, JSON.stringify(styles));
+  const download = page.getByRole('link', { name: /Download original/ });
+  const downloadEvent = page.waitForEvent('download'); await download.click(); const saved = await downloadEvent; const stream = await saved.createReadStream(); const chunks = []; for await (const chunk of stream) chunks.push(chunk);
+  assert.deepEqual(Buffer.concat(chunks), files.get('HTML-ONE'), 'download blob preserves exact original bytes');
+  await iframe.evaluate((node) => { node.dataset.fullscreenIdentity = 'same-frame'; });
+  await page.getByRole('button', { name: 'View HTML fullscreen' }).click();
+  const fullscreen = page.locator('.html-modal-fullscreen'); await fullscreen.waitFor();
+  assert.equal(await iframe.getAttribute('data-fullscreen-identity'), 'same-frame', 'fullscreen reuses the exact iframe node');
+  assert.equal(await iframe.getAttribute('sandbox'), '', 'fullscreen never adds sandbox capabilities');
+  assert.equal(await iframe.getAttribute('src'), '/api/html-preview/HTML-ONE');
+  assert.deepEqual(previewRequests, ['HTML-ONE'], 'fullscreen does not issue a second preview request');
+  const portraitBounds = await fullscreen.boundingBox(); assert.ok(portraitBounds);
+  assert.deepEqual([Math.round(portraitBounds.x), Math.round(portraitBounds.y), Math.round(portraitBounds.width), Math.round(portraitBounds.height)], [0, 0, 390, 760]);
+  assert.equal(await page.evaluate(() => document.body.scrollHeight === innerHeight && getComputedStyle(document.body).overflow === 'hidden'), true,
+    'Radix keeps the app page scroll-locked in fullscreen');
+  const fullscreenClose = page.getByRole('button', { name: 'Close 1.html' });
+  const closeBounds = await fullscreenClose.boundingBox(); assert.ok(closeBounds && closeBounds.width >= 44 && closeBounds.height >= 44 && closeBounds.x >= 0 && closeBounds.y >= 0);
+  await page.keyboard.press('Tab');
+  assert.equal(await fullscreen.evaluate((node) => node.contains(document.activeElement)), true, 'Tab focus stays trapped inside fullscreen');
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await fullscreen.evaluate((node) => node.contains(document.activeElement)), true, 'reverse Tab focus stays trapped inside fullscreen');
+  await page.setViewportSize({ width: 760, height: 390 });
+  const landscapeBounds = await fullscreen.boundingBox(); assert.ok(landscapeBounds);
+  assert.deepEqual([Math.round(landscapeBounds.x), Math.round(landscapeBounds.y), Math.round(landscapeBounds.width), Math.round(landscapeBounds.height)], [0, 0, 760, 390]);
   const outerScrollBefore = await page.evaluate(() => ({ y: scrollY, modalBodyTop: document.querySelector('.html-modal .modal-body').scrollTop }));
   const scrollBefore = await frame.locator('body').evaluate(() => ({
     y: scrollY,
@@ -101,9 +124,6 @@ try {
   assert.ok(scrollAfter.y > scrollBefore.y, JSON.stringify({ scrollBefore, scrollAfter }));
   assert.equal(outerScrollAfter.y, outerScrollBefore.y, 'wheel stays inside preview, not the app page');
   assert.equal(outerScrollAfter.modalBodyTop, outerScrollBefore.modalBodyTop, 'wheel stays inside preview, not the modal shell');
-  const download = page.getByRole('link', { name: /Download original/ });
-  const downloadEvent = page.waitForEvent('download'); await download.click(); const saved = await downloadEvent; const stream = await saved.createReadStream(); const chunks = []; for await (const chunk of stream) chunks.push(chunk);
-  assert.deepEqual(Buffer.concat(chunks), files.get('HTML-ONE'), 'download blob preserves exact original bytes');
   await page.screenshot({ path: `/tmp/html-preview-owner-shaped-${engineName}.png`, fullPage: true });
   const frameUrl = await frame.locator('body').evaluate(() => location.href);
   await frame.getByRole('button', { name: 'Submit hostile form' }).click();
@@ -119,11 +139,16 @@ try {
   assert.match(await frame.locator('body').evaluate(() => location.href), /#section$/, 'fragment-only TOC navigation survives');
   await page.waitForTimeout(100); assert.equal(hostileRequests, 0); assert.deepEqual(messages.filter((line) => /script-ran|event-ran|js-ran/.test(line)), []);
   assert.deepEqual(previewRequests, ['HTML-ONE']);
-  await page.getByRole('button', { name: 'Close 1.html' }).click(); await iframe.waitFor({ state: 'detached' });
+  await fullscreenClose.click(); await iframe.waitFor({ state: 'detached' });
+  await triggers.first().waitFor({ state: 'visible' }); assert.equal(await triggers.first().evaluate((node) => node === document.activeElement), true, 'fullscreen X returns focus to the originating preview trigger');
   await triggers.nth(1).click(); await page.frameLocator('.html-preview-iframe').locator('text=Second specification').waitFor();
   assert.equal(await page.locator('.html-preview-iframe').getAttribute('src'), '/api/html-preview/HTML-TWO');
   assert.equal(await page.locator('iframe[src*="HTML-ONE"]').count(), 0, 'old iframe navigation is gone');
   await page.getByRole('button', { name: 'Close 2.html' }).click(); assert.equal(await page.locator('.html-preview-iframe').count(), 0);
+  await triggers.nth(1).click(); await page.frameLocator('.html-preview-iframe').locator('text=Second specification').waitFor();
+  await page.keyboard.press('Escape'); assert.equal(await page.locator('.html-preview-iframe').count(), 0, 'Escape closes the HTML viewer');
+  await page.waitForFunction(() => document.activeElement?.getAttribute('title') === 'Preview HTML');
+  assert.equal(await triggers.nth(1).evaluate((node) => node === document.activeElement), true, 'Escape returns focus to the originating preview trigger');
 
   const direct = await context.newPage(); await direct.goto(`${origin}/api/html-preview/HTML-ONE`); await direct.locator('.title').waitFor();
   assert.equal(await direct.evaluate(() => { try { localStorage.setItem('x', '1'); return false; } catch { return true; } }), true, 'response CSP sandbox denies top-level storage');
