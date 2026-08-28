@@ -14,11 +14,14 @@ assert.equal(contactReturnMode({ oursMessenger: true }), 'back', 'in-app contact
 assert.equal(contactReturnMode(null), 'replace', 'cold contact deep link returns without adding a duplicate history entry');
 
 const contacts = { contacts: [{ name: 'Alice', container_id: 'A' }], pending: [] };
+const noContacts = { contacts: [], pending: [] };
 const page: ConversationPage = {
   contact: 'A', messages: [{ dir: 'in', text: 'secret', date: 'DATE', read: false, wire_id: 'W', receipt: null }],
   total: 1, unread: 1, hasMore: false, nextBefore: null,
 };
 let state = initialState({ name: 'chats', contactCid: 'A' });
+assert.equal(state.route.name === 'chats' && state.route.contactCid, 'A',
+  'a stale deep link is not rejected against the bootstrap empty contact list');
 state = appReducer(state, { type: 'snapshot', identity: { name: 'Me', cid: 'IDENTITY-1' }, contacts });
 state = appReducer(state, { type: 'page', contactCid: 'A', page });
 state = appReducer(state, { type: 'draft', contactCid: 'A', value: 'draft secret' });
@@ -73,6 +76,28 @@ state = appReducer(state, {
 });
 assert.equal(state.pendingSends[dialogKey('IDENTITY-1', 'A')], undefined,
   'the canonical page retires the local send overlay by wire id');
+
+const existingRoute = appReducer(state, { type: 'contacts', contacts });
+assert.deepEqual(existingRoute.route, { name: 'chats', contactCid: 'A' },
+  'an authoritative refresh preserves a route whose contact still exists');
+const removedRoute = appReducer(existingRoute, { type: 'contacts', contacts: noContacts });
+assert.deepEqual(removedRoute.route, { name: 'chats', contactCid: null },
+  'live deletion redirects the selected chat to the chat list');
+assert.equal(removedRoute.mobileDetailOpen, false);
+assert.equal(pageFor(removedRoute, 'A')?.messages.at(-1)?.wire_id, 'SENT-101',
+  'route reconciliation does not broaden into conversation data retention');
+assert.equal(removedRoute.drafts[dialogKey('IDENTITY-1', 'A')], 'draft secret',
+  'route reconciliation preserves the local draft');
+
+let staleContactRoute = initialState({ name: 'contact', contactCid: 'A' });
+assert.deepEqual(staleContactRoute.route, { name: 'contact', contactCid: 'A' },
+  'a contact deep link remains intact until the first authoritative snapshot');
+staleContactRoute = appReducer(staleContactRoute, {
+  type: 'snapshot', identity: { name: 'Me', cid: 'IDENTITY-1' }, contacts: noContacts,
+});
+assert.deepEqual(staleContactRoute.route, { name: 'chats', contactCid: null },
+  'the first authoritative snapshot redirects a stale contact deep link');
+assert.equal(staleContactRoute.mobileDetailOpen, false);
 
 let raceState = initialState({ name: 'chats', contactCid: 'A' });
 raceState = appReducer(raceState, { type: 'snapshot', identity: { name: 'Me', cid: 'IDENTITY-1' }, contacts });

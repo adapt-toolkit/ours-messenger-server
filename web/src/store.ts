@@ -139,6 +139,18 @@ function mergeMessages(
   return merged;
 }
 
+function reconcileSelectedContact(
+  state: AppState,
+  contacts: ContactsResponse,
+): Partial<AppState> {
+  const contactCid = selectedContactCid(state);
+  if (!contactCid || contacts.contacts.some((contact) => contact.container_id === contactCid)) return {};
+  return {
+    route: { name: 'chats', contactCid: null },
+    mobileDetailOpen: false,
+  };
+}
+
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'snapshot': {
@@ -153,9 +165,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           pages: {}, pendingSends: {}, drafts: {}, replies: {}, sendingDialog: null,
           generatedInvite: null, coveringDialog: false, dialogBusy: false,
         } : {}),
+        ...reconcileSelectedContact(state, action.contacts),
       };
     }
-    case 'contacts': return { ...state, contacts: action.contacts };
+    case 'contacts': return {
+      ...state,
+      contacts: action.contacts,
+      ...reconcileSelectedContact(state, action.contacts),
+    };
     case 'page': {
       if (!state.identity) return state;
       const key = dialogKey(state.identity.cid, action.contactCid);
