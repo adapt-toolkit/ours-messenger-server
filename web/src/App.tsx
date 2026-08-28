@@ -497,6 +497,18 @@ export function AppShell() {
   const selectedView = viewContacts.find((item) => item.id === selectedCid) ?? null;
   const messages = selectedCid ? timeline(pageFor(state, selectedCid), files[selectedCid] ?? []) : [];
   const identity = state.identity;
+  useEffect(() => {
+    if (!state.loaded) return;
+    const urlRoute = parseRoute(window.location.pathname);
+    const urlCid = urlRoute.name === 'chats' || urlRoute.name === 'contact' ? urlRoute.contactCid : null;
+    if (!urlCid || state.contacts.contacts.some((contact) => contact.container_id === urlCid)) return;
+    window.history.replaceState({ oursMessenger: true }, '', chatPath());
+    if (unreadOpen?.contactCid === urlCid) {
+      unreadOpenAbort.current?.abort();
+      unreadOpenGeneration.current += 1;
+      setUnreadOpen(null);
+    }
+  }, [state.loaded, state.contacts.contacts, unreadOpen]);
   // What the conversation header reports while canonical state is behind the
   // screen. Every branch is derived from state, so it clears by itself.
   const syncing: 'connecting' | 'updating' | null = !state.loaded
