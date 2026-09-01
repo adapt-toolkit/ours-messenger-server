@@ -1,6 +1,6 @@
 // Chats section — grouped contact list + conversation. Ported from the design
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
-import { ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
 import { ContactVM, RootMetaVM, fmtTime } from './viewmodel';
 import type { ChatMessage } from './chatTypes';
@@ -397,6 +397,12 @@ interface ReplyDraft {
   text: string;
 }
 
+interface OptimisticTimelineSend {
+  key: string;
+  message: ChatMessage;
+  wireId: string | null;
+}
+
 const timelineMessageId = (key: string) => `chat-message-${encodeURIComponent(key)}`;
 
 const reducedMotion = () =>
@@ -562,6 +568,220 @@ function SwipeReplyRow(props: {
   );
 }
 
+/**
+ * The timeline is deliberately separated from the composer state below.
+ *
+ * A controlled textarea updates on every keystroke. Keeping the message map in
+ * Conversation made each of those updates rebuild every row, Motion wrapper,
+ * reply control, receipt and file bubble in the mounted history. All props of
+ * this memo boundary remain referentially stable while only the draft changes,
+ * so typing is constant-time with respect to the number of loaded messages.
+ */
+const TimelineRows = memo(function TimelineRows(props: {
+  messages: ChatMessage[];
+  optimisticSend: OptimisticTimelineSend | null;
+  sentKeys: ReadonlyMap<string, string>;
+  hiddenEarlier: number;
+  unreadWireId?: string;
+  roomLines: ReadonlyMap<ChatMessage, RoomLine | null>;
+  contactName: string;
+  onStartReply: (reply: ReplyDraft) => void;
+  onPreview: (record: FileRecord) => void;
+  onFetchFile?: (wireId: string) => Promise<void>;
+}) {
+  const {
+    messages, optimisticSend, sentKeys, hiddenEarlier, unreadWireId,
+    roomLines, contactName, onStartReply, onPreview, onFetchFile,
+  } = props;
+  const byWireId = new Map<string, ChatMessage>();
+  for (const message of messages) if (message.wireId) byWireId.set(message.wireId, message);
+  const roomLineOf = (message: ChatMessage): RoomLine | null => roomLines.get(message) ?? null;
+  const authorOf = (message: ChatMessage) => {
+    if (message.dir === 'out') return 'You';
+    const room = roomLineOf(message);
+    if (room) return room.variant === 'chat' ? room.author : contactName;
+    return contactName;
+  };
+  const previewText = (message: ChatMessage): string => {
+    if (message.kind === 'file') {
+      if (message.mime?.startsWith('image/')) return 'Photo';
+      if (isVoiceNote(message.mime ?? '', message.filename ?? '')) return 'Voice message';
+      return message.filename || 'File';
+    }
+    const room = roomLineOf(message);
+    return room ? room.text || roomMessagePreview(room) : message.text;
+  };
+  const quoteFor = (message: ChatMessage): { author: string; text: string } | null => {
+    if (!message.replyTo) return null;
+    const source = byWireId.get(message.replyTo.wireId);
+    return source
+      ? { author: authorOf(source), text: previewText(source) }
+      : { author: '', text: 'Original message' };
+  };
+  const startReply = (message: ChatMessage) => {
+    if (!message.wireId) return;
+    onStartReply({ wireId: message.wireId, author: authorOf(message), text: previewText(message) });
+  };
+  const speaker = (message?: ChatMessage) => {
+    if (!message) return null;
+    const line = roomLineOf(message);
+    if (line) {
+      return line.variant === 'system'
+        ? 'room:system'
+        : `room:chat:${line.author}\u001f${line.role}`;
+    }
+    return message.dir;
+  };
+
+  return (
+    <AnimatePresence initial={false}>
+      {messages.map((message, index) => {
+        const key = message === optimisticSend?.message
+          ? optimisticSend.key
+          : (message.wireId && sentKeys.get(message.wireId))
+            || message.wireId
+            || `${message.date}-${hiddenEarlier + index}`;
+        const domId = timelineMessageId(message.wireId || key);
+        const previous = messages[index - 1];
+        const next = messages[index + 1];
+        const room = roomLineOf(message);
+        const currentSpeaker = speaker(message);
+        const continuedAbove = !!previous && speaker(previous) === currentSpeaker && currentSpeaker !== 'room:system';
+        const continuedBelow = !!next && speaker(next) === currentSpeaker && currentSpeaker !== 'room:system';
+        const groupClass =
+          (message.dir === 'out' ? 'out' : 'in')
+          + (continuedAbove ? ' cont-top' : '')
+          + (continuedBelow ? ' cont-bot' : '');
+        const replyButton = message.wireId ? (
+          <button className="msg-reply" title="Reply" onClick={() => startReply(message)}>
+            <Icon name="reply" size={15} />
+          </button>
+        ) : null;
+        const unreadDivider = message.wireId === unreadWireId
+          ? <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>
+          : null;
+
+        if (room && room.variant === 'system') {
+          const presentation = room.presentation ?? 'system';
+          return (
+            <motion.div
+              className="message-motion"
+              key={key}
+              id={domId}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={interfaceSpring}
+            >
+              {unreadDivider}
+              <div className={`room-system room-${presentation}-card`} role="note">
+                {room.label && <span className="room-system-label">{room.label}</span>}
+                {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
+                <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
+                {!!room.details?.length && (
+                  <ul className="room-card-details" aria-label="Room event details">
+                    {room.details.map((detail) => <li key={detail}>{detail}</li>)}
+                  </ul>
+                )}
+                <span className="room-card-provenance">
+                  {room.authoredBy && <span className="room-card-author">{room.authoredBy}</span>}
+                  <span className="room-system-at">{fmtTime(room.authoredAt || message.date)}</span>
+                </span>
+              </div>
+            </motion.div>
+          );
+        }
+
+        if (message.kind === 'file') {
+          const record: FileRecord = fileRecord(message.wireId) ?? {
+            id: message.wireId,
+            dir: message.dir,
+            filename: message.filename ?? 'file',
+            mime: message.mime ?? 'application/octet-stream',
+            size: 0,
+            date: message.date,
+          };
+          return (
+            <motion.div
+              className="message-motion"
+              key={key}
+              id={domId}
+              initial={{ opacity: 0, y: 12, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={interfaceSpring}
+            >
+              {unreadDivider}
+              <SwipeReplyRow
+                dir={message.dir === 'out' ? 'out' : 'in'}
+                rowClass={groupClass}
+                canReply={!!message.wireId}
+                onReply={() => startReply(message)}
+                after={replyButton}
+              >
+                <div className={`ours-message ours-message-file ours-message--${message.dir}`}>
+                  <FileBubble
+                    rec={record}
+                    receipt={message.receipt}
+                    receiptless={message.receiptless}
+                    onPreview={onPreview}
+                    onFetch={onFetchFile}
+                  />
+                </div>
+              </SwipeReplyRow>
+            </motion.div>
+          );
+        }
+
+        const quote = quoteFor(message);
+        return (
+          <motion.div
+            className="message-motion"
+            key={key}
+            id={domId}
+            initial={{ opacity: 0, y: 12, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={interfaceSpring}
+          >
+            {unreadDivider}
+            <SwipeReplyRow
+              dir={message.dir === 'out' ? 'out' : 'in'}
+              rowClass={groupClass}
+              canReply={!!message.wireId}
+              onReply={() => startReply(message)}
+              after={replyButton}
+            >
+              <div className={`ours-message ours-message--${message.dir}`}>
+                {quote && (
+                  <div className="quote">
+                    {quote.author && <span className="quote-author">{quote.author}</span>}
+                    <span className="quote-text">{quote.text}</span>
+                  </div>
+                )}
+                {room && !continuedAbove && (
+                  <>
+                    {room.roomName && <div className="room-message-room">{room.roomName}</div>}
+                    <div className="room-author">
+                      <span className="room-author-name">{room.author}</span>
+                      {room.role && <span className="room-author-role">{room.role}</span>}
+                    </div>
+                  </>
+                )}
+                <MessageMarkdown text={room ? room.text : message.text} />
+                <div className="bubble-at">
+                  {fmtTime(room?.authoredAt || message.date)}
+                  {message.dir === 'out' && <MessageReceipt receipt={message.receipt} receiptless={message.receiptless} />}
+                </div>
+              </div>
+            </SwipeReplyRow>
+          </motion.div>
+        );
+      })}
+    </AnimatePresence>
+  );
+});
+
 export function Conversation(props: {
   contact: ContactVM | null;
   // A bounded page of the history, newest-last. `hiddenEarlier` is how many
@@ -592,9 +812,7 @@ export function Conversation(props: {
   // locally rendered bubble and the server-confirmed message that replaces it
   // share a key and are never both on screen. `wireId` is filled in when the
   // send resolves and is what the confirmation is recognised by.
-  const [optimisticSend, setOptimisticSend] = useState<
-    { key: string; message: ChatMessage; wireId: string | null } | null
-  >(null);
+  const [optimisticSend, setOptimisticSend] = useState<OptimisticTimelineSend | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unknownSend, setUnknownSend] = useState<{
     draft: string;
@@ -636,6 +854,7 @@ export function Conversation(props: {
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
   const newestMessageRef = useRef<string | null>(null);
+  const measuredDraftRef = useRef('');
   useLayoutEffect(() => {
     const detail = detailRef.current;
     const head = detailHeadRef.current;
@@ -728,10 +947,18 @@ export function Conversation(props: {
   useLayoutEffect(() => {
     const input = composerInputRef.current;
     if (!input) return;
-    input.style.height = '0px';
-    const height = Math.max(44, Math.min(input.scrollHeight, 132));
-    input.style.height = `${height}px`;
-    input.style.overflowY = input.scrollHeight > 132 ? 'auto' : 'hidden';
+    // Appending ordinary typed characters can only preserve or grow the text
+    // area. Avoid collapsing it to zero first: that forced a second synchronous
+    // layout of the entire conversation for every key. Edits/deletions still
+    // reset once so the control can shrink correctly.
+    const appendOnly = draft.startsWith(measuredDraftRef.current);
+    if (!appendOnly) input.style.height = '0px';
+    const contentHeight = input.scrollHeight;
+    const height = Math.max(44, Math.min(contentHeight, 132));
+    const nextHeight = `${height}px`;
+    if (input.style.height !== nextHeight) input.style.height = nextHeight;
+    input.style.overflowY = contentHeight > 132 ? 'auto' : 'hidden';
+    measuredDraftRef.current = draft;
   }, [draft, contact?.id]);
 
   // Following the newest message is a movement, not a teleport. Assigning
@@ -919,10 +1146,6 @@ export function Conversation(props: {
     return () => onDraftChange?.(false);
   }, [draft, sending, onDraftChange]);
 
-  // Resolve a message's reply pointer (wire id) back to the quoted message we
-  // still hold, so the bubble can render the author + snippet.
-  const byWireId = new Map<string, ChatMessage>();
-  for (const m of displayMessages) if (m.wireId) byWireId.set(m.wireId, m);
   // A cowork room relays every message as a signed JSON body, so this is where a
   // room conversation stops being a wall of JSON: the body becomes an author +
   // role + what they said, and the room's own notices become system lines. Any
@@ -943,31 +1166,6 @@ export function Conversation(props: {
     }
     return lines;
   }, [displayMessages, contact?.announcedName]);
-  const roomLineOf = (m: ChatMessage): RoomLine | null => roomLines.get(m) ?? null;
-  const authorOf = (m: ChatMessage) => {
-    if (m.dir === 'out') return 'You';
-    const room = roomLineOf(m);
-    if (room) return room.variant === 'chat' ? room.author : contact?.name ?? 'Them';
-    return contact?.name ?? 'Them';
-  };
-  // A short label for the reply-bar + quote snippet — text for text messages, a
-  // type label for files/photos/voice (their text summary is empty), so replying
-  // to a file bubble quotes "Photo"/"Voice message"/filename, not a blank line.
-  const msgPreviewText = (m: ChatMessage): string => {
-    if (m.kind === 'file') {
-      if (m.mime?.startsWith('image/')) return 'Photo';
-      if (isVoiceNote(m.mime ?? '', m.filename ?? '')) return 'Voice message';
-      return m.filename || 'File';
-    }
-    const room = roomLineOf(m);
-    // Quoting a room message quotes what was SAID, not the envelope it arrived in.
-    return room ? room.text || roomMessagePreview(room) : m.text;
-  };
-  const quoteFor = (m: ChatMessage): { author: string; text: string } | null => {
-    if (!m.replyTo) return null;
-    const src = byWireId.get(m.replyTo.wireId);
-    return src ? { author: authorOf(src), text: msgPreviewText(src) } : { author: '', text: 'Original message' };
-  };
 
   if (!contact) {
     if (props.emptyOverride) return <>{props.emptyOverride}</>;
@@ -1061,13 +1259,6 @@ export function Conversation(props: {
   const unknownDuplicate = !!unknownSend
     && draft === unknownSend.draft
     && (replyTo?.wireId ?? undefined) === unknownSend.reply?.wireId;
-
-  // A message can only be replied to once it has a wire id (pre-1.4 entries
-  // restored from an old backup have none).
-  const startReply = (m: ChatMessage) => {
-    if (!m.wireId) return;
-    setReplyTo({ wireId: m.wireId, author: authorOf(m), text: msgPreviewText(m) });
-  };
 
   return (
     <div className="detail detail-chat" ref={detailRef}>
@@ -1163,167 +1354,18 @@ export function Conversation(props: {
               their bytes independently by wire id; ordering stays exact. Keys
               use the ABSOLUTE history index so loading earlier entries never
               re-keys (and never re-animates) the ones already on screen. */}
-          <AnimatePresence initial={false}>
-            {displayMessages.map((m, i) => {
-              // A message the reader has already seen keeps its element for as
-              // long as it is on screen: a confirmed send inherits the key its
-              // own optimistic bubble used, so the swap is a re-render and not
-              // an exit + enter that would briefly double the row.
-              const key = m === optimisticSend?.message
-                ? optimisticSend.key
-                : (m.wireId && sentKeysRef.current.get(m.wireId))
-                  || m.wireId
-                  || `${m.date}-${(props.hiddenEarlier ?? 0) + i}`;
-              // The anchor stays addressable by wire id — that is what push
-              // notification deep links and reply jumps resolve.
-              const domId = timelineMessageId(m.wireId || key);
-              const prev = displayMessages[i - 1];
-              const next = displayMessages[i + 1];
-              const room = roomLineOf(m);
-              // A system line breaks the bubble run on either side of it, and a
-              // room chat line groups by SPEAKER — consecutive members are
-              // different people arriving on the same 'in' side.
-              const speaker = (x?: ChatMessage) => {
-                if (!x) return null;
-                const line = roomLineOf(x);
-                if (line) {
-                  return line.variant === 'system'
-                    ? 'room:system'
-                    : `room:chat:${line.author}\u001f${line.role}`;
-                }
-                return x.dir;
-              };
-              const me = speaker(m);
-              const contTop = !!prev && speaker(prev) === me && me !== 'room:system';
-              const contBot = !!next && speaker(next) === me && me !== 'room:system';
-              const grpCls =
-                (m.dir === 'out' ? 'out' : 'in') + (contTop ? ' cont-top' : '') + (contBot ? ' cont-bot' : '');
-              const replyButton = m.wireId ? (
-                <button className="msg-reply" title="Reply" onClick={() => startReply(m)}>
-                  <Icon name="reply" size={15} />
-                </button>
-              ) : null;
-
-              // The room speaking in its own voice — a briefing, a membership
-              // change, an operator notice. Centred, unbubbled, unmistakably
-              // not a person talking, and never replied to.
-              if (room && room.variant === 'system') {
-                const presentation = room.presentation ?? 'system';
-                return (
-                  <motion.div
-                    className="message-motion"
-                    key={key}
-                    id={domId}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={interfaceSpring}
-                  >
-                    {m.wireId === props.unreadOpen?.wireId && <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>}
-                    <div className={`room-system room-${presentation}-card`} role="note">
-                      {room.label && <span className="room-system-label">{room.label}</span>}
-                      {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
-                      <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
-                      {!!room.details?.length && (
-                        <ul className="room-card-details" aria-label="Room event details">
-                          {room.details.map((detail) => <li key={detail}>{detail}</li>)}
-                        </ul>
-                      )}
-                      <span className="room-card-provenance">
-                        {room.authoredBy && <span className="room-card-author">{room.authoredBy}</span>}
-                        <span className="room-system-at">{fmtTime(room.authoredAt || m.date)}</span>
-                      </span>
-                    </div>
-                  </motion.div>
-                );
-              }
-
-              if (m.kind === 'file') {
-                const rec: FileRecord = fileRecord(m.wireId) ?? {
-                  id: m.wireId,
-                  dir: m.dir,
-                  filename: m.filename ?? 'file',
-                  mime: m.mime ?? 'application/octet-stream',
-                  size: 0,
-                  date: m.date,
-                };
-                return (
-                  <motion.div
-                    className="message-motion"
-                    key={key}
-                    id={domId}
-                    initial={{ opacity: 0, y: 12, scale: 0.985 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={interfaceSpring}
-                  >
-                    {m.wireId === props.unreadOpen?.wireId && <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>}
-                    <SwipeReplyRow
-                      dir={m.dir === 'out' ? 'out' : 'in'}
-                      rowClass={grpCls}
-                      canReply={!!m.wireId}
-                      onReply={() => startReply(m)}
-                      after={replyButton}
-                    >
-                      <div className={`ours-message ours-message-file ours-message--${m.dir}`}>
-                        <FileBubble rec={rec} receipt={m.receipt} receiptless={m.receiptless} onPreview={setPreviewRec} onFetch={props.onFetchFile} />
-                      </div>
-                    </SwipeReplyRow>
-                  </motion.div>
-                );
-              }
-
-              const quote = quoteFor(m);
-              return (
-                <motion.div
-                  className="message-motion"
-                  key={key}
-                  id={domId}
-                  initial={{ opacity: 0, y: 12, scale: 0.985 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.98 }}
-                  transition={interfaceSpring}
-                >
-                  {m.wireId === props.unreadOpen?.wireId && <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>}
-                  <SwipeReplyRow
-                    dir={m.dir === 'out' ? 'out' : 'in'}
-                    rowClass={grpCls}
-                    canReply={!!m.wireId}
-                    onReply={() => startReply(m)}
-                    after={replyButton}
-                  >
-                    <div className={`ours-message ours-message--${m.dir}`}>
-                      {quote && (
-                        <div className="quote">
-                          {quote.author && <span className="quote-author">{quote.author}</span>}
-                          <span className="quote-text">{quote.text}</span>
-                        </div>
-                      )}
-                      {/* Room chat: who is speaking, in what role. The header is
-                          dropped on a continuation so a run by one member reads
-                          as one turn. In an anonymous room this name is the
-                          ALIAS the server put on the wire — the real identity
-                          never reaches the client. */}
-                      {room && !contTop && (
-                        <>
-                          {room.roomName && <div className="room-message-room">{room.roomName}</div>}
-                          <div className="room-author">
-                            <span className="room-author-name">{room.author}</span>
-                            {room.role && <span className="room-author-role">{room.role}</span>}
-                          </div>
-                        </>
-                      )}
-                      <MessageMarkdown text={room ? room.text : m.text} />
-                      <div className="bubble-at">
-                        {fmtTime(room?.authoredAt || m.date)}
-                        {m.dir === 'out' && <MessageReceipt receipt={m.receipt} receiptless={m.receiptless} />}
-                      </div>
-                    </div>
-                  </SwipeReplyRow>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
+          <TimelineRows
+            messages={displayMessages}
+            optimisticSend={optimisticSend}
+            sentKeys={sentKeysRef.current}
+            hiddenEarlier={props.hiddenEarlier ?? 0}
+            unreadWireId={props.unreadOpen?.wireId}
+            roomLines={roomLines}
+            contactName={contact.name}
+            onStartReply={setReplyTo}
+            onPreview={setPreviewRec}
+            onFetchFile={props.onFetchFile}
+          />
           <div className="thread-end" aria-hidden />
         </div>
       </div>
