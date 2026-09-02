@@ -20,6 +20,7 @@ import { isMarkdownFilename } from './markdownReviewCore.mjs';
 import { attachmentBlobMime, isHtmlAttachment } from './htmlPreviewCore.mjs';
 import { VOICE_BITRATE, VOICE_CONTAINER_CANDIDATES } from './voiceRecordingCore.mjs';
 import { measureVoiceDuration, parseVoiceDuration, withVoiceDuration } from '../voice.js';
+import { fmtTime } from './viewmodel';
 import {
   createLiveWaveformScaler, LIVE_WAVEFORM_BARS, peaksFromSamples, WAVEFORM_BARS, waveformBars,
 } from './voiceWaveformCore.mjs';
@@ -81,11 +82,6 @@ function OriginalDeviceNote({ label }: { label: string }) {
   );
 }
 
-function bubbleTime(date: string): string {
-  const d = new Date(date);
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
 function VoiceTranscript({ rec }: { rec: FileRecord }) {
   if (!rec.transcription) return null;
   const text = rec.transcription.text?.trim();
@@ -114,7 +110,7 @@ export function FileBubble({
   const receiptContent = isVoiceNote(rec.mime, rec.filename) ? 'Voice message' : 'File';
   const footer = (
     <div className="bubble-at">
-      {bubbleTime(rec.date)}
+      {fmtTime(rec.date)}
       {me && <MessageReceipt receipt={receipt} content={receiptContent} receiptless={receiptless} />}
     </div>
   );

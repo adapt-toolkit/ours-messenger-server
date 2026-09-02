@@ -8,8 +8,16 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/cowork-room-envelope
 const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the room envelope browser gate');
 const types = new Map([['.css', 'text/css; charset=utf-8'], ['.html', 'text/html; charset=utf-8'], ['.js', 'text/javascript; charset=utf-8'], ['.svg', 'image/svg+xml']]);
+const streams = new Set();
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
+  if (url.pathname === '/api/events') {
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    response.write(': open\n\n');
+    streams.add(response);
+    response.on('close', () => streams.delete(response));
+    return;
+  }
   const candidate = resolve(webRoot, `.${decodeURIComponent(url.pathname)}`);
   const path = candidate.startsWith(`${webRoot}/`) && existsSync(candidate) && statSync(candidate).isFile()
     ? candidate : join(webRoot, 'index.html');
@@ -20,19 +28,21 @@ await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen
 const address = server.address();
 assert.ok(address && typeof address === 'object');
 const origin = `http://127.0.0.1:${address.port}`;
+const fixtureDay = new Date().toISOString().slice(0, 10);
 const roomMessages = fixture.cases.map(({ kind, body }, index) => ({
-  dir: 'in', text: JSON.stringify(body), date: `2026-08-25T11:${String(index).padStart(2, '0')}:00.000Z`,
+  dir: 'in', text: JSON.stringify({ ...body, ...(body.at ? { at: `${fixtureDay}T10:${String(index).padStart(2, '0')}:00.000Z` } : {}) }),
+  date: `${fixtureDay}T11:${String(index).padStart(2, '0')}:00.000Z`,
   read: true, wire_id: `ROOM-${kind}`, receipt: null,
 }));
 roomMessages.push({
   dir: 'out', text: JSON.stringify({ ...fixture.cases[0].body, text: 'typed by me' }),
-  date: '2026-08-25T11:08:00.000Z', read: true, wire_id: 'ROOM-OUTGOING-JSON', receipt: null,
+  date: `${fixtureDay}T11:08:00.000Z`, read: true, wire_id: 'ROOM-OUTGOING-JSON', receipt: null,
 });
 const ordinaryJson = JSON.stringify(fixture.cases[0].body);
 
 const browser = await chromium.launch({ headless: true });
 try {
-  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 900, height: 1000 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', timezoneId: 'UTC', viewport: { width: 900, height: 1000 } });
   await context.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -46,24 +56,29 @@ try {
     if (url.pathname === '/api/conversations/PEER/page') return json({ contact: 'PEER', messages: [{ dir: 'in', text: ordinaryJson, date: '2026-08-25T11:00:00.000Z', read: true, wire_id: 'PEER-JSON', receipt: null }], total: 1, unread: 0, hasMore: false, nextBefore: null });
     if (/\/api\/conversations\/(ROOM|PEER)\/read$/.test(url.pathname)) return json({ marked: 0 });
     if (/\/api\/conversations\/(ROOM|PEER)\/files$/.test(url.pathname)) return json({ files: [] });
-    if (url.pathname === '/api/events') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+    if (url.pathname === '/api/events') return route.fallback();
     return json({}, 404);
   });
 
   const page = await context.newPage();
-  await page.goto(`${origin}/chats/ROOM`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${origin}/chats`, { waitUntil: 'domcontentloaded' });
+  const roomRow = page.getByRole('button', { name: /Cowork room/ });
+  await roomRow.waitFor();
+  const listTime = await roomRow.locator('.contact-time').textContent();
+  assert.match(listTime, /^11:08/, 'the list uses the newest canonical history timestamp');
+  await roomRow.click();
   const chat = page.locator('#chat-message-ROOM-room_msg');
   assert.equal(await chat.locator('.room-message-room').textContent(), 'Комната релиза');
   assert.equal(await chat.locator('.room-author-name').textContent(), 'Секретарь');
   assert.equal(await chat.locator('.room-author-role').textContent(), 'Reviewer');
   assert.equal(await chat.locator('.message-markdown').textContent(), 'Проверка завершена.');
-  assert.match(await chat.locator('.bubble-at').textContent(), /^10:00/);
+  assert.match(await chat.locator('.bubble-at').textContent(), /^11:00/);
 
   const briefing = page.locator('#chat-message-ROOM-room_briefing .room-briefing-card');
   assert.equal(await briefing.locator('.room-card-name').textContent(), 'Постоянные инвайты должны сохраняться');
   assert.equal(await briefing.locator('.room-system-text').textContent(), 'Проверьте, что постоянные инвайты сохраняются после перезапуска комнаты.');
   assert.equal(await briefing.locator('.room-card-author').textContent(), 'Координатор');
-  assert.match(await briefing.locator('.room-system-at').textContent(), /^10:01/);
+  assert.match(await briefing.locator('.room-system-at').textContent(), /^11:01/);
   const role = page.locator('#chat-message-ROOM-room_role_briefing .room-role-card');
   assert.equal(await role.locator('.room-system-label').textContent(), 'Role briefing · Reviewer · v2');
   assert.deepEqual(await role.locator('.room-card-details li').allTextContents(), ['Role: Reviewer']);
@@ -89,6 +104,24 @@ try {
   }
   assert.equal(await page.locator('#chat-message-ROOM-OUTGOING-JSON .message-markdown').textContent(),
     roomMessages.at(-1).text, 'outgoing JSON remains literal and cannot impersonate authenticated room provenance');
+  assert.equal(await page.locator('#chat-message-ROOM-OUTGOING-JSON .bubble-at').evaluate((node) => node.firstChild?.textContent), listTime,
+    'the actual list row and opened detail render the same canonical newest-message time');
+
+  const streamDeadline = Date.now() + 5_000;
+  while (streams.size === 0 && Date.now() < streamDeadline) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+  assert.ok(streams.size > 0, 'the live timestamp fixture established its SSE stream within 5 seconds');
+  roomMessages.push({
+    dir: 'in',
+    text: JSON.stringify({ ...fixture.cases[0].body, text: 'live room message', at: `${fixtureDay}T08:09:00+02:00` }),
+    date: `${fixtureDay}T11:09:00.000Z`, read: true, wire_id: 'ROOM-LIVE', receipt: null,
+  });
+  const liveEvent = JSON.stringify({ v: 1, contact_id: 'ROOM', wire_id: 'ROOM-LIVE', date: `${fixtureDay}T11:09:00.000Z` });
+  for (const stream of streams) stream.write(`event: message_received\ndata: ${liveEvent}\n\n`);
+  const liveBubble = page.locator('#chat-message-ROOM-LIVE .bubble-at');
+  await liveBubble.waitFor();
+  assert.match(await liveBubble.textContent(), /^11:09/, 'an SSE-triggered REST refresh uses canonical history time in detail');
+  assert.match(await roomRow.locator('.contact-time').textContent(), /^11:09/,
+    'the same live refresh updates the actual chat-list row with the identical local time');
 
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('#chat-message-PEER-JSON .message-markdown').textContent(), ordinaryJson, 'ordinary 1:1 JSON remains ordinary message text');
@@ -96,6 +129,7 @@ try {
   await context.close();
 } finally {
   await browser.close();
+  for (const stream of streams) stream.end();
   server.close();
 }
 

@@ -685,7 +685,7 @@ const TimelineRows = memo(function TimelineRows(props: {
                 )}
                 <span className="room-card-provenance">
                   {room.authoredBy && <span className="room-card-author">{room.authoredBy}</span>}
-                  <span className="room-system-at">{fmtTime(room.authoredAt || message.date)}</span>
+                  <span className="room-system-at">{fmtTime(message.date)}</span>
                 </span>
               </div>
             </motion.div>
@@ -770,7 +770,7 @@ const TimelineRows = memo(function TimelineRows(props: {
                 )}
                 <MessageMarkdown text={room ? room.text : message.text} />
                 <div className="bubble-at">
-                  {fmtTime(room?.authoredAt || message.date)}
+                  {fmtTime(message.date)}
                   {message.dir === 'out' && <MessageReceipt receipt={message.receipt} receiptless={message.receiptless} />}
                 </div>
               </div>
