@@ -77,7 +77,35 @@ const styleOf = (locator) => locator.evaluate((node) => {
   return { transform: style.transform, background: style.backgroundColor };
 });
 
+const centerOf = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+
 try {
+  const fineContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 900, height: 700 } });
+  await installRoutes(fineContext);
+  const finePage = await fineContext.newPage();
+  await finePage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  const fineScroller = finePage.locator('.messages');
+  await fineScroller.evaluate((node) => { node.scrollTop = 0; });
+  const fineJump = finePage.locator('.jump-latest');
+  await fineJump.waitFor();
+  const fineBefore = await fineJump.boundingBox();
+  assert.ok(fineBefore);
+  await fineJump.hover();
+  await finePage.waitForTimeout(150);
+  const fineHover = await fineJump.boundingBox();
+  assert.ok(fineHover);
+  assert.ok(Math.abs(centerOf(fineHover).x - centerOf(fineBefore).x) < 0.25,
+    `hover preserves the visible and effective horizontal center (${centerOf(fineBefore).x} -> ${centerOf(fineHover).x})`);
+  const fineCenter = centerOf(fineBefore);
+  assert.equal(await finePage.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.jump-latest'), fineCenter), true,
+    'the pre-hover visible center remains inside the button hit area');
+  await finePage.mouse.click(fineCenter.x, fineCenter.y);
+  await finePage.waitForFunction(() => {
+    const node = document.querySelector('.messages');
+    return node && node.scrollHeight - node.clientHeight - node.scrollTop <= 2;
+  });
+  await fineContext.close();
+
   const context = await browser.newContext({ hasTouch: true, isMobile: true, serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
   await installRoutes(context);
   const page = await context.newPage();
@@ -85,6 +113,26 @@ try {
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
   const incoming = page.locator('#chat-message-TOUCH-26 .msg-row');
   await incoming.waitFor();
+  const mobileScroller = page.locator('.messages');
+  await mobileScroller.evaluate((node) => { node.scrollTop = 0; });
+  const mobileJump = page.locator('.jump-latest');
+  await mobileJump.waitFor();
+  const mobileBefore = await mobileJump.boundingBox();
+  assert.ok(mobileBefore);
+  const mobileCenter = centerOf(mobileBefore);
+  await touch(session, 'touchStart', mobileCenter.x, mobileCenter.y);
+  await page.waitForTimeout(50);
+  const mobilePressed = await mobileJump.boundingBox();
+  assert.ok(mobilePressed);
+  assert.ok(Math.abs(centerOf(mobilePressed).x - mobileCenter.x) < 0.25,
+    `touch hover/press preserves the button center (${mobileCenter.x} -> ${centerOf(mobilePressed).x})`);
+  assert.equal(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.jump-latest'), mobileCenter), true,
+    'the visible mobile center remains inside the pressed hit area');
+  await touch(session, 'touchEnd', mobileCenter.x, mobileCenter.y);
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.messages');
+    return node && node.scrollHeight - node.clientHeight - node.scrollTop <= 2;
+  });
   await page.evaluate(() => {
     globalThis.__pointerId = -1;
     document.addEventListener('pointerdown', (event) => { globalThis.__pointerId = event.pointerId; }, true);

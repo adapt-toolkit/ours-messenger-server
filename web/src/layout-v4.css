@@ -1313,12 +1313,15 @@
   z-index: 5;
   left: 50%;
   bottom: calc(var(--composer-h, 76px) + 18px);
-  transform: translateX(-50%);
+  /* Centering is layout, not interaction motion. Generic .btn hover/active
+     transforms may animate this element without replacing its horizontal
+     placement (or moving the effective pointer/touch target). */
+  translate: -50% 0;
   border-color: var(--line);
   box-shadow: var(--shadow-md);
 }
 
-.jump-latest:active:not(:disabled) { transform: translateX(-50%) scale(0.97); }
+.jump-latest:active:not(:disabled) { transform: scale(0.97); }
 .jump-latest-count {
   display: inline-grid;
   min-width: 1.35rem;

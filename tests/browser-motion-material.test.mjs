@@ -21,8 +21,12 @@ assert.match(themeSource, /--dur-3:\s*var\(--dur-emphasis\)/);
 assert.match(darkSource, /--v3-ease:\s*var\(--ease-interface\)/);
 assert.doesNotMatch(motionSource, /var\(--(?:ease-soft|dur-[123])\)/, 'motion utilities consume the canonical timing family directly');
 assert.doesNotMatch(`${darkSource}\n${layoutSource}\n${redesignSource}`, /\b(?:160|170|180|220|280)ms\b/, 'primary Messenger surfaces contain no independent legacy timing values');
-const jumpRule = layoutSource.match(/\.jump-latest\s*\{([^}]*)\}/)?.[1] ?? '';
+const jumpRule = [...layoutSource.matchAll(/\.jump-latest\s*\{([^}]*)\}/g)]
+  .map((match) => match[1])
+  .find((rule) => /position:\s*absolute/.test(rule)) ?? '';
 assert.doesNotMatch(jumpRule, /background:|backdrop-filter:|blur\(14px\)/, 'Jump latest consumes the centralized named material owner without a later override');
+assert.match(jumpRule, /translate:\s*-50%\s+0/, 'Jump latest owns centering independently of interaction transforms');
+assert.doesNotMatch(jumpRule, /transform:\s*translateX/, 'generic button hover cannot replace Jump latest centering');
 assert.match(chatsSource, /transition=\{interfaceSpring\}/, 'Framer transform owners use the exported interface spring');
 assert.doesNotMatch(chatsSource, /duration:\s*0\.22|whileHover=\{\{\s*x:/, 'message tweens and unconditional hover translation are removed');
 
