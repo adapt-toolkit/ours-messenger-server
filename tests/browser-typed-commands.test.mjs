@@ -24,6 +24,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   const sends = [];
   let sendMode = 'response-loss';
+  let releaseSend = null;
   const messages = [
     { dir: 'out', text: '', date: '2026-09-03T00:00:00Z', read: true, wire_id: 'COMMAND-OLD', peer_cid: 'PEER', receipt: 'delivered', reply_to: null, message_kind: 'command', typed: { kind: 'command', command: 'old.command', arguments: {} } },
     { dir: 'in', text: '', date: '2026-09-03T00:00:01Z', read: true, wire_id: 'RESULT-GOOD', peer_cid: 'PEER', receipt: null, reply_to: { wire_id: 'COMMAND-OLD' }, message_kind: 'command_result', typed: { kind: 'command_result', outcome: { ok: true, result: 0 } } },
@@ -50,8 +51,7 @@ try {
       },
     }],
   };
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
-  await context.route('**/api/**', async (route) => {
+  const installRoutes = (targetContext) => targetContext.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const json = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
@@ -65,9 +65,10 @@ try {
     if (path === '/api/commands/send') {
       const body = request.postDataJSON(); sends.push(body);
       if (sendMode === 'response-loss') return route.abort('connectionreset');
+      if (sendMode === 'hold-accepted') await new Promise((done) => { releaseSend = done; });
       return json({
         invocation_id: body.invocation_id, recipient_cid: 'PEER', catalog_fingerprint: body.catalog_fingerprint,
-        command: body.command, wire_id: 'WIRE-NEW', delivery: 'e2e', status: 'accepted',
+        command: body.command, wire_id: 'WIRE-NEW', delivery: 'e2e', status: sendMode === 'hold-accepted' ? 'accepted' : sendMode,
         payload_fingerprint: 'B'.repeat(43), deduplicated: true,
       });
     }
@@ -75,11 +76,38 @@ try {
     return json({}, 404);
   });
 
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  await installRoutes(context);
   const page = await context.newPage();
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Recipient commands' }).click();
   const panel = page.getByRole('form', { name: 'Send a typed command' });
   await panel.waitFor();
+  await panel.getByText('Commands for Peer', { exact: true }).waitFor();
+  assert.equal((await page.getByRole('button', { name: 'Recipient commands' }).innerText()).trim(), 'Commands',
+    'the visible composer affordance names commands instead of showing a cryptic slash');
+  assert.equal(await panel.locator('.command-panel-recipient .mono').getAttribute('title'), 'PEER',
+    'the authenticated recipient CID remains available as secondary identity context');
+  const mobileFieldStyle = await panel.getByLabel('Required').evaluate((element) => getComputedStyle(element));
+  assert.equal(mobileFieldStyle.fontSize, '16px', 'command fields use the app mobile 16px treatment');
+  for (const control of [panel.getByRole('button', { name: 'Refresh' }), panel.getByRole('button', { name: 'Add Optional text' })]) {
+    const controlBox = await control.boundingBox();
+    assert.ok(controlBox && controlBox.height >= 44, 'typed-command link controls expose a 44px touch target');
+  }
+  const refresh = panel.getByRole('button', { name: 'Refresh' });
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await refresh.evaluate((element) => document.activeElement === element), true,
+    'keyboard navigation reaches the typed-command refresh action');
+  assert.equal(await refresh.evaluate((element) => getComputedStyle(element).outlineStyle), 'solid',
+    'typed-command link controls retain a clear keyboard focus indicator');
+  const refreshBox = await refresh.boundingBox();
+  assert.ok(refreshBox);
+  await page.mouse.move(refreshBox.x + refreshBox.width / 2, refreshBox.y + refreshBox.height / 2);
+  await page.mouse.down();
+  assert.notEqual(await refresh.evaluate((element) => getComputedStyle(element).transform), 'none',
+    'pointer-down receives immediate physical feedback');
+  await page.mouse.up();
   assert.equal(await panel.getByRole('button', { name: 'Add Optional text' }).count(), 1, 'optional fields are omitted initially');
   assert.equal(await panel.getByLabel('Optional text').count(), 0, 'an omitted optional string is not silently materialized as empty');
   await panel.getByLabel('Required').fill('present');
@@ -111,6 +139,8 @@ try {
     button?.click(); button?.click();
   });
   await panel.getByText(/state is indeterminate/i).waitFor();
+  assert.equal(await panel.locator('.command-status').getAttribute('data-state'), 'indeterminate',
+    'response loss is visibly classified as indeterminate');
   assert.equal(sends.length, 1, 'two synchronous activations create one request');
   assert.equal(new Set(sends.map((body) => body.invocation_id)).size, 1, 'one stable invocation id belongs to the attempt');
   assert.deepEqual(sends[0].arguments, {
@@ -124,9 +154,13 @@ try {
   const restored = page.getByRole('form', { name: 'Send a typed command' });
   await restored.getByText(`Saved attempt: indeterminate`).waitFor();
   assert.match(await restored.locator('.command-attempt .mono').innerText(), new RegExp(savedInvocation), 'reload restores the identity/recipient-scoped attempt');
-  sendMode = 'accepted';
+  sendMode = 'hold-accepted';
   await restored.getByRole('button', { name: 'Reconcile saved attempt' }).click();
+  await restored.locator('.command-status[data-state="pending"]').waitFor();
+  releaseSend?.();
   await restored.getByText(/reconciled/i).waitFor();
+  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'success',
+    'accepted reconciliation is visibly classified as success');
   assert.equal(sends.length, 2);
   assert.equal(sends[1].invocation_id, savedInvocation, 'response-loss reconciliation replays the same stable invocation id');
 
@@ -135,6 +169,24 @@ try {
   assert.equal(await completed.count(), 1, 'only the authenticated result for the exact outgoing command renders completed');
   assert.equal(await page.getByText(/Unmatched result · safe failure/).count(), 4,
     'wrong peer, ordinary/inbound reply targets, and missing replies never render completed');
+  page.once('dialog', (dialog) => dialog.accept());
+  await restored.getByRole('button', { name: 'Reset after verifying outcome' }).click();
+  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'success',
+    'explicit verified reset has visible completion feedback');
+  await restored.getByLabel(/Confirm sending/).check();
+  sendMode = 'pending';
+  await restored.getByRole('button', { name: 'Send command' }).click();
+  await restored.getByText(/delivery is pending/i).waitFor();
+  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'warning',
+    'pending delivery has a distinct warning state');
+  page.once('dialog', (dialog) => dialog.accept());
+  await restored.getByRole('button', { name: 'Reset after verifying outcome' }).click();
+  await restored.getByLabel(/Confirm sending/).check();
+  sendMode = 'failed';
+  await restored.getByRole('button', { name: 'Send command' }).click();
+  await restored.getByText(/refused before delivery/i).waitFor();
+  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'error',
+    'refused delivery has a distinct error state');
   const box = await restored.boundingBox();
   assert.ok(box && box.x >= 0 && box.x + box.width <= 390, 'command form remains within the narrow mobile viewport');
   const commandTrigger = page.getByRole('button', { name: 'Recipient commands' });
@@ -150,7 +202,32 @@ try {
   assert.equal(await commandTrigger.evaluate((element) => document.activeElement === element), true,
     'keyboard Escape restores focus to the Recipient commands trigger');
 
-  console.log('browser-typed-commands OK — keyboard/mobile form, raw validation, stable persisted attempt, strict correlation');
+  const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  await installRoutes(desktopContext);
+  const desktopPage = await desktopContext.newPage();
+  await desktopPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  await desktopPage.getByRole('button', { name: 'Recipient commands' }).click();
+  const desktopPanel = desktopPage.getByRole('form', { name: 'Send a typed command' });
+  await desktopPanel.waitFor();
+  const desktopBox = await desktopPanel.boundingBox();
+  assert.ok(desktopBox && desktopBox.x >= 0 && desktopBox.x + desktopBox.width <= 1280,
+    'the command panel remains anchored within a desktop conversation');
+  const baseMaterial = await desktopPanel.evaluate((element) => getComputedStyle(element));
+  assert.equal(baseMaterial.backdropFilter, 'none', 'typed commands use an opaque, nonblocking surface');
+  assert.doesNotMatch(baseMaterial.backgroundColor, /rgba\([^)]*,\s*0(?:\.\d+)?\)/,
+    'the typed-command surface stays opaque, so reduced transparency is not required');
+  await desktopPage.emulateMedia({ reducedMotion: 'reduce', contrast: 'more' });
+  const preferenceStyle = await desktopPanel.evaluate((element) => getComputedStyle(element));
+  assert.equal(preferenceStyle.animationName, 'none', 'the typed-command panel remains static under reduced motion');
+  assert.equal(preferenceStyle.boxShadow, 'none', 'increased contrast removes decorative panel shadow');
+  assert.equal(preferenceStyle.borderTopColor, preferenceStyle.color, 'increased contrast promotes the panel border to currentColor');
+  await desktopPage.emulateMedia({ forcedColors: 'active' });
+  const forcedStyle = await desktopPanel.evaluate((element) => getComputedStyle(element));
+  assert.equal(forcedStyle.borderTopStyle, 'solid', 'forced-colors mode retains a visible panel boundary');
+  assert.equal(forcedStyle.backdropFilter, 'none', 'forced-colors mode retains a nonblocking material');
+  await desktopContext.close();
+
+  console.log('browser-typed-commands OK — desktop/mobile/keyboard/preferences, semantic status, stable persisted attempt, strict correlation');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

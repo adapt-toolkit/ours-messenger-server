@@ -264,6 +264,7 @@ function Field(props: {
 
 export function CommandPanel(props: {
   catalog: CommandCatalog;
+  recipientName: string;
   storageScope: string;
   busy: boolean;
   onRefresh(): void;
@@ -295,6 +296,7 @@ export function CommandPanel(props: {
   const [value, setValue] = useState<JsonValue>(() => initialAttempt?.arguments ?? (command ? initialValue(command.input_schema) : null));
   const [confirmed, setConfirmed] = useState(false);
   const [status, setStatus] = useState('');
+  const [statusTone, setStatusTone] = useState<'idle' | 'pending' | 'warning' | 'error' | 'success' | 'indeterminate'>('idle');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const inFlightRef = useRef(false);
   const noteFieldError = useCallback((path: string, error: string | null) => {
@@ -315,26 +317,33 @@ export function CommandPanel(props: {
   const choose = (name: string) => {
     const next = props.catalog.commands.find((entry) => entry.name === name);
     if (attempt) return;
-    setSelectedName(name); setValue(next ? initialValue(next.input_schema) : null); setConfirmed(false); setStatus(''); setFieldErrors({});
+    setSelectedName(name); setValue(next ? initialValue(next.input_schema) : null); setConfirmed(false); setStatus(''); setStatusTone('idle'); setFieldErrors({});
   };
   const sendAttempt = async (current: Attempt, definition: CommandDefinition) => {
     if (inFlightRef.current || props.busy) return;
     inFlightRef.current = true;
     setStatus(current.state === 'reserved' ? 'Sending encrypted command…' : 'Reconciling the existing command attempt…');
+    setStatusTone('pending');
     try {
       const sent = await props.onSend(definition, current.arguments, current.invocationId, current.catalogFingerprint);
       const settled = { ...current, state: sent.status } satisfies Attempt;
       persistAttempt(settled);
-      if (sent.status === 'failed') setStatus('Command was refused before delivery. Verify the outcome before starting a new attempt.');
-      else if (sent.status === 'pending') setStatus('Command delivery is pending; reconcile this attempt instead of submitting it again.');
-      else if (sent.status === 'indeterminate' || !sent.wire_id) setStatus('Command state is indeterminate; reconcile this attempt or verify its outcome before reset.');
-      else setStatus(sent.deduplicated ? 'Existing command attempt reconciled; pending result.' : 'Command accepted and pending result.');
+      if (sent.status === 'failed') {
+        setStatus('Command was refused before delivery. Verify the outcome before starting a new attempt.'); setStatusTone('error');
+      } else if (sent.status === 'pending') {
+        setStatus('Command delivery is pending; reconcile this attempt instead of submitting it again.'); setStatusTone('warning');
+      } else if (sent.status === 'indeterminate' || !sent.wire_id) {
+        setStatus('Command state is indeterminate; reconcile this attempt or verify its outcome before reset.'); setStatusTone('indeterminate');
+      } else {
+        setStatus(sent.deduplicated ? 'Existing command attempt reconciled; pending result.' : 'Command accepted and pending result.'); setStatusTone('success');
+      }
     } catch (error) {
       const unknown = { ...current, state: 'indeterminate' as const };
       persistAttempt(unknown);
       setStatus(error instanceof ApiError
         ? `Command response was not confirmed: ${error.message}. Reconcile this attempt before any reset.`
         : 'Command connection was interrupted; its state is indeterminate. Reconcile this attempt before any reset.');
+      setStatusTone('indeterminate');
     } finally { inFlightRef.current = false; }
   };
   const submit = (event: React.FormEvent) => {
@@ -342,7 +351,7 @@ export function CommandPanel(props: {
     if (!command || unsupported || !confirmed || props.busy || inFlightRef.current || attempt) return;
     const visibleError = Object.values(fieldErrors)[0];
     const validationError = visibleError ?? validateCommandValue(command.input_schema, value);
-    if (validationError) { setStatus(`Validation denied: ${validationError}`); return; }
+    if (validationError) { setStatus(`Validation denied: ${validationError}`); setStatusTone('error'); return; }
     const next: Attempt = {
       version: 1, recipientCid: props.catalog.recipient_cid, catalogFingerprint: props.catalog.fingerprint,
       command: command.name, arguments: value, invocationId: crypto.randomUUID(), state: 'reserved',
@@ -352,7 +361,8 @@ export function CommandPanel(props: {
   };
   return <form className="command-panel" aria-label="Send a typed command" onSubmit={submit}
     onKeyDown={(event) => { if (event.key === 'Escape') props.onClose(); }}>
-    <div className="command-panel-head"><strong>Commands</strong><span className="mono">{props.catalog.recipient_cid.slice(0, 12)}…</span>
+    <div className="command-panel-head"><div className="command-panel-recipient"><strong>Commands for {props.recipientName}</strong>
+      <span className="mono" title={props.catalog.recipient_cid}>{props.catalog.recipient_cid.slice(0, 12)}…</span></div>
       <button type="button" className="linkbtn" onClick={props.onRefresh}>Refresh</button>
       <button type="button" className="icon-btn" aria-label="Close commands" onClick={props.onClose}>×</button></div>
     {props.catalog.commands.length === 0 ? <p role="status">This recipient does not advertise commands.</p> : <>
@@ -374,12 +384,12 @@ export function CommandPanel(props: {
             onClick={() => void sendAttempt(attempt, { name: attempt.command, input_schema: {} })}>Reconcile saved attempt</button>
           <button type="button" className="linkbtn" onClick={() => {
             if (window.confirm('Only reset after checking the conversation and verifying this attempt cannot still execute. Continue?')) {
-              persistAttempt(null); setStatus('Saved attempt reset after explicit verification.'); setConfirmed(false);
+              persistAttempt(null); setStatus('Saved attempt reset after explicit verification.'); setStatusTone('success'); setConfirmed(false);
             }
           }}>Reset after verifying outcome</button>
         </div>
       </div>}
-      <div className="command-status" role="status" aria-live="polite">{status}</div>
+      <div className={`command-status ${statusTone}`} data-state={statusTone} role="status" aria-live="polite">{status}</div>
     </>}
   </form>;
 }

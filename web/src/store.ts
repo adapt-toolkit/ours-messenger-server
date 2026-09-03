@@ -68,7 +68,7 @@ export function initialState(route: AppRoute): AppState {
     replies: {},
     connection: 'connecting',
     search: '',
-    mobileDetailOpen: route.name === 'chats' && route.contactCid !== null,
+    mobileDetailOpen: (route.name === 'chats' && route.contactCid !== null) || route.name === 'contact',
     coveringDialog: false,
     dialogBusy: false,
     generatedInvite: null,
@@ -83,7 +83,7 @@ export function dialogKey(identityCid: string, contactCid: string): string {
 }
 
 export function selectedContactCid(state: AppState): string | null {
-  return state.route.name === 'chats' ? state.route.contactCid : null;
+  return state.route.name === 'chats' || state.route.name === 'contact' ? state.route.contactCid : null;
 }
 
 export function selectedDialogKey(state: AppState): string | null {
@@ -139,6 +139,18 @@ function mergeMessages(
   return merged;
 }
 
+function reconcileSelectedContact(
+  state: AppState,
+  contacts: ContactsResponse,
+): Partial<AppState> {
+  const contactCid = selectedContactCid(state);
+  if (!contactCid || contacts.contacts.some((contact) => contact.container_id === contactCid)) return {};
+  return {
+    route: { name: 'chats', contactCid: null },
+    mobileDetailOpen: false,
+  };
+}
+
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'snapshot': {
@@ -153,9 +165,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           pages: {}, pendingSends: {}, drafts: {}, replies: {}, sendingDialog: null,
           generatedInvite: null, coveringDialog: false, dialogBusy: false,
         } : {}),
+        ...reconcileSelectedContact(state, action.contacts),
       };
     }
-    case 'contacts': return { ...state, contacts: action.contacts };
+    case 'contacts': return {
+      ...state,
+      contacts: action.contacts,
+      ...reconcileSelectedContact(state, action.contacts),
+    };
     case 'page': {
       if (!state.identity) return state;
       const key = dialogKey(state.identity.cid, action.contactCid);
@@ -261,7 +278,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'route': return {
       ...state,
       route: action.route,
-      mobileDetailOpen: action.mobileDetailOpen ?? (action.route.name === 'chats' && action.route.contactCid !== null),
+      mobileDetailOpen: action.mobileDetailOpen ?? ((action.route.name === 'chats' && action.route.contactCid !== null) || action.route.name === 'contact'),
     };
     case 'connection': return { ...state, connection: action.connection };
     case 'search': return { ...state, search: action.search };

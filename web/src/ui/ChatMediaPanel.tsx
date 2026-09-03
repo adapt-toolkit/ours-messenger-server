@@ -11,6 +11,7 @@ import {
 import { attachmentBlobMime, isHtmlAttachment } from './htmlPreviewCore.mjs';
 import { fmtTime } from './viewmodel';
 import { Icon } from './icons';
+import { Tabs } from './Tabs';
 
 type MediaTab = 'photo' | 'file' | 'link';
 
@@ -180,22 +181,23 @@ export function ChatMediaPanel(props: {
       wide
       className="shared-media-modal"
       tabs={(
-        <div className="shared-media-tabs" role="tablist" aria-label="Shared media type">
-          {tabs.map((item) => (
-            <button
-              key={item.id}
-              role="tab"
-              aria-selected={tab === item.id}
-              className={tab === item.id ? 'active' : ''}
-              onClick={() => setTab(item.id)}
-            >
-              {item.label} <span>{item.count}</span>
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="shared-media-tabs"
+          label="Shared media type"
+          options={tabs}
+          value={tab}
+          onChange={setTab}
+          idPrefix="shared-media-tab"
+          panelId="shared-media-panel"
+        />
       )}
     >
-      <div className={'shared-media-list' + (tab === 'photo' ? ' photos' : '')}>
+      <div
+        id="shared-media-panel"
+        role="tabpanel"
+        aria-labelledby={`shared-media-tab-${tab}`}
+        className={'shared-media-list' + (tab === 'photo' ? ' photos' : '')}
+      >
         {tab === 'photo' && photos.map((item) => (
           <FileMediaItem
             key={item.key}

@@ -33,8 +33,13 @@ import { projectCatalog, requireBoundedJson } from './typed-commands.js';
 import {
   CommandInvocationStore, InvocationCapacityError, InvocationConflictError, invocationFingerprint,
 } from './command-invocations.js';
+import { HtmlPreviewTransformError, MAX_HTML_PREVIEW_BYTES, transformHtmlPreview } from './html-preview-transform.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName } from '../shared/roomMessageCore.mjs';
+// @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
+import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../web/src/ui/htmlPreviewCore.mjs';
+
+const HTML_PREVIEW_RESPONSE_CSP = `${HTML_PREVIEW_CSP}; sandbox; frame-ancestors 'self'`;
 
 interface ReplyReference {
   readonly wire_id: string;
@@ -790,6 +795,49 @@ const ROUTES: Record<string, Handler> = {
       'referrer-policy': 'no-referrer',
     });
     res.end(Buffer.from(bytes));
+    return undefined;
+  },
+
+  // HTML is active content and never passes through the general media route.
+  // This explicit document response is safe both framed and top-level: the
+  // response policy is installed before the first attachment byte is parsed,
+  // and CSP sandbox gives it an opaque origin even outside our iframe.
+  'GET /api/html-preview/:wireId': async ({ client, params, res }) => {
+    const record = await client.getFileInfo({ wire_id: params.wireId });
+    if (!record) throw new HttpError(404, 'HTML preview not found');
+    if (record.direction === 'in' && record.inbox_state !== 'read') {
+      throw new HttpError(409, 'HTML file must be explicitly fetched first');
+    }
+    if (!isHtmlAttachment(record.filename, record.mime)) {
+      throw new HttpError(415, 'file is not an HTML document');
+    }
+    if (!Number.isSafeInteger(record.byte_length) || record.byte_length < 0) {
+      throw new HttpError(400, 'HTML preview metadata is invalid');
+    }
+    if (record.byte_length > MAX_HTML_PREVIEW_BYTES) throw new HttpError(413, 'HTML preview is too large');
+    const bytes = await client.fetchFile(params.wireId);
+    let transformed: Buffer;
+    try {
+      transformed = transformHtmlPreview(bytes);
+    } catch (error) {
+      if (error instanceof HtmlPreviewTransformError && error.kind === 'oversize') {
+        throw new HttpError(413, 'HTML preview is too large');
+      }
+      throw new HttpError(400, 'HTML preview could not be transformed');
+    }
+    const encodedName = encodeURIComponent(record.filename).replaceAll("'", '%27');
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': String(transformed.byteLength),
+      'content-disposition': `inline; filename*=UTF-8''${encodedName}`,
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': HTML_PREVIEW_RESPONSE_CSP,
+      'cross-origin-resource-policy': 'same-origin',
+      'referrer-policy': 'no-referrer',
+      'x-ours-html-preview': 'transformed',
+    });
+    res.end(transformed);
     return undefined;
   },
 

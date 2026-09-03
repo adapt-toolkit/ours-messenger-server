@@ -1,6 +1,6 @@
 // Chats section — grouped contact list + conversation. Ported from the design
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
-import { ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
 import { ContactVM, RootMetaVM, fmtTime } from './viewmodel';
 import type { ChatMessage } from './chatTypes';
@@ -18,6 +18,8 @@ import { ApiError } from '../api';
 import type { CommandCatalog, CommandDefinition, JsonValue, SendCommandResult } from '../types.js';
 import { CommandPanel } from './CommandPanel.js';
 import { AnimatePresence, motion } from 'framer-motion';
+import { interfaceSpring } from './motionSystem';
+import { SWIPE_DISTANCE_PX, classifyReplyIntent, shouldCommitReply } from './swipeReplyCore';
 import {
   groupConversationsByIdentity,
   readConversationListMode,
@@ -38,36 +40,54 @@ function ContactRow(props: {
   active: boolean;
   grouped?: boolean;
   onClick: () => void;
+  onApprove?: () => Promise<boolean>;
+  onReject?: () => Promise<boolean>;
 }) {
   const { c, active, grouped } = props;
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const decide = async (action: (() => Promise<boolean>) | undefined, target: HTMLButtonElement) => {
+    if (!action || decisionBusy) return;
+    setDecisionBusy(true);
+    try {
+      const removed = await action();
+      requestAnimationFrame(() => {
+        if (removed) document.getElementById('chat-list-title')?.focus();
+        else target.focus();
+      });
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+  const contents = <>
+    <span className="contact-avatar" aria-hidden>{c.initials}</span>
+    <span className="contact-copy">
+      <span className="contact-row-topline">
+        <span className="contact-name">{c.name}</span>
+        {c.when && <span className="contact-time">{c.when}</span>}
+      </span>
+      <span className="contact-row-bottomline">
+        <span className="contact-last">{c.last}</span>
+        {c.status === 'pending' && <span className="chip">pending approval</span>}
+        {!!c.unread && <span className="contact-unread">{c.unread}</span>}
+      </span>
+    </span>
+    {c.status === 'pending' && <span className="pending-actions" role="group" aria-label={`Decide whether to accept ${c.name}`}>
+      <button type="button" className="linkbtn" disabled={decisionBusy} onClick={(event) => void decide(props.onApprove, event.currentTarget)}>Approve</button>
+      <button type="button" className="linkbtn quiet" disabled={decisionBusy} onClick={(event) => void decide(props.onReject, event.currentTarget)}>Reject</button>
+    </span>}
+    {active && <motion.span className="contact-active-glow" layoutId="active-contact" transition={interfaceSpring} />}
+  </>;
+  const className = 'contact-row' + (active ? ' active' : '') + (grouped ? ' grouped' : '') + (c.status === 'pending' ? ' pending' : '');
+  if (c.status === 'pending') {
+    return <div className={className}>{contents}</div>;
+  }
   return (
     <motion.button
       type="button"
-      layout
-      className={
-        'contact-row' +
-        (active ? ' active' : '') +
-        (grouped ? ' grouped' : '') +
-        (c.status === 'pending' ? ' pending' : '')
-      }
+      className={className}
       onClick={props.onClick}
-      whileHover={{ x: 3 }}
-      whileTap={{ scale: 0.985 }}
-      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
     >
-      <span className="contact-avatar" aria-hidden>{c.initials}</span>
-      <span className="contact-copy">
-        <span className="contact-row-topline">
-          <span className="contact-name">{c.name}</span>
-          {c.when && <span className="contact-time">{c.when}</span>}
-        </span>
-        <span className="contact-row-bottomline">
-          <span className="contact-last">{c.last}</span>
-          {c.status === 'pending' && <span className="chip">invited</span>}
-          {!!c.unread && <span className="contact-unread">{c.unread}</span>}
-        </span>
-      </span>
-      {active && <motion.span className="contact-active-glow" layoutId="active-contact" />}
+      {contents}
     </motion.button>
   );
 }
@@ -79,9 +99,13 @@ export function ChatList(props: {
   onSelect: (id: string) => void;
   onInvite: () => void;
   onSettings: () => void;
+  onApprovePending: (cid: string) => Promise<boolean>;
+  onRejectPending: (cid: string) => Promise<boolean>;
 }) {
   const { contacts, roots, selected } = props;
   const [q, setQ] = useState('');
+  const listRootRef = useRef<HTMLDivElement>(null);
+  const bottomChromeRef = useRef<HTMLDivElement>(null);
   const [listMode, setListMode] = useState<ConversationListMode>(
     () => readConversationListMode(),
   );
@@ -100,6 +124,45 @@ export function ChatList(props: {
     { id: 'recent', label: 'Recent' },
     { id: 'identity', label: 'By identity' },
   ];
+  const modeControlRef = useRef<HTMLDivElement>(null);
+  const modeGestureRef = useRef({ id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'pending' | 'drag' });
+  const suppressModeClickRef = useRef(false);
+  const clearModeGesture = (pointerId: number, commit: boolean) => {
+    const gesture = modeGestureRef.current;
+    if (gesture.id !== pointerId) return;
+    const control = modeControlRef.current;
+    if (commit && gesture.mode === 'drag' && control) {
+      const offset = parseFloat(control.style.getPropertyValue('--mode-drag-x')) || 0;
+      const endpoint = Math.max(0, (control.clientWidth - 8) / 2);
+      chooseMode(offset >= endpoint / 2 ? 'identity' : 'recent');
+      suppressModeClickRef.current = true;
+      window.setTimeout(() => { suppressModeClickRef.current = false; }, 0);
+    }
+    modeGestureRef.current = { id: -1, x0: 0, y0: 0, mode: 'idle' };
+    if (control?.hasPointerCapture?.(pointerId)) control.releasePointerCapture(pointerId);
+    control?.classList.remove('dragging');
+    control?.style.removeProperty('--mode-drag-x');
+  };
+  const onModePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || modeGestureRef.current.id !== -1) return;
+    modeGestureRef.current = { id: event.pointerId, x0: event.clientX, y0: event.clientY, mode: 'pending' };
+  };
+  const onModePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = modeGestureRef.current;
+    if (gesture.id !== event.pointerId || gesture.mode === 'idle') return;
+    const dx = event.clientX - gesture.x0; const dy = event.clientY - gesture.y0;
+    if (gesture.mode === 'pending') {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dy) > Math.abs(dx)) { clearModeGesture(event.pointerId, false); return; }
+      gesture.mode = 'drag';
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      event.currentTarget.classList.add('dragging');
+    }
+    event.preventDefault();
+    const endpoint = Math.max(0, (event.currentTarget.clientWidth - 8) / 2);
+    const start = listMode === 'identity' ? endpoint : 0;
+    event.currentTarget.style.setProperty('--mode-drag-x', `${Math.min(endpoint, Math.max(0, start + dx))}px`);
+  };
   const moveModeFocus = (
     event: KeyboardEvent<HTMLButtonElement>,
     current: ConversationListMode,
@@ -119,31 +182,49 @@ export function ChatList(props: {
     document.getElementById(`conversation-list-${next}`)?.focus();
   };
 
+  useLayoutEffect(() => {
+    const root = listRootRef.current;
+    const chrome = bottomChromeRef.current;
+    if (!root || !chrome) return;
+    const update = () => root.style.setProperty('--list-bottom-chrome-height', `${chrome.getBoundingClientRect().height}px`);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(chrome);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--list-bottom-chrome-height');
+    };
+  }, []);
+
   return (
-    <div className="listcol">
+    <div className="listcol" ref={listRootRef}>
       <div className="listcol-head">
         <div className="listcol-titlebar">
-          <h2 className="listcol-title">Chats</h2>
+          <h2 id="chat-list-title" className="listcol-title messenger-lockup" tabIndex={-1}>
+            <span className="messenger-brand-ours">Ours</span>
+            <span className="messenger-brand-product">messenger</span>
+          </h2>
           <div className="listcol-actions">
-            <button className="btn sm primary" onClick={props.onInvite}>
-              <Icon name="plus" size={15} />
-              Invite
+            <button className="btn icon-btn desktop-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
+              <Icon name="invite" size={18} />
             </button>
-            <button className="icon-btn" title="Settings" onClick={props.onSettings}>
-              <Icon name="settings" />
+            <button className="icon-btn" aria-label="Settings" title="Settings" onClick={props.onSettings}>
+              <Icon name="settings" size={18} />
             </button>
           </div>
         </div>
-        <div className="search">
-          <Icon name="search" />
-          <input
-            className="field"
-            placeholder="Search people, agents, apps…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        </div>
-        <div className="conversation-list-modes" role="tablist" aria-label="Conversation list layout">
+        <div
+          ref={modeControlRef}
+          className="conversation-list-modes"
+          role="tablist"
+          aria-label="Conversation list layout"
+          data-mode={listMode}
+          onPointerDown={onModePointerDown}
+          onPointerMove={onModePointerMove}
+          onPointerUp={(event) => clearModeGesture(event.pointerId, true)}
+          onPointerCancel={(event) => clearModeGesture(event.pointerId, false)}
+          onLostPointerCapture={(event) => clearModeGesture(event.pointerId, false)}
+        >
           {modeOptions.map((option) => (
             <button
               key={option.id}
@@ -154,7 +235,10 @@ export function ChatList(props: {
               aria-controls="conversation-list-panel"
               tabIndex={listMode === option.id ? 0 : -1}
               className={listMode === option.id ? 'active' : ''}
-              onClick={() => chooseMode(option.id)}
+              onClick={(event) => {
+                if (suppressModeClickRef.current) { event.preventDefault(); return; }
+                chooseMode(option.id);
+              }}
               onKeyDown={(event) => moveModeFocus(event, option.id)}
             >
               {option.label}
@@ -204,7 +288,14 @@ export function ChatList(props: {
             </div>
             <div className="conversation-group">
               {pending.map((c) => (
-                <ContactRow key={c.id} c={c} active={false} onClick={() => {}} />
+                <ContactRow
+                  key={c.id}
+                  c={c}
+                  active={false}
+                  onClick={() => {}}
+                  onApprove={() => props.onApprovePending(c.id.slice('pending:'.length))}
+                  onReject={() => props.onRejectPending(c.id.slice('pending:'.length))}
+                />
               ))}
             </div>
           </div>
@@ -216,8 +307,90 @@ export function ChatList(props: {
           </p>
         )}
       </div>
+      <div className="list-bottom-chrome" ref={bottomChromeRef}>
+        <div className="search adaptive-search" role="search">
+          <span className="adaptive-search-icon" aria-hidden><Icon name="search" /></span>
+          <input
+            className="field"
+            placeholder="Search people, agents, apps…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              setQ('');
+            }}
+          />
+        </div>
+        <button type="button" className="icon-btn list-bottom-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
+          <Icon name="invite" size={20} />
+        </button>
+      </div>
     </div>
   );
+}
+
+export function ContactScreen(props: {
+  contact: ContactVM;
+  messages: ChatMessage[];
+  onBack: () => void;
+  onRename: (alias: string) => void;
+  onRemove: () => void;
+  onOpenMessage: (key: string) => void;
+  indexOffset?: number;
+  onSendText: (text: string, replyToWireId?: string) => Promise<string | void>;
+  onSendFile?: (att: PendingAttachment, replyToWireId?: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(props.contact.name);
+  const [showMedia, setShowMedia] = useState(false);
+  const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
+  const renameSettledRef = useRef(false);
+  useEffect(() => {
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || showMedia || previewRec || editing) return;
+      event.preventDefault();
+      props.onBack();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [editing, previewRec, props.onBack, showMedia]);
+  const saveName = () => {
+    if (renameSettledRef.current) return;
+    renameSettledRef.current = true;
+    const next = name.trim();
+    if (next && next !== props.contact.name) props.onRename(next);
+    else setName(props.contact.name);
+    setEditing(false);
+  };
+  return <div className="detail contact-screen">
+    <div className="detail-head contact-screen-head">
+      <button type="button" className="icon-btn detail-back contact-back" aria-label="Back to conversation" onClick={props.onBack}><Icon name="back" /></button>
+      <strong>Contact</strong>
+    </div>
+    <div className="contact-screen-scroll">
+      <section className="contact-hero" aria-labelledby="contact-screen-name">
+        <div className="avatar accent contact-avatar-large" aria-hidden>{props.contact.initials}</div>
+        {editing ? <input id="contact-screen-name" className="field contact-name-input" value={name} autoFocus onChange={(event) => setName(event.target.value)} onBlur={saveName} onKeyDown={(event) => { if (event.key === 'Enter') saveName(); if (event.key === 'Escape') { renameSettledRef.current = true; setName(props.contact.name); setEditing(false); } }} /> : <h2 id="contact-screen-name">{props.contact.name}</h2>}
+        <p><Icon name="lock" size={13} /> End-to-end encrypted connection</p>
+      </section>
+      <section className="contact-action-group" aria-label="Contact actions">
+        <button type="button" onClick={() => setShowMedia(true)}><span><Icon name="paperclip" />Shared photos, files, and links</span><Icon name="chevron" /></button>
+        <button type="button" onClick={() => { renameSettledRef.current = false; setName(props.contact.name); setEditing(true); }}><span><Icon name="edit" />Rename contact</span><Icon name="chevron" /></button>
+      </section>
+      <section className="contact-identity" aria-labelledby="contact-identity-title">
+        <h3 id="contact-identity-title">Verified identity</h3>
+        {props.contact.roleId && <p>Role <strong>{props.contact.roleId}</strong> of <strong>{props.contact.rootName}</strong></p>}
+        <code>{props.contact.id}</code>
+        <button type="button" className="btn sm" onClick={() => void navigator.clipboard.writeText(props.contact.id)}><Icon name="copy" size={14} />Copy identity</button>
+      </section>
+      <button type="button" className="contact-remove" onClick={props.onRemove}><Icon name="trash" />Remove contact</button>
+    </div>
+    {showMedia && <ChatMediaPanel messages={props.messages} indexOffset={props.indexOffset} onClose={() => setShowMedia(false)} onJump={props.onOpenMessage} onPreview={(record) => { setShowMedia(false); setPreviewRec(record); }} />}
+    {previewRec && (isHtmlAttachment(previewRec.filename, previewRec.mime)
+      ? <HtmlPreview rec={previewRec} onClose={() => setPreviewRec(null)} />
+      : <MarkdownPreview rec={previewRec} onClose={() => setPreviewRec(null)} onSendText={props.onSendText} onSendFile={props.onSendFile} />)}
+  </div>;
 }
 
 interface ReplyDraft {
@@ -226,16 +399,21 @@ interface ReplyDraft {
   text: string;
 }
 
+interface OptimisticTimelineSend {
+  key: string;
+  message: ChatMessage;
+  wireId: string | null;
+}
+
 const timelineMessageId = (key: string) => `chat-message-${encodeURIComponent(key)}`;
 
 const reducedMotion = () =>
   typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// Swipe-to-reply: drag a bubble toward screen centre (incoming → right,
-// outgoing → left) to reply, Telegram/WhatsApp style. Touch/pen only — a mouse
-// keeps text-selection + the hover reply button (see .msg-reply, @media hover).
-// touch-action: pan-y lets the browser own vertical scroll while we own the
-// horizontal drag, so the thread never fights the gesture (verified on WebKit).
+// Swipe-to-reply: drag any eligible bubble inward toward the conversation
+// centre. Touch/pen only — a mouse keeps text selection and
+// the hover Reply button. `touch-action: pan-y` leaves vertical scrolling with
+// the browser until the 10px horizontal-intent threshold wins.
 function SwipeReplyRow(props: {
   dir: 'in' | 'out';
   canReply: boolean;
@@ -245,52 +423,111 @@ function SwipeReplyRow(props: {
   rowClass?: string; // full msg-row modifier string (dir + grouping); defaults to dir
 }) {
   const { dir, canReply, onReply } = props;
+  const row = useRef<HTMLDivElement>(null);
   const slider = useRef<HTMLDivElement>(null);
   const cue = useRef<HTMLDivElement>(null);
-  const toCenter = dir === 'out' ? -1 : 1; // sign of a valid (toward-centre) drag
-  const ACTIVATE = 8; // px of travel before we commit to horizontal vs vertical
-  const THRESH = 56; // px to arm the reply
+  const onReplyRef = useRef(onReply);
+  onReplyRef.current = onReply;
+  // Swipe inward toward the conversation: right for a left-aligned incoming
+  // bubble, left for a right-aligned outgoing bubble.
+  const REPLY_DIRECTION = dir === 'in' ? 1 : -1;
+  const THRESH = SWIPE_DISTANCE_PX;
   const MAX = 84; // rubber-band cap
-  const st = useRef({ id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'maybe' | 'drag', armed: false });
+  const idleGesture = () => ({
+    id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'maybe' | 'drag', armed: false,
+    distance: 0, samples: [] as Array<{ x: number; time: number }>,
+  });
+  const st = useRef(idleGesture());
 
   const paint = (dx: number) => {
     const s = slider.current;
     const c = cue.current;
-    if (s) s.style.transform = dx ? `translateX(${dx}px)` : '';
+    const reduce = reducedMotion();
+    if (s) s.style.transform = dx && !reduce ? `translateX(${dx}px)` : '';
     if (c) {
       const p = Math.min(1, Math.abs(dx) / THRESH);
       c.style.opacity = String(p);
-      c.style.transform = `scale(${0.5 + 0.5 * p})`;
+      c.style.transform = reduce ? 'scale(1)' : `scale(${0.5 + 0.5 * p})`;
     }
   };
 
+  const clearGesture = (pointerId: number, commit: boolean) => {
+    const s = st.current;
+    if (s.id !== pointerId) return;
+    const fire = commit && s.mode === 'drag' && shouldCommitReply(s.distance, s.samples);
+    // Clear ownership before releasePointerCapture: releasing can synchronously
+    // dispatch lostpointercapture, whose cleanup must remain idempotent.
+    st.current = idleGesture();
+    slider.current?.classList.remove('swiping');
+    cue.current?.classList.remove('armed');
+    paint(0);
+    const owner = row.current;
+    if (owner?.hasPointerCapture?.(pointerId)) owner.releasePointerCapture(pointerId);
+    if (fire) onReplyRef.current();
+  };
+
+  useEffect(() => {
+    const owner = row.current;
+    if (!owner) return;
+    // React's synthetic lost-capture event is not delivered consistently by
+    // every touch/pen path. Listen at the capture owner as the native source of
+    // truth; the React handler below is a harmless idempotent fallback.
+    const lost = (event: PointerEvent) => clearGesture(event.pointerId, false);
+    owner.addEventListener('lostpointercapture', lost);
+    return () => {
+      owner.removeEventListener('lostpointercapture', lost);
+      const pointerId = st.current.id;
+      if (pointerId !== -1) clearGesture(pointerId, false);
+    };
+  }, []);
+
   const onDown = (e: React.PointerEvent) => {
-    if (!canReply || e.pointerType === 'mouse') return;
-    st.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', armed: false };
+    const target = e.target as Element;
+    const selection = window.getSelection?.();
+    if (!canReply || !e.isPrimary || e.pointerType === 'mouse' || (e.pointerType === 'pen' && e.button !== 0) || st.current.id !== -1
+      || (selection && !selection.isCollapsed)
+      || target.closest('a, button, input, textarea, select, [role="button"], audio, video, img, [draggable="true"], .filecard, .filecard-bubble, .image-bubble, .voice-bubble, .ours-message-file, .attachment')) return;
+    st.current = {
+      id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', armed: false,
+      distance: 0, samples: [{ x: e.clientX * REPLY_DIRECTION, time: e.timeStamp }],
+    };
+    paint(0);
   };
   const onMove = (e: React.PointerEvent) => {
     const s = st.current;
     if (s.id !== e.pointerId || s.mode === 'idle') return;
     const dxr = e.clientX - s.x0;
     const dyr = e.clientY - s.y0;
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed) {
+      clearGesture(e.pointerId, false);
+      return;
+    }
     if (s.mode === 'maybe') {
-      if (Math.abs(dxr) < ACTIVATE && Math.abs(dyr) < ACTIVATE) return;
-      // commit to the drag only if it's horizontal AND toward centre; anything
-      // else (vertical, or a wrong-way drag) releases the gesture back to scroll.
-      if (Math.abs(dxr) > Math.abs(dyr) && Math.sign(dxr) === toCenter) {
+      const intent = classifyReplyIntent(dxr * REPLY_DIRECTION, dyr);
+      if (intent === 'pending') return;
+      // Commit only after horizontal inward intent wins. Until then pan-y
+      // remains browser-owned, preserving native conversation scrolling.
+      if (intent === 'drag') {
         s.mode = 'drag';
+        e.currentTarget.setPointerCapture?.(e.pointerId);
         slider.current?.classList.add('swiping');
       } else {
         s.mode = 'idle';
         return;
       }
     }
-    // magnitude toward centre, rubber-banded past the threshold, hard-capped
-    let d = dxr * toCenter;
+    e.preventDefault();
+    const time = e.timeStamp;
+    s.samples.push({ x: e.clientX * REPLY_DIRECTION, time });
+    s.samples = s.samples.filter((sample) => time - sample.time <= 120);
+    // Inward magnitude, rubber-banded past the threshold and hard-capped.
+    let d = dxr * REPLY_DIRECTION;
     if (d < 0) d = 0;
     if (d > THRESH) d = THRESH + (d - THRESH) * 0.35;
     d = Math.min(d, MAX);
-    const dx = d * toCenter;
+    s.distance = d;
+    const dx = d * REPLY_DIRECTION;
     const armed = Math.abs(dx) >= THRESH;
     if (armed !== s.armed) {
       s.armed = armed;
@@ -301,23 +538,24 @@ function SwipeReplyRow(props: {
   };
   const onUp = (e: React.PointerEvent) => {
     const s = st.current;
-    if (s.id !== e.pointerId) return;
-    const fire = s.mode === 'drag' && s.armed;
-    st.current = { id: -1, x0: 0, y0: 0, mode: 'idle', armed: false };
-    slider.current?.classList.remove('swiping');
-    cue.current?.classList.remove('armed');
-    paint(0); // spring back (transition re-enabled with .swiping removed)
-    if (fire) onReply();
+    if (s.id === e.pointerId && s.mode === 'drag') {
+      s.samples.push({ x: e.clientX * REPLY_DIRECTION, time: e.timeStamp });
+      s.distance = Math.max(0, (e.clientX - s.x0) * REPLY_DIRECTION);
+      s.armed = s.distance >= THRESH;
+    }
+    clearGesture(e.pointerId, true);
   };
 
   return (
     <div
+      ref={row}
       className={'msg-row ' + (props.rowClass ?? dir)}
       style={canReply ? { touchAction: 'pan-y' } : undefined}
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
-      onPointerCancel={onUp}
+      onPointerCancel={(e) => clearGesture(e.pointerId, false)}
+      onLostPointerCapture={(e) => clearGesture(e.pointerId, false)}
     >
       {canReply && (
         <span className="swipe-cue" ref={cue} aria-hidden>
@@ -332,15 +570,289 @@ function SwipeReplyRow(props: {
   );
 }
 
+/**
+ * The timeline is deliberately separated from the composer state below.
+ *
+ * A controlled textarea updates on every keystroke. Keeping the message map in
+ * Conversation made each of those updates rebuild every row, Motion wrapper,
+ * reply control, receipt and file bubble in the mounted history. All props of
+ * this memo boundary remain referentially stable while only the draft changes,
+ * so typing is constant-time with respect to the number of loaded messages.
+ */
+const TimelineRows = memo(function TimelineRows(props: {
+  messages: ChatMessage[];
+  optimisticSend: OptimisticTimelineSend | null;
+  sentKeys: ReadonlyMap<string, string>;
+  hiddenEarlier: number;
+  unreadWireId?: string;
+  roomLines: ReadonlyMap<ChatMessage, RoomLine | null>;
+  contactCid: string;
+  contactName: string;
+  onStartReply: (reply: ReplyDraft) => void;
+  onPreview: (record: FileRecord) => void;
+  onFetchFile?: (wireId: string) => Promise<void>;
+}) {
+  const {
+    messages, optimisticSend, sentKeys, hiddenEarlier, unreadWireId,
+    roomLines, contactCid, contactName, onStartReply, onPreview, onFetchFile,
+  } = props;
+  const byWireId = new Map<string, ChatMessage>();
+  for (const message of messages) if (message.wireId) byWireId.set(message.wireId, message);
+  const roomLineOf = (message: ChatMessage): RoomLine | null => roomLines.get(message) ?? null;
+  const authorOf = (message: ChatMessage) => {
+    if (message.dir === 'out') return 'You';
+    const room = roomLineOf(message);
+    if (room) return room.variant === 'chat' ? room.author : contactName;
+    return contactName;
+  };
+  const previewText = (message: ChatMessage): string => {
+    if (message.kind === 'file') {
+      if (message.mime?.startsWith('image/')) return 'Photo';
+      if (isVoiceNote(message.mime ?? '', message.filename ?? '')) return 'Voice message';
+      return message.filename || 'File';
+    }
+    const room = roomLineOf(message);
+    return room ? room.text || roomMessagePreview(room) : message.text;
+  };
+  const quoteFor = (message: ChatMessage): { author: string; text: string } | null => {
+    if (!message.replyTo) return null;
+    const source = byWireId.get(message.replyTo.wireId);
+    return source
+      ? { author: authorOf(source), text: previewText(source) }
+      : { author: '', text: 'Original message' };
+  };
+  const startReply = (message: ChatMessage) => {
+    if (!message.wireId) return;
+    onStartReply({ wireId: message.wireId, author: authorOf(message), text: previewText(message) });
+  };
+  const speaker = (message?: ChatMessage) => {
+    if (!message) return null;
+    const line = roomLineOf(message);
+    if (line) {
+      return line.variant === 'system'
+        ? 'room:system'
+        : `room:chat:${line.author}\u001f${line.role}`;
+    }
+    return message.dir;
+  };
+
+  return (
+    <AnimatePresence initial={false}>
+      {messages.map((message, index) => {
+        const key = message === optimisticSend?.message
+          ? optimisticSend.key
+          : (message.wireId && sentKeys.get(message.wireId))
+            || message.wireId
+            || `${message.date}-${hiddenEarlier + index}`;
+        const domId = timelineMessageId(message.wireId || key);
+        const previous = messages[index - 1];
+        const next = messages[index + 1];
+        const room = roomLineOf(message);
+        const currentSpeaker = speaker(message);
+        const continuedAbove = !!previous && speaker(previous) === currentSpeaker && currentSpeaker !== 'room:system';
+        const continuedBelow = !!next && speaker(next) === currentSpeaker && currentSpeaker !== 'room:system';
+        const groupClass =
+          (message.dir === 'out' ? 'out' : 'in')
+          + (continuedAbove ? ' cont-top' : '')
+          + (continuedBelow ? ' cont-bot' : '');
+        const replyButton = message.wireId ? (
+          <button className="msg-reply" title="Reply" onClick={() => startReply(message)}>
+            <Icon name="reply" size={15} />
+          </button>
+        ) : null;
+        const unreadDivider = message.wireId === unreadWireId
+          ? <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>
+          : null;
+
+        if (room && room.variant === 'system') {
+          const presentation = room.presentation ?? 'system';
+          return (
+            <motion.div
+              className="message-motion"
+              key={key}
+              id={domId}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={interfaceSpring}
+            >
+              {unreadDivider}
+              <div className={`room-system room-${presentation}-card`} role="note">
+                {room.label && <span className="room-system-label">{room.label}</span>}
+                {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
+                <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
+                {!!room.details?.length && (
+                  <ul className="room-card-details" aria-label="Room event details">
+                    {room.details.map((detail) => <li key={detail}>{detail}</li>)}
+                  </ul>
+                )}
+                <span className="room-card-provenance">
+                  {room.authoredBy && <span className="room-card-author">{room.authoredBy}</span>}
+                  <span className="room-system-at">{fmtTime(message.date)}</span>
+                </span>
+              </div>
+            </motion.div>
+          );
+        }
+
+        if (message.kind === 'file') {
+          const record: FileRecord = fileRecord(message.wireId) ?? {
+            id: message.wireId,
+            dir: message.dir,
+            filename: message.filename ?? 'file',
+            mime: message.mime ?? 'application/octet-stream',
+            size: 0,
+            date: message.date,
+          };
+          return (
+            <motion.div
+              className="message-motion"
+              key={key}
+              id={domId}
+              initial={{ opacity: 0, y: 12, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={interfaceSpring}
+            >
+              {unreadDivider}
+              <SwipeReplyRow
+                dir={message.dir === 'out' ? 'out' : 'in'}
+                rowClass={groupClass}
+                canReply={!!message.wireId}
+                onReply={() => startReply(message)}
+                after={replyButton}
+              >
+                <div className={`ours-message ours-message-file ours-message--${message.dir}`}>
+                  <FileBubble
+                    rec={record}
+                    receipt={message.receipt}
+                    receiptless={message.receiptless}
+                    onPreview={onPreview}
+                    onFetch={onFetchFile}
+                  />
+                </div>
+              </SwipeReplyRow>
+            </motion.div>
+          );
+        }
+
+        if (message.typed) {
+          const request = message.typed.kind === 'command_result' && message.replyTo
+            ? byWireId.get(message.replyTo.wireId)
+            : undefined;
+          const correlatedResult = message.typed.kind === 'command_result' && message.dir === 'in'
+            && message.peerCid === contactCid && request?.dir === 'out' && request.peerCid === contactCid
+            && request.typed?.kind === 'command';
+          const failureCode = message.typed.kind === 'command_result' && !message.typed.outcome.ok
+            ? message.typed.outcome.error.toLowerCase()
+            : '';
+          const state = message.typed.kind === 'command'
+            ? (message.dir === 'out' ? 'Accepted · pending result' : 'Received command')
+            : message.typed.kind === 'unknown'
+              ? 'Safe failure'
+              : message.dir === 'out' ? 'Result sent'
+                : !correlatedResult ? 'Unmatched result · safe failure'
+                  : failureCode === 'validation_denied' || failureCode === 'validation_failed' ? 'Validation denied'
+                    : failureCode === 'policy_denied' || failureCode === 'unauthorized' || failureCode === 'forbidden' ? 'Policy denied'
+                      : message.typed.outcome.ok ? 'Completed' : 'Failed';
+          const title = message.typed.kind === 'command'
+            ? message.typed.command
+            : message.typed.kind === 'command_result'
+              ? `Result for ${correlatedResult && request?.typed?.kind === 'command' ? request.typed.command : 'unmatched command'}`
+              : `Unsupported ${message.typed.wire_kind}`;
+          const detail = message.typed.kind === 'command' ? message.typed.arguments
+            : message.typed.kind === 'command_result' ? message.typed.outcome
+              : { safe_failure: message.typed.malformed ? 'Malformed typed message' : 'Future typed message preserved' };
+          return (
+            <motion.div
+              className="message-motion"
+              key={key}
+              id={domId}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={interfaceSpring}
+            >
+              {unreadDivider}
+              <SwipeReplyRow
+                dir={message.dir}
+                rowClass={groupClass}
+                canReply={!!message.wireId}
+                onReply={() => startReply(message)}
+                after={replyButton}
+              >
+                <div className={`ours-message typed-message ours-message--${message.dir}`}>
+                  <div className="typed-message-kind">{message.typed.kind === 'command' ? 'Command' : message.typed.kind === 'command_result' ? 'Result' : 'Typed message'}</div>
+                  <strong>{title}</strong>
+                  <div className="typed-message-state" role="status">{state}</div>
+                  <pre>{JSON.stringify(detail, null, 2)}</pre>
+                  <div className="bubble-at">{fmtTime(message.date)}{message.dir === 'out' && <MessageReceipt receipt={message.receipt} receiptless={message.receiptless} />}</div>
+                </div>
+              </SwipeReplyRow>
+            </motion.div>
+          );
+        }
+
+        const quote = quoteFor(message);
+        return (
+          <motion.div
+            className="message-motion"
+            key={key}
+            id={domId}
+            initial={{ opacity: 0, y: 12, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={interfaceSpring}
+          >
+            {unreadDivider}
+            <SwipeReplyRow
+              dir={message.dir === 'out' ? 'out' : 'in'}
+              rowClass={groupClass}
+              canReply={!!message.wireId}
+              onReply={() => startReply(message)}
+              after={replyButton}
+            >
+              <div className={`ours-message ours-message--${message.dir}`}>
+                {quote && (
+                  <div className="quote">
+                    {quote.author && <span className="quote-author">{quote.author}</span>}
+                    <span className="quote-text">{quote.text}</span>
+                  </div>
+                )}
+                {room && !continuedAbove && (
+                  <>
+                    {room.roomName && <div className="room-message-room">{room.roomName}</div>}
+                    <div className="room-author">
+                      <span className="room-author-name">{room.author}</span>
+                      {room.role && <span className="room-author-role">{room.role}</span>}
+                    </div>
+                  </>
+                )}
+                <MessageMarkdown text={room ? room.text : message.text} />
+                <div className="bubble-at">
+                  {fmtTime(message.date)}
+                  {message.dir === 'out' && <MessageReceipt receipt={message.receipt} receiptless={message.receiptless} />}
+                </div>
+              </div>
+            </SwipeReplyRow>
+          </motion.div>
+        );
+      })}
+    </AnimatePresence>
+  );
+});
+
 export function Conversation(props: {
   identityCid?: string;
   contact: ContactVM | null;
   // A bounded page of the history, newest-last. `hiddenEarlier` is how many
   // older entries exist above the page; onLoadEarlier widens the window.
   messages: ChatMessage[];
+  unreadOpen?: { wireId: string; count: number } | null;
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
   onBack: () => void;
+  onOpenContact?: () => void;
   /** Resolves with the canonical wire id of the delivered message when it has one. */
   onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<string | void>;
   onLoadCommands?: (contactCid: string, signal?: AbortSignal) => Promise<CommandCatalog>;
@@ -350,7 +862,9 @@ export function Conversation(props: {
   ) => Promise<SendCommandResult>;
   /** Canonical state is still catching up: shown inline, never as a screen. */
   syncing?: 'connecting' | 'updating' | null;
-  onRemove: () => void;
+  /** @deprecated Contact management lives on ContactScreen. */
+  onRemove?: () => void;
+  /** @deprecated Contact management lives on ContactScreen. */
   onRename?: (alias: string) => void;
   onDraftChange?: (hasText: boolean) => void;
   emptyOverride?: ReactNode;
@@ -364,9 +878,7 @@ export function Conversation(props: {
   // locally rendered bubble and the server-confirmed message that replaces it
   // share a key and are never both on screen. `wireId` is filled in when the
   // send resolves and is what the confirmation is recognised by.
-  const [optimisticSend, setOptimisticSend] = useState<
-    { key: string; message: ChatMessage; wireId: string | null } | null
-  >(null);
+  const [optimisticSend, setOptimisticSend] = useState<OptimisticTimelineSend | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unknownSend, setUnknownSend] = useState<{
     draft: string;
@@ -375,16 +887,12 @@ export function Conversation(props: {
     wireIds: ReadonlySet<string>;
   } | null>(null);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
-  // header: inline rename + the verified-identity popover
-  const [editingName, setEditingName] = useState<string | null>(null);
-  const [showIdCard, setShowIdCard] = useState(false);
   // attachments: picked/recorded file awaiting send; active voice recording
   const [pendingAtt, setPendingAtt] = useState<PendingAttachment | null>(null);
   const [voiceActive, setVoiceActive] = useState(false); // hold-to-record in progress
   const [sendingFile, setSendingFile] = useState(false);
   const [processingFile, setProcessingFile] = useState(false);
   const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
-  const [showSharedMedia, setShowSharedMedia] = useState(false);
   const [commandCatalog, setCommandCatalog] = useState<CommandCatalog | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
@@ -392,8 +900,15 @@ export function Conversation(props: {
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const detailHeadRef = useRef<HTMLDivElement>(null);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const messageScrollRef = useRef<HTMLDivElement>(null);
+  const unreadPlacedRef = useRef(false);
+  const [jumpLatest, setJumpLatest] = useState(false);
+  const [newSinceAway, setNewSinceAway] = useState(0);
+  const jumpMeasureFrameRef = useRef<number | null>(null);
   const pinnedToBottomRef = useRef(true);
   const previousContactRef = useRef<string | null>(null);
   const fileReadGenerationRef = useRef(0);
@@ -409,22 +924,60 @@ export function Conversation(props: {
   const followTargetRef = useRef<number | null>(null);
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
-
+  const newestMessageRef = useRef<string | null>(null);
+  const measuredDraftRef = useRef('');
+  useLayoutEffect(() => {
+    const detail = detailRef.current;
+    const head = detailHeadRef.current;
+    const composer = composerWrapRef.current;
+    if (!detail || !head || !composer) return;
+    let headHeight = -1;
+    let composerHeight = -1;
+    let reserveFrame: number | null = null;
+    const measure = () => {
+      const nextHead = Math.round(head.getBoundingClientRect().height);
+      const nextComposer = Math.round(composer.getBoundingClientRect().height);
+      if (nextHead !== headHeight) {
+        headHeight = nextHead;
+        detail.style.setProperty('--conversation-head-height', `${nextHead}px`);
+      }
+      if (nextComposer !== composerHeight) {
+        const preserveBottom = pinnedToBottomRef.current;
+        composerHeight = nextComposer;
+        detail.style.setProperty('--conversation-compose-height', `${nextComposer}px`);
+        if (preserveBottom) {
+          if (reserveFrame !== null) cancelAnimationFrame(reserveFrame);
+          reserveFrame = requestAnimationFrame(() => {
+            reserveFrame = null;
+            const scroller = messageScrollRef.current;
+            if (scroller && pinnedToBottomRef.current) scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+          });
+        }
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(head);
+    observer.observe(composer);
+    return () => {
+      observer.disconnect();
+      if (reserveFrame !== null) cancelAnimationFrame(reserveFrame);
+      detail.style.removeProperty('--conversation-head-height');
+      detail.style.removeProperty('--conversation-compose-height');
+    };
+  }, [contact?.id]);
   useEffect(() => {
     setDraft('');
     setError(null);
     setUnknownSend(null);
     setOptimisticSend(null);
     setReplyTo(null);
-    setEditingName(null);
-    setShowIdCard(false);
     setPendingAtt(null);
     setVoiceActive(false);
     setSendingFile(false);
     setProcessingFile(false);
     fileReadGenerationRef.current += 1;
     setPreviewRec(null);
-    setShowSharedMedia(false);
     commandLoadRef.current?.abort();
     setCommandCatalog(null);
     setCommandOpen(false);
@@ -497,10 +1050,18 @@ export function Conversation(props: {
   useLayoutEffect(() => {
     const input = composerInputRef.current;
     if (!input) return;
-    input.style.height = '0px';
-    const height = Math.max(44, Math.min(input.scrollHeight, 132));
-    input.style.height = `${height}px`;
-    input.style.overflowY = input.scrollHeight > 132 ? 'auto' : 'hidden';
+    // Appending ordinary typed characters can only preserve or grow the text
+    // area. Avoid collapsing it to zero first: that forced a second synchronous
+    // layout of the entire conversation for every key. Edits/deletions still
+    // reset once so the control can shrink correctly.
+    const appendOnly = draft.startsWith(measuredDraftRef.current);
+    if (!appendOnly) input.style.height = '0px';
+    const contentHeight = input.scrollHeight;
+    const height = Math.max(44, Math.min(contentHeight, 132));
+    const nextHeight = `${height}px`;
+    if (input.style.height !== nextHeight) input.style.height = nextHeight;
+    input.style.overflowY = contentHeight > 132 ? 'auto' : 'hidden';
+    measuredDraftRef.current = draft;
   }, [draft, contact?.id]);
 
   // Following the newest message is a movement, not a teleport. Assigning
@@ -523,6 +1084,18 @@ export function Conversation(props: {
     else scroller.scrollTop = target;
   };
 
+  const measureJumpLatest = () => {
+    if (jumpMeasureFrameRef.current !== null) return;
+    jumpMeasureFrameRef.current = requestAnimationFrame(() => {
+      jumpMeasureFrameRef.current = null;
+      const scroller = messageScrollRef.current;
+      if (!scroller) return;
+      const away = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 48;
+      setJumpLatest(away);
+      if (!away) setNewSinceAway(0);
+    });
+  };
+
   // The custom timeline owns its scroll behavior. Every opened/switched thread
   // starts at the newest message. Subsequent messages follow only while the
   // reader is already near the bottom, so reading history is never interrupted.
@@ -536,8 +1109,13 @@ export function Conversation(props: {
     const scroller = messageScrollRef.current;
     if (!scroller) return;
     const switched = previousContactRef.current !== contact.id;
-    const grew = displayMessages.length !== messageCountRef.current;
+    const previousCount = messageCountRef.current;
+    const grew = displayMessages.length !== previousCount;
+    const newestMessage = displayMessages.at(-1);
+    const newestKey = newestMessage ? (newestMessage.wireId || `${newestMessage.date}:${newestMessage.text}`) : null;
+    const previousNewest = newestMessageRef.current;
     messageCountRef.current = displayMessages.length;
+    newestMessageRef.current = newestKey;
     // When nothing was added the scroller itself is the authority on where the
     // reader is. Scroll events arrive a frame late, and this component
     // re-renders on every refresh, so a stale "pinned" left over from before
@@ -548,9 +1126,25 @@ export function Conversation(props: {
     if (switched || pinnedToBottomRef.current) {
       followBottom(grew && !switched && previousContactRef.current !== null);
       pinnedToBottomRef.current = true;
+    } else if (grew && displayMessages.length > previousCount && newestKey !== previousNewest) {
+      const previousIndex = previousNewest === null ? -1 : displayMessages.findIndex((message) =>
+        (message.wireId || `${message.date}:${message.text}`) === previousNewest);
+      setNewSinceAway((count) => count + Math.max(1, displayMessages.length - Math.max(0, previousIndex + 1)));
     }
     previousContactRef.current = contact.id;
+    measureJumpLatest();
   }, [contact, displayMessages.length]);
+
+  useLayoutEffect(() => {
+    if (unreadPlacedRef.current || !props.unreadOpen || window.location.hash.startsWith('#chat-message-')) return;
+    const scroller = messageScrollRef.current;
+    const target = document.getElementById(`unread-${timelineMessageId(props.unreadOpen.wireId)}`);
+    if (!scroller || !target) return;
+    scroller.scrollTop = Math.max(0, target.offsetTop - 16);
+    pinnedToBottomRef.current = false;
+    unreadPlacedRef.current = true;
+    measureJumpLatest();
+  }, [props.unreadOpen, displayMessages.length]);
 
   useLayoutEffect(() => {
     const hash = window.location.hash;
@@ -589,13 +1183,17 @@ export function Conversation(props: {
       // is not a new message: follow it instantly, unless an animated follow is
       // already running, in which case retarget it instead of cutting it off.
       if (pinnedToBottomRef.current) followBottom(followTargetRef.current !== null);
+      measureJumpLatest();
     });
     observer.observe(content);
     // Composer/reply rows and mobile browser chrome resize the viewport without
     // changing the timeline content. Observe both boxes so an intentionally
     // pinned reader stays on the newest message through those interactions.
     observer.observe(scroller);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (jumpMeasureFrameRef.current !== null) cancelAnimationFrame(jumpMeasureFrameRef.current);
+    };
   }, [contact?.id]);
 
   const acceptFile = async (f: File) => {
@@ -651,10 +1249,6 @@ export function Conversation(props: {
     return () => onDraftChange?.(false);
   }, [draft, sending, onDraftChange]);
 
-  // Resolve a message's reply pointer (wire id) back to the quoted message we
-  // still hold, so the bubble can render the author + snippet.
-  const byWireId = new Map<string, ChatMessage>();
-  for (const m of displayMessages) if (m.wireId) byWireId.set(m.wireId, m);
   // A cowork room relays every message as a signed JSON body, so this is where a
   // room conversation stops being a wall of JSON: the body becomes an author +
   // role + what they said, and the room's own notices become system lines. Any
@@ -668,36 +1262,13 @@ export function Conversation(props: {
         message,
         message.kind === 'file'
           ? null
-          : roomLineForContact(contact?.announcedName ?? '', message.text),
+          : message.dir === 'in'
+            ? roomLineForContact(contact?.announcedName ?? '', message.text)
+            : null,
       );
     }
     return lines;
   }, [displayMessages, contact?.announcedName]);
-  const roomLineOf = (m: ChatMessage): RoomLine | null => roomLines.get(m) ?? null;
-  const authorOf = (m: ChatMessage) => {
-    if (m.dir === 'out') return 'You';
-    const room = roomLineOf(m);
-    if (room) return room.variant === 'chat' ? room.author : contact?.name ?? 'Them';
-    return contact?.name ?? 'Them';
-  };
-  // A short label for the reply-bar + quote snippet — text for text messages, a
-  // type label for files/photos/voice (their text summary is empty), so replying
-  // to a file bubble quotes "Photo"/"Voice message"/filename, not a blank line.
-  const msgPreviewText = (m: ChatMessage): string => {
-    if (m.kind === 'file') {
-      if (m.mime?.startsWith('image/')) return 'Photo';
-      if (isVoiceNote(m.mime ?? '', m.filename ?? '')) return 'Voice message';
-      return m.filename || 'File';
-    }
-    const room = roomLineOf(m);
-    // Quoting a room message quotes what was SAID, not the envelope it arrived in.
-    return room ? room.text || roomMessagePreview(room) : m.text;
-  };
-  const quoteFor = (m: ChatMessage): { author: string; text: string } | null => {
-    if (!m.replyTo) return null;
-    const src = byWireId.get(m.replyTo.wireId);
-    return src ? { author: authorOf(src), text: msgPreviewText(src) } : { author: '', text: 'Original message' };
-  };
 
   if (!contact) {
     if (props.emptyOverride) return <>{props.emptyOverride}</>;
@@ -792,51 +1363,15 @@ export function Conversation(props: {
     && draft === unknownSend.draft
     && (replyTo?.wireId ?? undefined) === unknownSend.reply?.wireId;
 
-  // A message can only be replied to once it has a wire id (pre-1.4 entries
-  // restored from an old backup have none).
-  const startReply = (m: ChatMessage) => {
-    if (!m.wireId) return;
-    setReplyTo({ wireId: m.wireId, author: authorOf(m), text: msgPreviewText(m) });
-  };
-
   return (
-    <div className="detail detail-chat">
-      <div className="detail-head">
+    <div className="detail detail-chat" ref={detailRef}>
+      <div className="detail-head" ref={detailHeadRef}>
         <div className="conv-peer">
-          <button className="icon-btn detail-back" onClick={props.onBack}>
+          <button className="icon-btn detail-back" aria-label="Back to conversations" onClick={props.onBack}>
             <Icon name="back" />
           </button>
-          <div className="avatar accent">{contact.initials}</div>
-          <div className="conv-peer-meta">
-            {editingName !== null ? (
-              <input
-                className="field name-edit"
-                value={editingName}
-                autoFocus
-                placeholder={contact.name}
-                onChange={(e) => setEditingName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    props.onRename?.(editingName);
-                    setEditingName(null);
-                  } else if (e.key === 'Escape') setEditingName(null);
-                }}
-                onBlur={() => setEditingName(null)}
-              />
-            ) : (
-              <div className="conv-peer-name">
-                {contact.name}
-                {props.onRename && (
-                  <button
-                    className="icon-btn name-pencil"
-                    title="Rename (only changes how they appear to you)"
-                    onClick={() => setEditingName(contact.name)}
-                  >
-                    <Icon name="edit" size={13} />
-                  </button>
-                )}
-              </div>
-            )}
+          <div className="conv-peer-status">
+            <span className="conv-peer-name">{contact.name}</span>
             {/* Opening the app from a notification lands here before the
                 messages do. An empty thread with no explanation reads as a
                 lost message, so the header says what is happening — inline,
@@ -847,53 +1382,10 @@ export function Conversation(props: {
                 {props.syncing === 'connecting' ? 'Connecting…' : 'Updating…'}
               </div>
             )}
-            {/* Delegation + id demoted to a verification badge — tap for the
-                full story. The raw 'role X of Y' subtitle read like a broken
-                name; it is actually the anti-impersonation proof. */}
-            {!props.syncing && (contact.roleId ? (
-              <button className="idchip" onClick={() => setShowIdCard(true)}>
-                <Icon name="shield" size={11} />
-                verified role of {contact.rootName}
-              </button>
-            ) : (
-              contact.status !== 'pending' && (
-                <button className="idchip quiet" onClick={() => setShowIdCard(true)}>
-                  <Icon name="lock" size={11} />
-                  verified identity
-                </button>
-              )
-            ))}
+            {!props.syncing && <span className="conv-contact-status"><Icon name="lock" size={11} />Encrypted connection</span>}
           </div>
-        </div>
-        {showIdCard && (
-          <>
-            <div className="pop-backdrop" onClick={() => setShowIdCard(false)} />
-            <div className="idcard anim-scale">
-              <h4>Verified identity</h4>
-              {contact.roleId && (
-                <p>
-                  This is the role <strong>“{contact.roleId}”</strong> of{' '}
-                  <strong>{contact.rootName}</strong> — the link is cryptographically signed, not
-                  self-declared.
-                </p>
-              )}
-              <div className="idcard-fp mono">{contact.id}</div>
-              <p className="idcard-note">
-                This id is the fingerprint of their key. Names are what people show you; the
-                fingerprint is what guarantees you&apos;re always talking to the same identity — no
-                one can impersonate it. Renaming only changes how they appear to you.
-              </p>
-            </div>
-          </>
-        )}
-        <div className="conv-actions">
-          <button className="btn sm" title="Shared photos, files, and links" onClick={() => setShowSharedMedia(true)}>
-            <Icon name="paperclip" size={14} />
-            Media
-          </button>
-          <button className="btn sm danger" title="Remove contact" onClick={props.onRemove}>
-            <Icon name="trash" size={14} />
-            Remove
+          <button type="button" className="conv-contact-trigger conv-contact-avatar" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
+            <span className="conv-contact-initials" aria-hidden>{contact.initials}</span>
           </button>
         </div>
       </div>
@@ -901,6 +1393,8 @@ export function Conversation(props: {
         key={contact.id}
         className="messages"
         ref={messageScrollRef}
+        tabIndex={-1}
+        aria-label="Conversation timeline"
         onScroll={(e) => {
           const el = e.currentTarget;
           const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
@@ -923,6 +1417,7 @@ export function Conversation(props: {
             followTopRef.current = null;
           }
           pinnedToBottomRef.current = distance <= 48;
+          measureJumpLatest();
         }}
         // Any deliberate gesture hands scrolling back to the reader, even
         // mid-animation, so an interrupted follow can never latch.
@@ -962,195 +1457,38 @@ export function Conversation(props: {
               their bytes independently by wire id; ordering stays exact. Keys
               use the ABSOLUTE history index so loading earlier entries never
               re-keys (and never re-animates) the ones already on screen. */}
-          <AnimatePresence initial={false}>
-            {displayMessages.map((m, i) => {
-              // A message the reader has already seen keeps its element for as
-              // long as it is on screen: a confirmed send inherits the key its
-              // own optimistic bubble used, so the swap is a re-render and not
-              // an exit + enter that would briefly double the row.
-              const key = m === optimisticSend?.message
-                ? optimisticSend.key
-                : (m.wireId && sentKeysRef.current.get(m.wireId))
-                  || m.wireId
-                  || `${m.date}-${(props.hiddenEarlier ?? 0) + i}`;
-              // The anchor stays addressable by wire id — that is what push
-              // notification deep links and reply jumps resolve.
-              const domId = timelineMessageId(m.wireId || key);
-              const prev = displayMessages[i - 1];
-              const next = displayMessages[i + 1];
-              const room = roomLineOf(m);
-              // A system line breaks the bubble run on either side of it, and a
-              // room chat line groups by SPEAKER — consecutive members are
-              // different people arriving on the same 'in' side.
-              const speaker = (x?: ChatMessage) => {
-                if (!x) return null;
-                const line = roomLineOf(x);
-                if (line) {
-                  return line.variant === 'system'
-                    ? 'room:system'
-                    : `room:chat:${line.author}\u001f${line.role}`;
-                }
-                return x.dir;
-              };
-              const me = speaker(m);
-              const contTop = !!prev && speaker(prev) === me && me !== 'room:system';
-              const contBot = !!next && speaker(next) === me && me !== 'room:system';
-              const grpCls =
-                (m.dir === 'out' ? 'out' : 'in') + (contTop ? ' cont-top' : '') + (contBot ? ' cont-bot' : '');
-              const replyButton = m.wireId ? (
-                <button className="msg-reply" title="Reply" onClick={() => startReply(m)}>
-                  <Icon name="reply" size={15} />
-                </button>
-              ) : null;
-
-              // The room speaking in its own voice — a briefing, a membership
-              // change, an operator notice. Centred, unbubbled, unmistakably
-              // not a person talking, and never replied to.
-              if (room && room.variant === 'system') {
-                return (
-                  <motion.div
-                    className="message-motion"
-                    key={key}
-                    id={domId}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    <div className="room-system" role="note">
-                      {room.label && <span className="room-system-label">{room.label}</span>}
-                      <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
-                      <span className="room-system-at">{fmtTime(m.date)}</span>
-                    </div>
-                  </motion.div>
-                );
-              }
-
-              if (m.kind === 'file') {
-                const rec: FileRecord = fileRecord(m.wireId) ?? {
-                  id: m.wireId,
-                  dir: m.dir,
-                  filename: m.filename ?? 'file',
-                  mime: m.mime ?? 'application/octet-stream',
-                  size: 0,
-                  date: m.date,
-                };
-                return (
-                  <motion.div
-                    className="message-motion"
-                    key={key}
-                    id={domId}
-                    initial={{ opacity: 0, y: 12, scale: 0.985 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    <SwipeReplyRow
-                      dir={m.dir === 'out' ? 'out' : 'in'}
-                      rowClass={grpCls}
-                      canReply={!!m.wireId}
-                      onReply={() => startReply(m)}
-                      after={replyButton}
-                    >
-                      <div className={`ours-message ours-message-file ours-message--${m.dir}`}>
-                        <FileBubble rec={rec} receipt={m.receipt} receiptless={m.receiptless} onPreview={setPreviewRec} onFetch={props.onFetchFile} />
-                      </div>
-                    </SwipeReplyRow>
-                  </motion.div>
-                );
-              }
-
-              if (m.typed) {
-                const request = m.typed.kind === 'command_result' && m.replyTo
-                  ? byWireId.get(m.replyTo.wireId)
-                  : undefined;
-                const correlatedResult = m.typed.kind === 'command_result' && m.dir === 'in'
-                  && m.peerCid === contact?.id && request?.dir === 'out' && request.peerCid === contact?.id
-                  && request.typed?.kind === 'command';
-                const failureCode = m.typed.kind === 'command_result' && !m.typed.outcome.ok
-                  ? m.typed.outcome.error.toLowerCase()
-                  : '';
-                const state = m.typed.kind === 'command'
-                  ? (m.dir === 'out' ? 'Accepted · pending result' : 'Received command')
-                  : m.typed.kind === 'unknown'
-                    ? 'Safe failure'
-                    : m.dir === 'out' ? 'Result sent'
-                      : !correlatedResult ? 'Unmatched result · safe failure'
-                        : failureCode === 'validation_denied' || failureCode === 'validation_failed' ? 'Validation denied'
-                          : failureCode === 'policy_denied' || failureCode === 'unauthorized' || failureCode === 'forbidden' ? 'Policy denied'
-                            : m.typed.outcome.ok ? 'Completed' : 'Failed';
-                const title = m.typed.kind === 'command'
-                  ? m.typed.command
-                  : m.typed.kind === 'command_result'
-                    ? `Result for ${correlatedResult && request?.typed?.kind === 'command' ? request.typed.command : 'unmatched command'}`
-                    : `Unsupported ${m.typed.wire_kind}`;
-                const detail = m.typed.kind === 'command' ? m.typed.arguments
-                  : m.typed.kind === 'command_result' ? m.typed.outcome
-                    : { safe_failure: m.typed.malformed ? 'Malformed typed message' : 'Future typed message preserved' };
-                return <motion.div className="message-motion" key={key} id={domId}
-                  initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                  <SwipeReplyRow dir={m.dir} rowClass={grpCls} canReply={!!m.wireId} onReply={() => startReply(m)} after={replyButton}>
-                    <div className={`ours-message typed-message ours-message--${m.dir}`}>
-                      <div className="typed-message-kind">{m.typed.kind === 'command' ? 'Command' : m.typed.kind === 'command_result' ? 'Result' : 'Typed message'}</div>
-                      <strong>{title}</strong>
-                      <div className="typed-message-state" role="status">{state}</div>
-                      <pre>{JSON.stringify(detail, null, 2)}</pre>
-                      <div className="bubble-at">{fmtTime(m.date)}{m.dir === 'out' && <MessageReceipt receipt={m.receipt} receiptless={m.receiptless} />}</div>
-                    </div>
-                  </SwipeReplyRow>
-                </motion.div>;
-              }
-
-              const quote = quoteFor(m);
-              return (
-                <motion.div
-                  className="message-motion"
-                  key={key}
-                  id={domId}
-                  initial={{ opacity: 0, y: 12, scale: 0.985 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.98 }}
-                  transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <SwipeReplyRow
-                    dir={m.dir === 'out' ? 'out' : 'in'}
-                    rowClass={grpCls}
-                    canReply={!!m.wireId}
-                    onReply={() => startReply(m)}
-                    after={replyButton}
-                  >
-                    <div className={`ours-message ours-message--${m.dir}`}>
-                      {quote && (
-                        <div className="quote">
-                          {quote.author && <span className="quote-author">{quote.author}</span>}
-                          <span className="quote-text">{quote.text}</span>
-                        </div>
-                      )}
-                      {/* Room chat: who is speaking, in what role. The header is
-                          dropped on a continuation so a run by one member reads
-                          as one turn. In an anonymous room this name is the
-                          ALIAS the server put on the wire — the real identity
-                          never reaches the client. */}
-                      {room && !contTop && (
-                        <div className="room-author">
-                          <span className="room-author-name">{room.author}</span>
-                          {room.role && <span className="room-author-role">{room.role}</span>}
-                        </div>
-                      )}
-                      <MessageMarkdown text={room ? room.text : m.text} />
-                      <div className="bubble-at">
-                        {fmtTime(m.date)}
-                        {m.dir === 'out' && <MessageReceipt receipt={m.receipt} receiptless={m.receiptless} />}
-                      </div>
-                    </div>
-                  </SwipeReplyRow>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
+          <TimelineRows
+            messages={displayMessages}
+            optimisticSend={optimisticSend}
+            sentKeys={sentKeysRef.current}
+            hiddenEarlier={props.hiddenEarlier ?? 0}
+            unreadWireId={props.unreadOpen?.wireId}
+            roomLines={roomLines}
+            contactCid={contact.id}
+            contactName={contact.name}
+            onStartReply={setReplyTo}
+            onPreview={setPreviewRec}
+            onFetchFile={props.onFetchFile}
+          />
           <div className="thread-end" aria-hidden />
         </div>
       </div>
+      {jumpLatest && (
+        <button
+          type="button"
+          className="jump-latest btn sm"
+          aria-label={newSinceAway ? `Jump to latest, ${newSinceAway} new messages` : 'Jump to latest'}
+          onClick={(event) => {
+            const restoreFocus = event.currentTarget === document.activeElement;
+            setNewSinceAway(0);
+            followBottom(true);
+            if (restoreFocus) requestAnimationFrame(() => messageScrollRef.current?.focus({ preventScroll: true }));
+          }}
+        >
+          <span>Jump to latest</span>
+          {!!newSinceAway && <span className="jump-latest-count" aria-live="polite">{newSinceAway}</span>}
+        </button>
+      )}
       {error && (
         <div className="banner error" role="alert">
           {error}
@@ -1163,12 +1501,13 @@ export function Conversation(props: {
           )}
         </div>
       )}
-      <div className="composer-wrap">
-        {commandBusy && !commandOpen && <div className="command-status" role="status" aria-live="polite">Loading recipient commands…</div>}
+      <div className="composer-wrap" ref={composerWrapRef}>
+        {commandBusy && !commandOpen && <div className="command-status pending" data-state="pending" role="status" aria-live="polite">Loading commands for {contact.name}…</div>}
         {commandOpen && commandCatalog && props.onSendCommand && (
           <CommandPanel
             key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
             catalog={commandCatalog}
+            recipientName={contact.name}
             storageScope={props.identityCid ?? 'unknown-identity'}
             busy={commandBusy}
             onRefresh={() => void loadCommands()}
@@ -1212,7 +1551,8 @@ export function Conversation(props: {
             <button ref={commandTriggerRef} type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
               aria-label="Recipient commands" aria-expanded={commandOpen}
               disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : void loadCommands()}>
-              /
+              <Icon name="bolt" size={17} />
+              <span>Commands</span>
             </button>
           )}
           {props.onSendFile && (
@@ -1235,13 +1575,6 @@ export function Conversation(props: {
               >
                 <Icon name="paperclip" size={18} />
               </button>
-              <VoiceComposer
-                key={contact.id}
-                disabled={sendingFile || processingFile || !!pendingAtt}
-                onReady={(att) => { setVoiceActive(false); setPendingAtt(att); }}
-                onError={(err) => { setVoiceActive(false); setError(err); }}
-                onActiveChange={setVoiceActive}
-              />
             </>
           )}
           <textarea
@@ -1262,8 +1595,15 @@ export function Conversation(props: {
               } else if (e.key === 'Escape') setReplyTo(null);
             }}
           />
-          <button
+          {props.onSendFile && !draft.trim() && !pendingAtt && !processingFile && !sendingFile ? <VoiceComposer
+            key={contact.id}
+            disabled={sendingFile || processingFile || !!pendingAtt}
+            onReady={(att) => { setVoiceActive(false); setPendingAtt(att); }}
+            onError={(err) => { setVoiceActive(false); setError(err); }}
+            onActiveChange={setVoiceActive}
+          /> : <button
             className="btn primary"
+            aria-label="Send"
             onPointerDown={(e) => {
               // Preserve the focused textarea under the submitting touch. A
               // post-request focus() cannot reopen iOS's software keyboard.
@@ -1274,8 +1614,8 @@ export function Conversation(props: {
             title={unknownDuplicate ? 'Delivery status unknown — edit before sending again' : undefined}
           >
             <Icon name="send" size={16} />
-            Send
-          </button>
+            <span className="btn-label">Send</span>
+          </button>}
         </div>
       </div>
       {/* One preview slot, two documents. HTML gets the sandboxed viewer and
@@ -1291,21 +1631,6 @@ export function Conversation(props: {
             onSendFile={props.onSendFile}
           />
         )
-      )}
-      {showSharedMedia && (
-        <ChatMediaPanel
-          messages={messages}
-          indexOffset={props.hiddenEarlier ?? 0}
-          onClose={() => setShowSharedMedia(false)}
-          onPreview={(rec) => {
-            setShowSharedMedia(false);
-            setPreviewRec(rec);
-          }}
-          onJump={(key) => {
-            document.getElementById(timelineMessageId(key))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            setShowSharedMedia(false);
-          }}
-        />
       )}
     </div>
   );

@@ -184,7 +184,8 @@ try {
 
     const page = await context.newPage();
     await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
-    await page.locator('.conv-actions').getByRole('button', { name: 'Media' }).click();
+    await page.getByRole('button', { name: /Open contact details/ }).click();
+    await page.getByRole('button', { name: /Shared photos, files, and links/ }).click();
     await page.locator('.shared-media-modal').waitFor();
     await page.locator('.shared-media-list').waitFor();
     await page.waitForTimeout(350);

@@ -26,6 +26,7 @@ import { contactName, displayName } from '../web/src/ui/viewmodel.ts';
 const t = counter();
 
 const ROOM = 'ours-cowork-room:atelier';
+const ROOM_NAMED = 'ours-cowork:Fix room message rendering in Messenger';
 const ROOM_V051 = 'ours-cowork-01hzyk8m0000000000000000aa';
 const ROOM_FRIENDLY = 'ours-cowork-release-2-room-01hzyk8m0000000000000000aa';
 const ROOM_LEGACY = 'cowork-room-01hzyk8m0000000000000000aa';
@@ -84,15 +85,19 @@ t.ok(true, 'no preview exposes author.identity');
 // emit three grammars. All must be recognised, and near-misses must stay
 // ordinary contacts — a false positive would reinterpret a person's messages.
 t.ok(isCoworkRoomContact(ROOM), 'a named room identity (ours-cowork-room:<name>) is a room');
+t.ok(isCoworkRoomContact(ROOM_NAMED), 'a current named room identity (ours-cowork:<name>) is a room');
 t.ok(isCoworkRoomContact(ROOM_V051), 'a ULID room identity (ours-cowork-<ulid>) is a room');
 t.ok(isCoworkRoomContact(ROOM_FRIENDLY), 'a configured friendly room identity is a room');
 t.ok(isCoworkRoomContact(ROOM_LEGACY), 'a legacy room identity (cowork-room-<ulid>) is a room');
 t.ok(!isCoworkRoomContact('ours-cowork-'), 'the bare ULID prefix alone is not a room');
 t.ok(!isCoworkRoomContact('ours-cowork-not-a-ulid'), 'a ULID-prefixed name with an invalid ULID is not a room');
 t.ok(!isCoworkRoomContact('ours-cowork-01HZYK8M0000000000000000AA'), 'an uppercase ULID is not a room — the grammar is lowercase Crockford');
+t.ok(!isCoworkRoomContact('ours-cowork:'), 'the current named-room prefix requires a non-empty suffix');
+t.ok(!isCoworkRoomContact(`ours-cowork:${'a'.repeat(65)}`), 'the current named-room suffix is bounded');
 t.ok(!isCoworkRoomContact(PERSON), 'an ordinary contact is not a room');
 
 t.eq(roomContactLabel(ROOM), 'atelier', 'a named room labels as its name');
+t.eq(roomContactLabel(ROOM_NAMED), 'Fix room message rendering in Messenger', 'a current named room labels as its suffix');
 t.eq(roomContactLabel(ROOM_V051), 'Room 01hzyk8m', 'a ULID room labels as Room <8chars>');
 t.eq(roomContactLabel(ROOM_FRIENDLY), 'Release 2 room', 'a friendly identity reconstructs its slug readably');
 t.eq(roomContactLabel(ROOM_LEGACY), 'Room 01hzyk8m', 'a legacy room labels as Room <8chars>');
@@ -150,6 +155,16 @@ const v051 = pageFor(ROOM_V051, [msg(roomBody({ kind: 'room_msg', text: 'pushed 
 t.eq(v051.preview, 'Mallory · pushed the branch', 'a v0.5.1 room message previews as speaker and words');
 t.ok(!v051.preview.includes('{'), 'and carries no JSON');
 
+const unsignedNamedBody = JSON.stringify({
+  version: 1, kind: 'room_msg', room_id: ROOM_ID,
+  author: { identity: 'CID-THAT-MUST-NEVER-BE-SHOWN', display_name: 'Secretary', role: 'Secretary' },
+  text: 'render the live room envelope', at: '2026-08-25T19:22:33.460Z',
+});
+t.eq(pageFor(ROOM_NAMED, [msg(unsignedNamedBody, 1)]).preview, 'Secretary · render the live room envelope',
+     'a current named room renders its unsigned transport-authenticated envelope');
+t.eq(pageFor('not-ours-cowork:Fix room message rendering in Messenger', [msg(unsignedNamedBody, 1)]).preview, unsignedNamedBody,
+     'a named-room prefix near-miss remains ordinary literal JSON');
+
 // ---- 2. what must NOT be claimed -------------------------------------------
 // A person typing JSON into the composer keeps seeing what they typed.
 const typed = '{"version":1,"kind":"room_msg","text":"look what I can type"}';
@@ -159,6 +174,9 @@ t.eq(pageFor(ROOM, [msg('{"version":1,"kind":"room_msg"', 1)]).preview, '{"versi
      'and a malformed body in a room is left as the text it is, rather than half-parsed');
 t.eq(pageFor(ROOM, [msg('just a sentence', 1)]).preview, 'just a sentence',
      'a plain sentence in a room stays a plain sentence');
+const outgoingRoomShape = { ...msg(roomBody({ kind: 'room_msg', text: 'typed by me' }), 1), dir: 'out' };
+t.eq(pageFor(ROOM, [outgoingRoomShape]).preview, outgoingRoomShape.text,
+     'outgoing room-shaped JSON stays literal because it has no authenticated room authorship');
 
 // ---- 3. the preview tracks the NEWEST entry, not the page window ------------
 const many = Array.from({ length: 60 }, (_, i) => msg(roomBody({ kind: 'room_msg', text: `line ${i}` }), i));

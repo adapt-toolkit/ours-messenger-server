@@ -12,16 +12,15 @@ import DialogShell from './DialogShell';
 import { FileRecord, fmtSize, getFileBytes } from './fileStore';
 import {
   attachmentBlobMime,
-  buildSandboxedHtmlDocument,
   HTML_PREVIEW_SANDBOX,
 } from './htmlPreviewCore.mjs';
 import { Icon } from './icons';
 
 export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
   const { rec } = props;
-  const [doc, setDoc] = useState('');
   const [url, setUrl] = useState<string | null>(null);
   const [size, setSize] = useState(0);
+  const [fullscreen, setFullscreen] = useState(false);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
 
   useEffect(() => {
@@ -35,7 +34,6 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
           setLoadState('missing');
           return;
         }
-        setDoc(buildSandboxedHtmlDocument(new TextDecoder('utf-8').decode(bytes)));
         setSize(bytes.byteLength);
         objectUrl = URL.createObjectURL(
           new Blob([bytes as BlobPart], { type: attachmentBlobMime(rec.mime, rec.filename) }),
@@ -55,10 +53,10 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
   return (
     <DialogShell
       title={rec.filename}
-      description="HTML preview · sandboxed, static rendering only"
+      description="Transformed safe preview · external navigation disabled"
       onClose={props.onClose}
       wide
-      className="markdown-modal html-modal"
+      className={'markdown-modal html-modal' + (fullscreen ? ' html-modal-fullscreen' : '')}
     >
       <div className="html-preview">
         <div className="html-preview-toolbar">
@@ -66,12 +64,26 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
             <Icon name="shield" size={14} />
             Scripts, forms and network requests are blocked
           </span>
-          {url && (
-            <a className="btn sm" href={url} download={rec.filename}>
-              <Icon name="download" size={14} />
-              Download original{size ? ` · ${fmtSize(size)}` : ''}
-            </a>
-          )}
+          <span className="html-preview-actions">
+            {loadState === 'ready' && (
+              <button
+                className="btn sm"
+                type="button"
+                title="View HTML fullscreen"
+                aria-label="View HTML fullscreen"
+                onClick={() => setFullscreen(true)}
+              >
+                <Icon name="maximize" size={14} />
+                Fullscreen
+              </button>
+            )}
+            {url && (
+              <a className="btn sm" href={url} download={rec.filename}>
+                <Icon name="download" size={14} />
+                Download original{size ? ` · ${fmtSize(size)}` : ''}
+              </a>
+            )}
+          </span>
         </div>
 
         <div className="html-preview-frame">
@@ -82,11 +94,12 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
           {loadState === 'error' && <div className="markdown-empty">The file could not be opened.</div>}
           {loadState === 'ready' && (
             <iframe
+              key={rec.id}
               className="html-preview-iframe"
               title={`Sandboxed preview of ${rec.filename}`}
               sandbox={HTML_PREVIEW_SANDBOX}
               referrerPolicy="no-referrer"
-              srcDoc={doc}
+              src={`/api/html-preview/${encodeURIComponent(rec.id)}`}
             />
           )}
         </div>

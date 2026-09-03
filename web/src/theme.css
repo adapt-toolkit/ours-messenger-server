@@ -3,8 +3,6 @@
    Warm-tinted, soft, human. Teal = the network; apricot = you.
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,400..800;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
-
 :root {
   /* surfaces — warm ivory neutrals, never stark white */
   --bg:          oklch(0.972 0.008 90);
@@ -41,10 +39,30 @@
   --accent-2-line: color-mix(in oklab, var(--accent-2) 40%, var(--line));
 
   /* motion — one easing family, three speeds */
-  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-1: 160ms;
-  --dur-2: 280ms;
-  --dur-3: 480ms;
+  --ease-interface: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-immediate: 120ms;
+  --dur-standard: 200ms;
+  --dur-emphasis: 320ms;
+  /* Compatibility aliases: one timing authority, including older surfaces. */
+  --ease-soft: var(--ease-interface);
+  --dur-1: var(--dur-immediate);
+  --dur-2: var(--dur-standard);
+  --dur-3: var(--dur-emphasis);
+  --material-chrome: color-mix(in srgb, var(--surface) 92%, transparent);
+  --material-overlay: color-mix(in srgb, var(--bg) 54%, transparent);
+  --material-solid: var(--surface);
+  --material-blur: 14px;
+  /* Floating controls share one translucent role. Structural chrome keeps the
+     denser material above so long-form reading surfaces do not inherit glass. */
+  --material-floating: color-mix(in srgb, var(--surface) 68%, transparent);
+  --material-floating-accent: color-mix(in srgb, var(--accent) 14%, var(--material-floating));
+  --material-floating-action: color-mix(in srgb, var(--accent) 34%, var(--material-floating));
+  --material-floating-action-hover: color-mix(in srgb, var(--accent) 40%, var(--material-floating));
+  --material-floating-action-pressed: color-mix(in srgb, var(--accent) 46%, var(--material-floating));
+  --material-floating-action-ink: #17352e;
+  --material-floating-border: color-mix(in srgb, var(--line-strong) 68%, transparent);
+  --material-floating-blur: 20px;
+  --material-floating-shadow: var(--shadow-md);
 
   /* the one primary action per screen gets a soft colored halo */
   --glow-accent: 0 6px 22px color-mix(in oklab, var(--accent) 32%, transparent),
@@ -68,8 +86,10 @@
   --shadow-md: 0 4px 16px oklch(0.45 0.03 260 / 0.08), 0 1px 3px oklch(0.45 0.03 260 / 0.06);
   --shadow-lg: 0 18px 50px oklch(0.4 0.03 260 / 0.16), 0 4px 12px oklch(0.4 0.03 260 / 0.08);
 
-  --font: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --display: var(--font);
+  --serif: var(--font);
+  --mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
 
   /* density (fixed for production) */
   --pad: 1;
@@ -97,6 +117,13 @@
   --accent-soft: color-mix(in oklab, var(--accent) 20%, var(--surface));
   --accent-line: color-mix(in oklab, var(--accent) 42%, var(--line));
   --on-accent:   oklch(0.18 0.02 200);
+  --material-floating: color-mix(in srgb, var(--surface) 72%, transparent);
+  --material-floating-accent: color-mix(in srgb, var(--accent) 16%, var(--material-floating));
+  --material-floating-action: color-mix(in srgb, var(--accent) 30%, var(--material-floating));
+  --material-floating-action-hover: color-mix(in srgb, var(--accent) 36%, var(--material-floating));
+  --material-floating-action-pressed: color-mix(in srgb, var(--accent) 42%, var(--material-floating));
+  --material-floating-action-ink: #e8ece8;
+  --material-floating-border: color-mix(in srgb, var(--line-strong) 72%, transparent);
 
   --accent-2:      #f0a468;
   --accent-2-deep: color-mix(in oklab, var(--accent-2) 85%, #fff);
@@ -132,8 +159,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 15px;
+  font-size: 100%;
   line-height: 1.5;
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -220,7 +248,7 @@ button { font-family: inherit; }
   padding: 0.6rem 0.75rem;
   font-size: 0.92rem;
   font-family: inherit;
-  transition: border-color 0.14s, box-shadow 0.14s;
+  transition: border-color var(--dur-immediate) var(--ease-interface);
 }
 .field::placeholder { color: var(--text-3); }
 .field:focus {

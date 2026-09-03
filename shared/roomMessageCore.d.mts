@@ -5,7 +5,9 @@ export interface RoomBody {
   version: 1;
   kind: string;
   room_id: string;
-  signature: string;
+  /** Required on legacy/custom packets; standard-SDK contact transport authenticates the sender. */
+  signature?: string;
+  room_name?: string;
   message_id?: string;
   at?: string;
   text?: string;
@@ -13,6 +15,10 @@ export interface RoomBody {
   briefing_role?: string;
   briefing_version?: number;
   membership?: { action?: string; alias?: string; role?: string; epoch?: number };
+  filename?: string;
+  mime?: string;
+  size?: number;
+  sha256?: string;
   [key: string]: unknown;
 }
 
@@ -27,11 +33,18 @@ export interface RoomLine {
   /** System-line label ('Briefing · reviewer · v2', 'Membership', …). '' on chat lines. */
   label: string;
   text: string;
+  /** Authenticated structured metadata retained for dedicated room presentation. */
+  roomName?: string;
+  authoredBy?: string;
+  authoredAt?: string;
+  presentation?: 'briefing' | 'role' | 'membership' | 'file' | 'lifecycle';
+  details?: string[];
 }
 
 export const KNOWN_ROOM_KINDS: string[];
 export const ROOM_VOICE_ROLE: 'room';
 export const ROOM_IDENTITY_PREFIX: 'ours-cowork-room:';
+export const NAMED_ROOM_IDENTITY_PREFIX: 'ours-cowork:';
 export const CURRENT_ROOM_IDENTITY_PREFIX: 'ours-cowork-';
 export const LEGACY_ROOM_IDENTITY_PREFIX: 'cowork-room-';
 
