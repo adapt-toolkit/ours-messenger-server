@@ -912,8 +912,9 @@
 .command-status.warning,.command-status.indeterminate { color:var(--warn); }
 .command-status.error { color:var(--danger); }
 .command-status.success { color:var(--accent-deep); }
-.composer .composer-tool.command-trigger { display:inline-flex; flex:0 0 auto; width:auto; gap:4px; padding:0 8px; font-size:.75rem; font-weight:700; }
+.composer .composer-tool.command-trigger { display:inline-flex; flex:0 1 auto; min-width:44px; width:auto; gap:4px; padding:0 8px; overflow:hidden; font-size:.75rem; font-weight:700; }
 .composer .command-trigger > .ic { display:none; }
+.composer .command-trigger > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .command-trigger:active:not(:disabled) { background:var(--surface-3); transform:translateY(1px); }
 .typed-message { min-width:min(330px,78vw); }
 .typed-message-kind { color:var(--accent); font-size:.72rem; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
