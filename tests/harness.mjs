@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -60,7 +61,7 @@ export const freePort = () =>
  * Boot an isolated daemon through @ours.network/cli and return
  * `{ url, stateDir, sdk, close }`.
  */
-export async function startHarnessDaemon(tag) {
+export async function startHarnessDaemon(tag, options = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), `messenger-${tag}-`));
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
@@ -79,7 +80,9 @@ export async function startHarnessDaemon(tag) {
     OURS_API_VISIBILITY: env.OURS_API_VISIBILITY,
   });
 
-  const cli = resolve(import.meta.dirname, '..', 'node_modules', '@ours.network', 'cli', 'dist', 'cli.js');
+  const cli = options.cliEntry
+    ? resolve(options.cliEntry)
+    : resolve(import.meta.dirname, '..', 'node_modules', '@ours.network', 'cli', 'dist', 'cli.js');
   const child = spawn(process.execPath, [cli, 'daemon', 'serve'], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -103,7 +106,9 @@ export async function startHarnessDaemon(tag) {
     throw error;
   }
 
-  const sdk = await import('@ours.network/sdk');
+  const sdk = options.sdkEntry
+    ? await import(pathToFileURL(resolve(options.sdkEntry)).href)
+    : await import('@ours.network/sdk');
 
   return {
     url,

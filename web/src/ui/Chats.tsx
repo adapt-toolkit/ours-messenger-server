@@ -986,7 +986,7 @@ export function Conversation(props: {
     followTopRef.current = null;
   }, [contact?.id]);
 
-  const loadCommands = async () => {
+  const loadCommands = async (openWhenAvailable = true, reportFailure = true) => {
     if (!contact || !props.onLoadCommands) return;
     commandLoadRef.current?.abort();
     const controller = new AbortController();
@@ -997,18 +997,36 @@ export function Conversation(props: {
       const catalog = await props.onLoadCommands(contact.id, controller.signal);
       if (!controller.signal.aborted && catalog.recipient_cid === contact.id) {
         setCommandCatalog(catalog);
-        setCommandOpen(true);
+        if (catalog.commands.length === 0) {
+          setCommandOpen(false);
+          if (commandOpen) requestAnimationFrame(() => composerInputRef.current?.focus({ preventScroll: true }));
+        }
+        else if (openWhenAvailable) setCommandOpen(true);
       } else if (!controller.signal.aborted) {
-        setError('Command discovery was refused because the authenticated recipient changed.');
+        setCommandCatalog(null);
+        setCommandOpen(false);
+        if (reportFailure) setError('Command discovery was refused because the authenticated recipient changed.');
       }
     } catch (err) {
-      if (!controller.signal.aborted) setError(err instanceof ApiError
-        ? `Command discovery failed: ${err.message}`
-        : 'Command discovery failed safely. The recipient may be offline or unsupported.');
+      if (!controller.signal.aborted) {
+        setCommandCatalog(null);
+        setCommandOpen(false);
+        if (reportFailure) setError(err instanceof ApiError
+          ? `Command discovery failed: ${err.message}`
+          : 'Command discovery failed safely. The recipient may be offline or unsupported.');
+      }
     } finally {
       if (commandLoadRef.current === controller) setCommandBusy(false);
     }
   };
+  useEffect(() => {
+    void loadCommands(false, false);
+    return () => commandLoadRef.current?.abort();
+    // App supplies the loader inline, so depending on its function identity
+    // would turn ordinary parent renders into repeated catalog reads. A
+    // Conversation is keyed by recipient; opening or switching recipients is
+    // the deliberate refresh boundary.
+  }, [contact?.id]);
   const closeCommandPanel = () => {
     setCommandOpen(false);
     commandTriggerRef.current?.focus();
@@ -1508,7 +1526,7 @@ export function Conversation(props: {
             catalog={commandCatalog}
             recipientName={contact.name}
             busy={commandBusy}
-            onRefresh={() => void loadCommands()}
+            onRefresh={() => void loadCommands(true, true)}
             onClose={closeCommandPanel}
             onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
               if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
@@ -1542,12 +1560,11 @@ export function Conversation(props: {
           </div>
         )}
         <div className={'composer' + (voiceActive ? ' recording' : '')}>
-          {props.onLoadCommands && (
+          {props.onLoadCommands && commandCatalog && commandCatalog.commands.length > 0 && (
             <button ref={commandTriggerRef} type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
               aria-label="Recipient commands" aria-expanded={commandOpen}
-              disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : void loadCommands()}>
-              <Icon name="bolt" size={17} />
-              <span>Commands</span>
+              disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : setCommandOpen(true)}>
+              <Icon name="menu" size={19} />
             </button>
           )}
           {props.onSendFile && (

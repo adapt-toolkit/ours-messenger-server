@@ -57,6 +57,8 @@ try {
       },
     }],
   };
+  let advertisedCatalog = catalog;
+  let catalogLoads = 0;
   const installRoutes = (targetContext) => targetContext.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -67,7 +69,10 @@ try {
     if (path === '/api/conversations/PEER/page') return json({ contact: 'PEER', messages, total: messages.length, unread: 0, hasMore: false, nextBefore: null });
     if (path === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
     if (path === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
-    if (path === '/api/contacts/PEER/commands') return json(catalog);
+    if (path === '/api/contacts/PEER/commands') {
+      catalogLoads++;
+      return json(advertisedCatalog);
+    }
     if (path === '/api/commands/send') {
       const body = request.postDataJSON(); sends.push(body);
       const sendMode = sendModes.shift() ?? 'accepted';
@@ -87,12 +92,19 @@ try {
   await installRoutes(context);
   const page = await context.newPage();
   await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Recipient commands' }).click();
+  const commandTrigger = page.getByRole('button', { name: 'Recipient commands' });
+  await commandTrigger.waitFor();
+  await page.waitForTimeout(50);
+  assert.equal(catalogLoads, 1, 'opening a selected chat performs one bounded catalog read, not render-driven polling');
+  assert.equal((await commandTrigger.innerText()).trim(), '', 'the compact command affordance has no truncating text label');
+  assert.equal(await commandTrigger.locator('svg').count(), 1, 'the compact command affordance renders one menu icon');
+  const triggerBox = await commandTrigger.boundingBox();
+  assert.ok(triggerBox && triggerBox.width === 44 && triggerBox.height >= 44,
+    'the menu icon retains a compact 44px touch target');
+  await commandTrigger.click();
   const panel = page.getByRole('form', { name: 'Send a typed command' });
   await panel.waitFor();
   await panel.getByText('Commands for Peer', { exact: true }).waitFor();
-  assert.equal((await page.getByRole('button', { name: 'Recipient commands' }).innerText()).trim(), 'Commands',
-    'the visible composer affordance names commands instead of showing a cryptic slash');
   assert.equal(await panel.locator('.command-panel-recipient .mono').getAttribute('title'), 'PEER',
     'the authenticated recipient CID remains available as secondary identity context');
   const mobileFieldStyle = await panel.getByLabel('Required').evaluate((element) => getComputedStyle(element));
@@ -212,7 +224,6 @@ try {
     'the normal command form is immediately available after reload');
   const box = await restored.boundingBox();
   assert.ok(box && box.x >= 0 && box.x + box.width <= 390, 'command form remains within the narrow mobile viewport');
-  const commandTrigger = page.getByRole('button', { name: 'Recipient commands' });
   await restored.getByRole('button', { name: 'Close commands' }).click();
   assert.equal(await page.getByRole('form', { name: 'Send a typed command' }).count(), 0, 'close button closes the command form');
   assert.equal(await commandTrigger.evaluate((element) => document.activeElement === element), true,
@@ -250,7 +261,48 @@ try {
   assert.equal(forcedStyle.backdropFilter, 'none', 'forced-colors mode retains a nonblocking material');
   await desktopContext.close();
 
-  console.log('browser-typed-commands OK — immediate repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility');
+  const availabilityContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  await installRoutes(availabilityContext);
+  const availabilityPage = await availabilityContext.newPage();
+  advertisedCatalog = { ...catalog, fingerprint: 'C'.repeat(43), commands: [] };
+  const emptyLoad = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  await emptyLoad;
+  assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
+    'a selected contact with an empty advertised catalog has no command control');
+  await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
+  advertisedCatalog = catalog;
+  const reopenedLoad = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.locator('.contact-row').filter({ hasText: 'Peer' }).click();
+  await reopenedLoad;
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor();
+  assert.equal(await availabilityPage.getByRole('form', { name: 'Send a typed command' }).count(), 0,
+    'reopening discovers newly available commands without opening the panel');
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).click();
+  advertisedCatalog = { ...catalog, fingerprint: 'D'.repeat(43), commands: [] };
+  const refreshedEmpty = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.getByRole('button', { name: 'Refresh' }).click();
+  await refreshedEmpty;
+  assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
+    'refreshing an open panel hides its trigger when the canonical catalog becomes empty');
+  assert.equal(await availabilityPage.locator('textarea').evaluate((element) => document.activeElement === element), true,
+    'removing the focused command surface restores focus to the stable composer input');
+  await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
+  advertisedCatalog = catalog;
+  const restoredLoad = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.locator('.contact-row').filter({ hasText: 'Peer' }).click();
+  await restoredLoad;
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor();
+  await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
+  advertisedCatalog = { ...catalog, fingerprint: 'E'.repeat(43), commands: [] };
+  const removedLoad = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.locator('.contact-row').filter({ hasText: 'Peer' }).click();
+  await removedLoad;
+  assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
+    'reopening hides the command control after the canonical catalog becomes empty');
+  await availabilityContext.close();
+
+  console.log('browser-typed-commands OK — conditional open-time menu, repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));
