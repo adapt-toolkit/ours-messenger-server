@@ -164,20 +164,57 @@ try {
   // A right-aligned outgoing bubble owns the mirrored inward gesture. This is
   // deliberately leftward; the previous shared +1 direction moved it outward
   // and the old synthetic test repeated that incorrect path.
-  const outgoing = page.locator('#chat-message-TOUCH-25 .msg-row');
-  const outgoingBox = await outgoing.locator('.ours-message').boundingBox();
-  assert.ok(outgoingBox);
-  const outgoingX = outgoingBox.x + outgoingBox.width / 2;
-  const outgoingY = outgoingBox.y + outgoingBox.height / 2;
-  await pen(session, 'mousePressed', outgoingX, outgoingY);
-  await pen(session, 'mouseMoved', outgoingX - 18, outgoingY);
-  await page.waitForFunction(() => document.querySelector('#chat-message-TOUCH-25 .msg-row')?.hasPointerCapture(globalThis.__pointerId));
-  await pen(session, 'mouseMoved', outgoingX - 76, outgoingY);
-  await outgoing.locator('.swipe-cue.armed').waitFor();
-  await pen(session, 'mouseReleased', outgoingX - 76, outgoingY);
-  await page.getByText('Replying to You', { exact: true }).waitFor();
-  assert.equal(await page.getByText('Replying to You', { exact: true }).count(), 1, 'outgoing inward release commits once');
-  await page.getByTitle('Cancel reply').click();
+  const outgoingContext = await browser.newContext({ hasTouch: true, isMobile: true, serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
+  let outgoingSession;
+  try {
+    await installRoutes(outgoingContext);
+    const outgoingPage = await outgoingContext.newPage();
+    outgoingSession = await outgoingContext.newCDPSession(outgoingPage);
+    await outgoingPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+    const outgoing = outgoingPage.locator('#chat-message-TOUCH-25 .msg-row');
+    const outgoingTarget = outgoing.locator('.message-markdown p').first();
+    await outgoingTarget.scrollIntoViewIfNeeded();
+    await outgoingPage.evaluate(() => {
+      globalThis.__outgoingPenDown = null;
+      const expectedRow = document.querySelector('#chat-message-TOUCH-25 .msg-row');
+      const observe = (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (event.pointerType !== 'pen' || target?.closest('#chat-message-TOUCH-25 .msg-row') !== expectedRow) return;
+        globalThis.__outgoingPenDown = {
+          pointerType: event.pointerType,
+          button: event.button,
+          plainMessage: Boolean(target.closest('.message-markdown'))
+            && !target.closest('a, button, input, textarea, select, [role="button"], audio, video, img, [draggable="true"]'),
+        };
+        document.removeEventListener('pointerdown', observe, true);
+      };
+      document.addEventListener('pointerdown', observe, true);
+    });
+    const outgoingBox = await outgoingTarget.boundingBox();
+    assert.ok(outgoingBox);
+    const outgoingX = outgoingBox.x + outgoingBox.width / 2;
+    const outgoingY = outgoingBox.y + outgoingBox.height / 2;
+    await pen(outgoingSession, 'mousePressed', outgoingX, outgoingY);
+    await outgoingPage.waitForFunction(() => globalThis.__outgoingPenDown !== null);
+    assert.deepEqual(await outgoingPage.evaluate(() => globalThis.__outgoingPenDown), {
+      pointerType: 'pen', button: 0, plainMessage: true,
+    }, 'outgoing gesture begins as a pen tip on plain message content');
+    await pen(outgoingSession, 'mouseMoved', outgoingX - 18, outgoingY);
+    await outgoing.locator('.bubble-wrap.swiping').waitFor();
+    for (const distance of [36, 58, 76]) await pen(outgoingSession, 'mouseMoved', outgoingX - distance, outgoingY);
+    await outgoing.locator('.swipe-cue.armed').waitFor();
+    await pen(outgoingSession, 'mouseReleased', outgoingX - 76, outgoingY);
+    await outgoingPage.getByText('Replying to You', { exact: true }).waitFor();
+    assert.equal(await outgoingPage.getByText('Replying to You', { exact: true }).count(), 1, 'outgoing inward release commits once');
+    assert.equal(await outgoing.locator('.bubble-wrap.swiping').count(), 0, 'outgoing release clears swiping state');
+    assert.equal(await outgoing.locator('.swipe-cue.armed').count(), 0, 'outgoing release clears armed state');
+    assert.equal(await outgoing.locator('.bubble-wrap').evaluate((node) => node.style.transform), '', 'outgoing release clears transform');
+    await outgoingPage.getByTitle('Cancel reply').click();
+    await outgoingPage.getByText('Replying to You', { exact: true }).waitFor({ state: 'detached' });
+  } finally {
+    if (outgoingSession) await outgoingSession.detach().catch(() => {});
+    await outgoingContext.close();
+  }
 
   const clean = async (label) => {
     assert.equal(await incoming.locator('.bubble-wrap.swiping').count(), 0, `${label}: swiping class cleared`);
