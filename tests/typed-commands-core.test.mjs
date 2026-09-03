@@ -36,6 +36,19 @@ assert.equal(Object.getPrototypeOf(safeJson), Object.prototype);
 assert.equal(safeJson.nested[3].__proto__, 'data');
 assert.throws(() => requireBoundedJson({ value: Number.NaN }));
 assert.throws(() => requireBoundedJson({ a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: { l: { m: 1 } } } } } } } } } } } } }));
+assert.throws(() => requireBoundedJson(Array.from({ length: 2_048 }, () => null)), /2048 nodes/);
+assert.throws(() => requireBoundedJson('x'.repeat(64 * 1024)), /65536 bytes/);
+
+const coworkCatalog = projectCatalog('COWORK-ROOM-CID', [{
+  name: 'list-members',
+  description: 'List the room roster using contact-safe member fields.',
+  input_schema: { type: 'object', additionalProperties: false },
+}]);
+assert.deepEqual(coworkCatalog.commands[0], {
+  name: 'list-members',
+  description: 'List the room roster using contact-safe member fields.',
+  input_schema: { type: 'object', additionalProperties: false },
+}, 'the authenticated strict Cowork schema is projected without normalization or authorization coupling');
 
 assert.deepEqual(
   parseTypedEnvelope('command', JSON.stringify({ command: 'notes.create', arguments: { '': '' } })),

@@ -5,9 +5,13 @@ import type { CommandCatalog, CommandDefinition, JsonValue, SendCommandResult } 
 const SUPPORTED = new Set([
   'type', 'title', 'description', 'default', 'enum', 'minimum', 'maximum',
   'minLength', 'maxLength', 'properties', 'required', 'items', 'minItems', 'maxItems',
+  'additionalProperties',
 ]);
 const MAX_DEPTH = 6;
 const MAX_CONTROLS = 64;
+const MAX_VALUE_DEPTH = 12;
+const MAX_VALUE_NODES = 2_048;
+const MAX_VALUE_BYTES = 64 * 1024;
 
 type Schema = { [key: string]: JsonValue };
 
@@ -43,6 +47,16 @@ function schemaError(schema: Schema, depth = 0, count = { value: 0 }): string | 
   if ((schema.minItems !== undefined || schema.maxItems !== undefined) && type !== 'array') {
     return 'minItems/maxItems require array type';
   }
+  if (schema.additionalProperties !== undefined) {
+    if (type !== 'object') return 'additionalProperties requires an object type';
+    if (schema.additionalProperties === true) return 'additionalProperties: true is not supported';
+    if (schema.additionalProperties !== false) {
+      return schema.additionalProperties && typeof schema.additionalProperties === 'object'
+        && !Array.isArray(schema.additionalProperties)
+        ? 'Schema-valued additionalProperties is not supported'
+        : 'additionalProperties must be false';
+    }
+  }
   if (type === 'object') {
     const properties = schema.properties;
     if (properties !== undefined && (!properties || typeof properties !== 'object' || Array.isArray(properties))) {
@@ -76,7 +90,28 @@ function sameJson(left: JsonValue, right: JsonValue): boolean {
     key === rightKeys[index] && sameJson(left[key], right[key]));
 }
 
-export function validateCommandValue(schema: Schema, value: JsonValue, path = 'Arguments'): string | null {
+function boundedValueError(value: JsonValue, path: string): string | null {
+  let nodes = 0;
+  const visit = (item: JsonValue, depth: number): string | null => {
+    if (depth > MAX_VALUE_DEPTH) return `${path} exceeds depth ${MAX_VALUE_DEPTH}`;
+    nodes++;
+    if (nodes > MAX_VALUE_NODES) return `${path} exceeds ${MAX_VALUE_NODES} JSON values`;
+    if (item === null || typeof item !== 'object') return null;
+    for (const child of Array.isArray(item) ? item : Object.values(item)) {
+      const error = visit(child, depth + 1);
+      if (error) return error;
+    }
+    return null;
+  };
+  const structuralError = visit(value, 0);
+  if (structuralError) return structuralError;
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > MAX_VALUE_BYTES) {
+    return `${path} exceeds ${MAX_VALUE_BYTES} UTF-8 bytes`;
+  }
+  return null;
+}
+
+function validateCommandValueInner(schema: Schema, value: JsonValue, path: string): string | null {
   if (Array.isArray(schema.enum) && !schema.enum.some((option) => sameJson(option, value))) return `${path} is not an allowed value`;
   if (schema.type === 'null') return value === null ? null : `${path} must be null`;
   if (schema.type === 'boolean') return typeof value === 'boolean' ? null : `${path} must be boolean`;
@@ -99,7 +134,7 @@ export function validateCommandValue(schema: Schema, value: JsonValue, path = 'A
     if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) return `${path} has too many items`;
     if (schema.items && typeof schema.items === 'object' && !Array.isArray(schema.items)) {
       for (let index = 0; index < value.length; index++) {
-        const error = validateCommandValue(schema.items as Schema, value[index], `${path}[${index}]`);
+        const error = validateCommandValueInner(schema.items as Schema, value[index], `${path}[${index}]`);
         if (error) return error;
       }
     }
@@ -107,15 +142,25 @@ export function validateCommandValue(schema: Schema, value: JsonValue, path = 'A
   }
   if (schema.type === 'object') {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return `${path} must be an object`;
+    const properties = (schema.properties ?? {}) as Record<string, JsonValue>;
+    for (const key of Object.keys(value)) {
+      if (schema.additionalProperties === false && !Object.hasOwn(properties, key)) {
+        return `${path}.${key || '(empty key)'} is not declared by the schema`;
+      }
+    }
     const required = Array.isArray(schema.required) ? schema.required as string[] : [];
     for (const key of required) if (!Object.hasOwn(value, key)) return `${path}.${key || '(empty key)'} is required`;
-    for (const [key, child] of Object.entries((schema.properties ?? {}) as Record<string, JsonValue>)) {
+    for (const [key, child] of Object.entries(properties)) {
       if (!Object.hasOwn(value, key)) continue;
-      const error = validateCommandValue(child as Schema, value[key], `${path}.${key || '(empty key)'}`);
+      const error = validateCommandValueInner(child as Schema, value[key], `${path}.${key || '(empty key)'}`);
       if (error) return error;
     }
   }
   return null;
+}
+
+export function validateCommandValue(schema: Schema, value: JsonValue, path = 'Arguments'): string | null {
+  return boundedValueError(value, path) ?? validateCommandValueInner(schema, value, path);
 }
 
 function initialValue(schema: Schema): JsonValue {
