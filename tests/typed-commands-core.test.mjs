@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import './command-invocations.test.mjs';
+import './typed-delivery-config.test.mjs';
 import {
   MAX_COMMANDS,
   parseTypedEnvelope,
@@ -21,7 +23,9 @@ assert.equal(catalog.recipient_cid, recipient);
 assert.match(catalog.fingerprint, /^[A-Za-z0-9_-]{43}$/);
 assert.deepEqual(catalog.commands[0].input_schema.properties[''], { type: 'string', default: '' });
 assert.equal(projectCatalog(recipient, [command]).fingerprint, catalog.fingerprint, 'fingerprint is deterministic');
-assert.notEqual(projectCatalog('OTHER', [command]).recipient_cid, catalog.recipient_cid, 'recipient binding is explicit');
+const otherRecipientCatalog = projectCatalog('OTHER', [command]);
+assert.notEqual(otherRecipientCatalog.recipient_cid, catalog.recipient_cid, 'recipient binding is explicit');
+assert.notEqual(otherRecipientCatalog.fingerprint, catalog.fingerprint, 'catalog fingerprint is bound to the recipient CID');
 assert.throws(() => projectCatalog(recipient, Array.from({ length: MAX_COMMANDS + 1 }, (_, i) => ({
   name: `c${i}`, input_schema: { type: 'null' },
 }))));

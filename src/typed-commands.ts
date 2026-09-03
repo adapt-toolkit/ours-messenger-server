@@ -75,7 +75,10 @@ export function projectCatalog(recipientCid: string, commands: readonly CommandD
       input_schema: command.input_schema,
     };
   });
-  const fingerprint = createHash('sha256').update(canonical(projected as JsonValue)).digest('base64url');
+  const fingerprint = createHash('sha256').update(canonical({
+    recipient_cid: recipientCid,
+    commands: projected,
+  } as unknown as JsonValue)).digest('base64url');
   return { recipient_cid: recipientCid, fingerprint, commands: projected };
 }
 
