@@ -118,7 +118,7 @@ export class PushDeliveryQueue {
     return this.admit(record).status === 'queued';
   }
 
-  admit(record: Record<string, unknown>): PushAdmission {
+  admit(record: Record<string, unknown>, notificationPageNextIndex?: number): PushAdmission {
     if (!bounded(record.sender_id, 512) || !bounded(record.wire_id, 1_024)) return { status: 'no_targets' };
     const kind = notificationKind(record);
     if (!kind || !this.store.hasBindings()) return { status: 'no_targets' };
@@ -127,7 +127,7 @@ export class PushDeliveryQueue {
       kind,
       contactId: record.sender_id,
       senderName: bounded(record.sender_name, 512) ? record.sender_name : undefined,
-    }, this.now());
+    }, this.now(), notificationPageNextIndex);
     if (admission.status === 'saturated') {
       this.stats.saturationEvents++;
       const state = this.store.queueStats();

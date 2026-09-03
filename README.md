@@ -201,10 +201,12 @@ tombstones are capped at 256 and delivery totals live in separate counters.
 Messenger persists a byte checkpoint for the daemon's separate durable,
 content-free notification log. A new installation primes at the current tip;
 after that, restart and reconnect resume from the committed checkpoint. A page
-checkpoint advances only after every eligible event has been durably admitted.
-If the queue is full, the checkpoint stays behind the refused event and the
-health/state surfaces expose saturation and cumulative admission failures.
-Messenger never scans unread message/file history to synthesize pushes.
+checkpoint stores only bounded start/end, digest, count, and next-index metadata.
+It advances with durable admission, so an oversized page can pause at capacity
+and resume at the refused event without replaying its admitted prefix after old
+tombstones expire. Health/state surfaces expose saturation and cumulative
+admission failures. Messenger never scans unread message/file history to
+synthesize pushes.
 
 An absent `push.json` is initialized on first run. Version-2 state migrates
 atomically: valid pending/retry work is preserved, recent terminal rows are

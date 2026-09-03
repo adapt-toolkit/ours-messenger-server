@@ -64,6 +64,48 @@ try {
   assert.ok(claimed && restarted.claimJob(claimed.id), 'worker claims work before provider I/O');
   const afterCrash = PushStore.open(dir, 'CID-ME', env);
   assert.ok(afterCrash.dueJobs().some((row) => row.id === claimed.id), 'restart restores a crash-interrupted in-flight job');
+
+  // Finish the refused page, then exercise a page that grows at EOF while its
+  // first prefix is paused. The saved end cursor delimits the original prefix;
+  // appended events are fetched from that cursor on the following poll.
+  const admittedAfterCrash = [];
+  const afterCrashDelivery = {
+    admit(record, nextIndex) {
+      admittedAfterCrash.push(record.wire_id);
+      const kind = record.event === 'message_received' ? 'message' : 'file';
+      return afterCrash.admitJob({ wireId: record.wire_id, kind, contactId: record.sender_id }, Date.now(), nextIndex);
+    },
+  };
+  assert.equal(applyNotificationPage({ cursor: 300, events: [{ event: 'message_received', sender_id: 'CID-A', wire_id: 'BLOCKED' }] },
+    afterCrash, afterCrashDelivery, new MessengerEventBus(), stats, { info() {}, warn() {} }), true);
+  assert.equal(afterCrash.notificationCursor, 300);
+
+  let refuseSecond = true;
+  const growingAdmissions = [];
+  const growingDelivery = {
+    admit(record) {
+      if (record.wire_id === 'GROW-B' && refuseSecond) {
+        refuseSecond = false;
+        return { status: 'saturated' };
+      }
+      growingAdmissions.push(record.wire_id);
+      return { status: 'queued' };
+    },
+  };
+  const growA = { event: 'message_received', sender_id: 'CID-A', wire_id: 'GROW-A' };
+  const growB = { event: 'message_received', sender_id: 'CID-A', wire_id: 'GROW-B' };
+  const appended = { event: 'message_received', sender_id: 'CID-A', wire_id: 'APPENDED' };
+  assert.equal(applyNotificationPage({ cursor: 400, events: [growA, growB] }, afterCrash, growingDelivery,
+    new MessengerEventBus(), stats, { info() {}, warn() {} }), false);
+  assert.equal(afterCrash.notificationPageProgress.nextIndex, 1);
+  assert.equal(applyNotificationPage({ cursor: 500, events: [growA, growB, appended] }, afterCrash, growingDelivery,
+    new MessengerEventBus(), stats, { info() {}, warn() {} }), true);
+  assert.equal(afterCrash.notificationCursor, 400, 'only the saved page prefix is committed when the daemon page grows');
+  assert.deepEqual(growingAdmissions, ['GROW-A', 'GROW-B'], 'the admitted prefix is not replayed');
+  assert.equal(applyNotificationPage({ cursor: 500, events: [appended] }, afterCrash, growingDelivery,
+    new MessengerEventBus(), stats, { info() {}, warn() {} }), true);
+  assert.equal(afterCrash.notificationCursor, 500);
+  assert.deepEqual(growingAdmissions, ['GROW-A', 'GROW-B', 'APPENDED']);
 } finally { rmSync(dir, { recursive: true, force: true }); }
 
 console.log('watch-cursor OK — durable catch-up, replay dedupe, saturation boundary, and crash restoration without unread history');

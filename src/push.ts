@@ -75,6 +75,14 @@ interface PushMetrics {
   lastSaturationAt?: number;
 }
 
+interface PushPageCheckpoint {
+  readonly fromCursor: number;
+  readonly cursor: number;
+  readonly eventCount: number;
+  nextIndex: number;
+  readonly digest: string;
+}
+
 interface VapidKeys {
   publicKey: string;
   privateKey: string;
@@ -86,6 +94,7 @@ interface IdentityPushState {
   jobs: PushJob[];
   tombstones: PushTombstone[];
   notificationCursor: number | null;
+  notificationPage?: PushPageCheckpoint;
   metrics: PushMetrics;
   saturated: boolean;
 }
@@ -124,7 +133,12 @@ export interface PushStoreDependencies {
   ) => Promise<unknown>;
 }
 
-export type PushAdmission = { status: 'queued' | 'duplicate' | 'no_targets' | 'saturated'; jobId?: string };
+export type PushAdmission = {
+  status: 'queued' | 'duplicate' | 'no_targets' | 'saturated';
+  jobId?: string;
+  /** The source-page index was committed in the same file write as admission. */
+  checkpointed?: boolean;
+};
 
 const MAX_BINDINGS = 32;
 const MAX_ENDPOINT_LENGTH = 2_048;
@@ -238,6 +252,16 @@ function validMetrics(value: unknown): value is PushMetrics {
     && (row.lastSaturationAt === undefined || Number.isFinite(row.lastSaturationAt));
 }
 
+function validPageCheckpoint(value: unknown): value is PushPageCheckpoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushPageCheckpoint>;
+  return Number.isSafeInteger(row.fromCursor) && row.fromCursor! >= 0
+    && Number.isSafeInteger(row.cursor) && row.cursor! >= row.fromCursor!
+    && Number.isSafeInteger(row.eventCount) && row.eventCount! >= 0
+    && Number.isSafeInteger(row.nextIndex) && row.nextIndex! >= 0 && row.nextIndex! <= row.eventCount!
+    && nonEmpty(row.digest, 128) && /^[A-Za-z0-9_-]+$/.test(row.digest);
+}
+
 function validVapid(value: unknown): value is VapidKeys {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const vapid = value as Partial<VapidKeys>;
@@ -267,6 +291,8 @@ function validV3(value: unknown): value is PushStateV3 {
     && identity.jobs.every((job) => validJob(job) && job.identityCid === cid)
     && identity.tombstones.every(validTombstone)
     && (identity.notificationCursor === null || (Number.isSafeInteger(identity.notificationCursor) && identity.notificationCursor >= 0))
+    && (identity.notificationPage === undefined || (validPageCheckpoint(identity.notificationPage)
+      && identity.notificationCursor !== null && identity.notificationPage.fromCursor === identity.notificationCursor))
     && validMetrics(identity.metrics) && typeof identity.saturated === 'boolean');
 }
 
@@ -571,14 +597,59 @@ export class PushStore {
   commitNotificationCursor(cursor: number): void {
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('push notification cursor must be a non-negative safe integer');
     const owner = identityState(this.state, this.identityCid);
-    if (owner.notificationCursor === cursor) return;
+    if (owner.notificationCursor === cursor && owner.notificationPage === undefined) return;
     owner.notificationCursor = cursor;
+    delete owner.notificationPage;
+    this.persist();
+  }
+
+  get notificationPageProgress(): Readonly<PushPageCheckpoint> | null {
+    const page = identityState(this.state, this.identityCid).notificationPage;
+    return page ? { ...page } : null;
+  }
+
+  beginNotificationPage(input: Omit<PushPageCheckpoint, 'nextIndex'>): Readonly<PushPageCheckpoint> {
+    if (!validPageCheckpoint({ ...input, nextIndex: 0 })) throw new Error('push notification page checkpoint is invalid');
+    const owner = identityState(this.state, this.identityCid);
+    if (owner.notificationCursor !== input.fromCursor) {
+      throw new Error('push notification page does not start at the committed cursor');
+    }
+    if (owner.notificationPage) return { ...owner.notificationPage };
+    owner.notificationPage = { ...input, nextIndex: 0 };
+    this.persist();
+    return { ...owner.notificationPage };
+  }
+
+  advanceNotificationPage(nextIndex: number, durable = false): void {
+    const owner = identityState(this.state, this.identityCid);
+    const page = owner.notificationPage;
+    if (!page || !Number.isSafeInteger(nextIndex) || nextIndex !== page.nextIndex + 1 || nextIndex > page.eventCount) {
+      throw new Error('push notification page progress is invalid');
+    }
+    page.nextIndex = nextIndex;
+    if (durable) this.persist();
+  }
+
+  checkpointNotificationPage(): void {
+    if (!identityState(this.state, this.identityCid).notificationPage) {
+      throw new Error('push notification page checkpoint is missing');
+    }
+    this.persist();
+  }
+
+  commitNotificationPage(): void {
+    const owner = identityState(this.state, this.identityCid);
+    const page = owner.notificationPage;
+    if (!page || page.nextIndex !== page.eventCount) throw new Error('push notification page is incomplete');
+    owner.notificationCursor = page.cursor;
+    delete owner.notificationPage;
     this.persist();
   }
 
   admitJob(
     input: { wireId: string; kind: PushKind; contactId: string; senderName?: string },
     now = Date.now(),
+    notificationPageNextIndex?: number,
   ): PushAdmission {
     if (!nonEmpty(input.wireId, 1_024) || !nonEmpty(input.contactId, 512)
       || (input.senderName !== undefined && !nonEmpty(input.senderName, 512))) {
@@ -588,9 +659,20 @@ export class PushStore {
     if (targets.length === 0) return { status: 'no_targets' };
     const id = `${this.identityCid}:${input.wireId}:${input.kind}`;
     const owner = identityState(this.state, this.identityCid);
+    const checkpointAdmission = () => {
+      if (notificationPageNextIndex === undefined) return false;
+      const page = owner.notificationPage;
+      if (!page || notificationPageNextIndex !== page.nextIndex + 1 || notificationPageNextIndex > page.eventCount) {
+        throw new Error('push notification page admission checkpoint is invalid');
+      }
+      page.nextIndex = notificationPageNextIndex;
+      return true;
+    };
     this.pruneTombstones(owner, now);
     if (owner.jobs.some((job) => job.id === id) || owner.tombstones.some((row) => row.id === id)) {
-      return { status: 'duplicate', jobId: id };
+      const checkpointed = checkpointAdmission();
+      if (checkpointed) this.persist();
+      return { status: 'duplicate', jobId: id, ...(checkpointed ? { checkpointed: true } : {}) };
     }
     // Tombstones are expendable dedupe hints; pending/retry work is not. Always
     // evict the oldest hint before refusing durable work at the combined cap.
@@ -613,8 +695,9 @@ export class PushStore {
     });
     owner.metrics.admitted++;
     owner.saturated = false;
+    const checkpointed = checkpointAdmission();
     this.persist();
-    return { status: 'queued', jobId: id };
+    return { status: 'queued', jobId: id, ...(checkpointed ? { checkpointed: true } : {}) };
   }
 
   enqueueJob(input: { wireId: string; kind: PushKind; contactId: string; senderName?: string }, now = Date.now()): boolean {

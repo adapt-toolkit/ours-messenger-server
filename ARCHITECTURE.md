@@ -137,8 +137,11 @@ suppress delivery for the matching binding without suppressing other devices.
 A separate persisted byte cursor follows the daemon's durable, content-free
 notification log. Cursor advancement happens only after durable queue admission,
 so a crash replays into job/tombstone dedupe and saturation leaves the source
-event recoverable. First use primes at the current tip; unread history is never
-bulk-transformed into pushes.
+event recoverable. A bounded page checkpoint records the source page's start,
+end, digest, count, and next event index. Oversized pages can therefore pause at
+capacity and resume at the refused event without depending on old tombstones or
+re-publishing the admitted prefix. First use primes at the current tip; unread
+history is never bulk-transformed into pushes.
 
 Provider acceptance and the local atomic state file cannot form one
 transaction. If the process dies after the provider accepts a request but

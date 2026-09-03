@@ -4,8 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import webpush from 'web-push';
+import { MessengerEventBus } from '../src/events.ts';
 import { PushStore } from '../src/push.ts';
 import { PushDeliveryQueue } from '../src/push-delivery.ts';
+import { applyNotificationPage } from '../src/watch.ts';
 
 const vapid = webpush.generateVAPIDKeys();
 const env = {
@@ -73,25 +75,68 @@ function legacyState(jobs) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-// More than the former global cap can flow successfully while durable storage
-// stays bounded: completed jobs become only short-lived capped tombstones and
-// delivery totals live in counters.
+// Reproduce the adversarial source-page boundary, not merely 4,200 independent
+// admissions. The daemon page can contain more than the queue capacity. The
+// first pass must stop at the refused event, persist that exact index, drain,
+// restart, and resume without re-admitting or re-publishing its 4,096-event
+// prefix after the 256 tombstones have rotated.
 {
   const dir = mkdtempSync(join(tmpdir(), 'messenger-push-volume-'));
   try {
     let now = 1_800_000_000_000;
-    const store = PushStore.open(dir, 'CID-ME', env, { sendNotification: async () => {} });
+    let sends = 0;
+    const store = PushStore.open(dir, 'CID-ME', env, { sendNotification: async () => { sends++; } });
     store.ensure(subscription);
-    for (let index = 0; index < 4_200; index++) {
-      const admitted = store.admitJob({ wireId: `AGENT-${index}`, kind: 'message', contactId: 'CID-AGENT' }, now++);
-      assert.equal(admitted.status, 'queued');
-      const due = store.dueJobs(now)[0];
-      assert.ok(due && store.claimJob(due.id, now));
-      await store.dispatchJob(due.id, {
-        v: 1, kind: 'message', title: 'Agent', body: 'event', contact_id: 'CID-AGENT', wire_id: `AGENT-${index}`, url: '/chats/CID-AGENT',
-      }, now);
-    }
-    const stats = store.queueStats();
+    store.commitNotificationCursor(100);
+    const page = {
+      cursor: 200,
+      events: Array.from({ length: 4_200 }, (_, index) => ({
+        event: 'message_received', sender_id: 'CID-AGENT', sender_name: 'Agent',
+        wire_id: `AGENT-${index}`, date: new Date(now + index).toISOString(),
+      })),
+    };
+    const bus = new MessengerEventBus();
+    const sse = bus.subscribe(5_000);
+    const watchStats = { pushes: 0, events: 0, reconnects: 0, cursorCommits: 0, saturationEvents: 0 };
+    const queueOptions = (currentStore) => ({
+      store: currentStore, client: {}, identityCid: 'CID-ME', log: { info() {}, warn() {} },
+      now: () => now, autoStart: false,
+      project: async (pending) => ({
+        v: 1, kind: pending.kind, title: 'Agent', body: 'event', contact_id: pending.contactId,
+        wire_id: pending.wireId, url: '/chats/CID-AGENT',
+      }),
+    });
+    const firstQueue = new PushDeliveryQueue(queueOptions(store));
+    assert.equal(applyNotificationPage(page, store, firstQueue, bus, watchStats, { info() {}, warn() {} }), false,
+      'an oversized source page pauses exactly at full pending capacity');
+    assert.equal(store.notificationCursor, 100, 'the end cursor is not committed past refused work');
+    assert.equal(store.notificationPageProgress.nextIndex, 4_096, 'the exact resume index is durable');
+    assert.equal(watchStats.events, 4_096, 'only admitted events are published on the first pass');
+    await firstQueue.drainDue();
+    assert.equal(sends, 4_096);
+    assert.equal(store.queueStats().tombstones, 256, 'only the newest bounded dedupe hints remain');
+    assert.equal(store.queueStats().pending, 0);
+    assert.equal(store.queueStats().healthy, false,
+      'pending=0 cannot mask the refused source event while its page is paused');
+    assert.equal(store.queueStats().admissionFailures, 1);
+
+    // A process restart restores both the main cursor and the partial-page
+    // checkpoint. Replaying the daemon page resumes at event 4096; WIRE-0 never
+    // depends on its already-evicted tombstone.
+    const restarted = PushStore.open(dir, 'CID-ME', env, { sendNotification: async () => { sends++; } });
+    const secondQueue = new PushDeliveryQueue(queueOptions(restarted));
+    assert.equal(applyNotificationPage(page, restarted, secondQueue, bus, watchStats, { info() {}, warn() {} }), true);
+    assert.equal(restarted.notificationCursor, 200);
+    assert.equal(watchStats.events, 4_200, 'source-page replay publishes each SSE invalidation exactly once');
+    await secondQueue.drainDue();
+    assert.equal(sends, 4_200, 'source-page replay delivers each push exactly once');
+
+    const published = [];
+    for (let index = 0; index < 4_200; index++) published.push((await sse.next()).wire_id);
+    assert.equal(new Set(published).size, 4_200, 'SSE publication contains no replayed prefix');
+    sse.close();
+
+    const stats = restarted.queueStats();
     assert.equal(stats.pending, 0);
     assert.equal(stats.delivered, 4_200);
     assert.ok(stats.tombstones <= 256);

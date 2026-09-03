@@ -49,14 +49,25 @@ let attempts = 0;
 const warnings = [];
 const admitted = [];
 const controllerWait = async () => {};
-const cursorStore = {
-  notificationCursor: null,
-  commitNotificationCursor(cursor) { this.notificationCursor = cursor; },
-};
+const cursorStore = (cursor = 0) => ({
+  notificationCursor: cursor,
+  notificationPageProgress: null,
+  commitNotificationCursor(next) { this.notificationCursor = next; this.notificationPageProgress = null; },
+  beginNotificationPage(page) {
+    this.notificationPageProgress = { ...page, nextIndex: 0 };
+    return { ...this.notificationPageProgress };
+  },
+  advanceNotificationPage(next) { this.notificationPageProgress.nextIndex = next; },
+  checkpointNotificationPage() {},
+  commitNotificationPage() {
+    this.notificationCursor = this.notificationPageProgress.cursor;
+    this.notificationPageProgress = null;
+  },
+});
 const handle = startWatcher(
   { version: async () => ({ ok: true }) },
   'Me',
-  cursorStore,
+  cursorStore(),
   { info() {}, warn(message) { warnings.push(message); } },
   watchBus,
   {
@@ -93,7 +104,7 @@ const fileBus = new MessengerEventBus();
 const fileEvents = fileBus.subscribe(2);
 let durableEnqueues = 0;
 let filePages = 0;
-const fileCursor = { notificationCursor: null, commitNotificationCursor(cursor) { this.notificationCursor = cursor; } };
+const fileCursor = cursorStore();
 const fileHandle = startWatcher(
   { version: async () => ({ ok: true }) },
   'Me',

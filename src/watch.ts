@@ -4,6 +4,7 @@
 // from the last page committed after durable admission. It never scans unread
 // message history and therefore cannot turn an old inbox into a push storm.
 
+import { createHash } from 'node:crypto';
 import type { OursClient } from '@ours.network/sdk';
 import { MessengerEventBus, normalizeNotification } from './events.js';
 import type { PushStore } from './push.js';
@@ -45,6 +46,10 @@ export interface WatcherOptions {
   readonly delivery: Pick<PushDeliveryQueue, 'admit'>;
 }
 
+function pageDigest(events: ReadonlyArray<Record<string, unknown>>): string {
+  return createHash('sha256').update(JSON.stringify(events)).digest('base64url');
+}
+
 /**
  * Admit a complete source page before committing its cursor. Jobs are persisted
  * one by one, so a crash before the cursor write replays the page and converges
@@ -62,9 +67,40 @@ export function applyNotificationPage(
   if (!Number.isSafeInteger(page.cursor) || page.cursor < 0 || !Array.isArray(page.events)) {
     throw new Error('daemon notification page is malformed');
   }
-  for (const record of page.events) {
-    const admission = delivery.admit(record);
+  const fromCursor = push.notificationCursor;
+  // A fresh store asks the daemon for `tip`, whose contract is an empty prime
+  // page. Refuse an unexpected backlog so startup can never become an unread-
+  // history-style bulk replay through a malformed reader.
+  if (fromCursor === null) {
+    if (page.events.length > 0) throw new Error('daemon notification tip page unexpectedly contained events');
+    push.commitNotificationCursor(page.cursor);
+    stats.cursorCommits++;
+    return true;
+  }
+
+  let progress = push.notificationPageProgress;
+  if (progress) {
+    // The daemon reads through current EOF, so a page can grow while capacity is
+    // being freed. Its original prefix must remain byte-log stable; finish only
+    // that prefix, commit its end cursor, then fetch the appended suffix.
+    const prefix = page.events.slice(0, progress.eventCount);
+    if (progress.fromCursor !== fromCursor || page.cursor < progress.cursor
+      || page.events.length < progress.eventCount || pageDigest(prefix) !== progress.digest) {
+      throw new Error('daemon notification page changed while a checkpoint was in progress');
+    }
+  } else {
+    progress = push.beginNotificationPage({
+      fromCursor, cursor: page.cursor, eventCount: page.events.length, digest: pageDigest(page.events),
+    });
+  }
+
+  for (let index = progress.nextIndex; index < progress.eventCount; index++) {
+    const record = page.events[index];
+    const admission = delivery.admit(record, index + 1);
     if (admission.status === 'saturated') {
+      // Pin the exact refused boundary even for a test delivery seam that does
+      // not itself persist the shared store.
+      push.checkpointNotificationPage();
       stats.saturationEvents++;
       log.warn(`event=push_cursor_blocked status=saturated source_cursor=${page.cursor}`);
       return false;
@@ -73,8 +109,9 @@ export function applyNotificationPage(
     // The bridge remains metadata-only. Browser clients recover canonical state
     // from REST; this event never consumes or mutates inbox history.
     events.publish(normalizeNotification(record));
+    if (!admission.checkpointed) push.advanceNotificationPage(index + 1);
   }
-  push.commitNotificationCursor(page.cursor);
+  push.commitNotificationPage();
   stats.cursorCommits++;
   return true;
 }
