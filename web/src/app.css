@@ -910,20 +910,13 @@
 .command-status.warning,.command-status.indeterminate { color:var(--warn); }
 .command-status.error { color:var(--danger); }
 .command-status.success { color:var(--accent-deep); }
-.composer .composer-tool.command-trigger { display:inline-flex; flex:0 1 auto; min-width:44px; width:auto; gap:4px; padding:0 8px; overflow:hidden; font-size:.75rem; font-weight:700; }
-.composer .command-trigger > .ic { display:none; }
-.composer .command-trigger > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.composer .composer-tool.command-trigger { display:inline-grid; place-items:center; flex:0 0 44px; width:44px; min-width:44px; padding:0; }
 .command-trigger:active:not(:disabled) { background:var(--surface-3); transform:translateY(1px); }
 .typed-message { min-width:min(330px,78vw); }
 .typed-message-kind { color:var(--accent); font-size:.72rem; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
 .typed-message-state { margin-top:3px; color:var(--text-2); font-size:.75rem; }
 .typed-message pre { max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:.75rem/1.45 var(--font-mono); }
 @media (max-width:860px) { .command-panel { max-height:48vh; border-radius:12px; } .command-field { font-size:1rem; } .typed-message { min-width:0; } }
-@media (max-width:350px) {
-  .composer .composer-tool.command-trigger { width:44px; padding:0; justify-content:center; }
-  .composer .command-trigger > .ic { display:block; }
-  .composer .command-trigger > span { display:none; }
-}
 @media (prefers-reduced-motion:reduce) { .command-panel .linkbtn:active:not(:disabled),.command-trigger:active:not(:disabled) { transform:none; } }
 @media (prefers-contrast:more) { .command-panel,.command-property,.command-object { border-color:currentColor; box-shadow:none; } }
 @media (forced-colors:active) { .command-panel { border:1px solid ButtonText; background:Canvas; color:CanvasText; box-shadow:none; } }
