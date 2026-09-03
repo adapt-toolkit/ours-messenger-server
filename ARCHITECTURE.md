@@ -127,11 +127,27 @@ identity CID. Public routes expose only the VAPID public key, fingerprint,
 configuration epoch, and opaque binding acknowledgements. Subscription
 mutations have strict origin/CSRF checks, validation, size and rate limits.
 
-The delivery queue stores correlation metadata but no content. Each attempt
-re-reads canonical history. Permanent endpoint failures prune a binding;
-transient failures retry with bounded exponential backoff. Foreground browser
-presence can suppress delivery for the matching binding without suppressing
-other devices.
+The delivery queue stores only pending/retry correlation metadata plus a small,
+short-lived dedupe tombstone set; payload content and multi-day result history
+are absent. Delivery totals are separate counters. Each attempt re-reads
+canonical history. Permanent endpoint failures prune a binding; transient
+failures retry with bounded exponential backoff. Foreground browser presence can
+suppress delivery for the matching binding without suppressing other devices.
+
+A separate persisted byte cursor follows the daemon's durable, content-free
+notification log. Cursor advancement happens only after durable queue admission,
+so a crash replays into job/tombstone dedupe and saturation leaves the source
+event recoverable. A bounded page checkpoint records the source page's start,
+end, digest, count, and next event index. Oversized pages can therefore pause at
+capacity and resume at the refused event without depending on old tombstones or
+re-publishing the admitted prefix. First use primes at the current tip; unread
+history is never bulk-transformed into pushes.
+
+Provider acceptance and the local atomic state file cannot form one
+transaction. If the process dies after the provider accepts a request but
+before the completion/tombstone rename, restart retries that in-flight job. The
+queue deliberately chooses at-least-once recovery at this irreducible boundary
+instead of silently losing a notification.
 
 ## PWA cache boundary
 

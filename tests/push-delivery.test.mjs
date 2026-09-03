@@ -150,12 +150,16 @@ try {
     const policyStore = PushStore.open(policyDir, 'CID-ME', env, {
       sendNotification: async (target, payload) => {
         if (target.endpoint.endsWith('/dead')) throw Object.assign(new Error('gone'), { statusCode: 410 });
+        if (target.endpoint.endsWith('/bad-device-token')) {
+          throw Object.assign(new Error('invalid APNs device'), { statusCode: 400, body: JSON.stringify({ reason: 'BadDeviceToken' }) });
+        }
         delivered.push({ endpoint: target.endpoint, event: JSON.parse(payload) });
       },
     });
     policyStore.ensure({ ...subscription, endpoint: 'https://push.example/full', preview: 'full' });
     policyStore.ensure({ ...subscription, endpoint: 'https://push.example/private', preview: 'private' });
     policyStore.ensure({ ...subscription, endpoint: 'https://push.example/dead', preview: 'full' });
+    policyStore.ensure({ ...subscription, endpoint: 'https://push.example/bad-device-token', preview: 'full' });
     const rows = [
       { wire_id: 'FILE-1', from: { id: 'CID-A', name: 'Alice' }, kind: 'file', mime: 'application/pdf', filename: 'report.pdf' },
       { wire_id: 'PHOTO-1', from: { id: 'CID-A', name: 'Alice' }, kind: 'file', mime: 'image/png', filename: 'photo.png' },
@@ -203,8 +207,8 @@ try {
     assert.ok(privatePayloads.every((event) => event.title === 'ours messenger'
       && !event.body.includes('full message text') && !event.body.includes('.png') && !event.body.includes('.pdf') && !event.body.includes('.ogg')),
     'Private mode removes content and filenames without changing full-preview default');
-    assert.equal(policyStore.bindingCount, 2, '410 permanently prunes a dead binding');
-    assert.equal(policyQueue.stats.pruned, 1, 'pruning is observable without logging endpoint capability');
+    assert.equal(policyStore.bindingCount, 2, '410 and APNs BadDeviceToken permanently prune dead bindings');
+    assert.equal(policyQueue.stats.pruned, 2, 'invalid-token pruning is observable without logging endpoint capability');
   } finally {
     rmSync(policyDir, { recursive: true, force: true });
   }

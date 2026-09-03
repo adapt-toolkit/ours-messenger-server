@@ -17,8 +17,7 @@
 import assert from 'node:assert/strict';
 import { counter } from './harness.mjs';
 import { projectPage } from '../src/conversation.ts';
-import { startWatcher } from '../src/watch.ts';
-import { MessengerEventBus } from '../src/events.ts';
+import { projectPushEvent } from '../src/push-delivery.ts';
 import { contactDisplayName, isCoworkRoomContact, roomContactLabel } from '../shared/roomMessageCore.mjs';
 import { presentContacts } from '../src/api.ts';
 import { contactName, displayName } from '../web/src/ui/viewmodel.ts';
@@ -187,42 +186,26 @@ t.eq(older.preview, 'Mallory · line 59',
      'and paging backwards does not rewrite the chat-list row to an old line');
 t.eq(pageFor(ROOM, []).preview, '', 'an empty conversation has no preview');
 
-// ---- 4. the push notification, through the real watcher --------------------
+// ---- 4. the push notification, through the real durable projection --------
 const roomText = roomBody({ kind: 'room_msg', text: 'the deploy is green' });
-const pushed = [];
 const client = {
   getHistoryItem: async () => ({
     ...msg(roomText, 1), direction: 'in', peer: { id: 'CID-ROOM', name: ROOM },
   }),
-  listIncomingFiles: async () => [],
-  version: async () => ({ ok: true }),
 };
-const events = new MessengerEventBus();
-const watcher = startWatcher(
-  client,
-  'Me',
-  { send: async (event) => { pushed.push(event); return { sent: 1, pruned: 0, failed: 0 }; } },
-  { info() {}, warn() {} },
-  events,
-  {
-    watch: async function* () {
-      yield { event: 'message_received', sender_id: 'CID-ROOM', sender_name: ROOM_FRIENDLY, wire_id: 'W1', date: 'D1' };
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    },
-    wait: async () => {},
-  },
-);
-await new Promise((resolve) => setTimeout(resolve, 400));
-await watcher.stop();
+const pushed = await projectPushEvent(client, {
+  id: 'CID-ME:W1:message', identityCid: 'CID-ME', wireId: 'W1', kind: 'message', contactId: 'CID-ROOM',
+  senderName: ROOM_FRIENDLY, createdAt: 1, expiresAt: 2, attempts: 0, nextAttemptAt: 1,
+  targetBindingIds: [], deliveredBindingIds: [], status: 'pending', sentCount: 0,
+});
 
-t.eq(pushed.length >= 1, true, 'the watcher composed a push for the room message');
-t.eq(pushed[0].body, 'Mallory · the deploy is green',
+t.eq(pushed.body, 'Mallory · the deploy is green',
      'AND ITS BODY IS THE READABLE LINE — this is the surface a user cannot scroll past');
-t.ok(!pushed[0].body.includes('{'), 'the notification carries no JSON');
-t.ok(!JSON.stringify(pushed[0]).includes('CID-THAT-MUST-NEVER-BE-SHOWN'),
+t.ok(!pushed.body.includes('{'), 'the notification carries no JSON');
+t.ok(!JSON.stringify(pushed).includes('CID-THAT-MUST-NEVER-BE-SHOWN'),
      'nothing in the notification payload names the author identity');
-t.eq(pushed[0].title, 'Release 2 room', 'the immediate push title uses the configured friendly room label');
-t.ok(!JSON.stringify(pushed[0]).includes(ROOM_FRIENDLY), 'the immediate push leaks no generated room identity label');
+t.eq(pushed.title, 'Release 2 room', 'the durable push title uses the configured friendly room label');
+t.ok(!JSON.stringify(pushed).includes(ROOM_FRIENDLY), 'the durable push leaks no generated room identity label');
 
 console.log(`\nroom-preview OK (${t.count} checks) — one recogniser across presentation surfaces, no raw JSON and no leaked identity`);
 process.exit(0);

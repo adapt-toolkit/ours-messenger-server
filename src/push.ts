@@ -45,9 +45,42 @@ export interface PushJob {
   readonly nextAttemptAt: number;
   readonly targetBindingIds: string[];
   readonly deliveredBindingIds: string[];
-  readonly status: 'pending' | 'sent' | 'dropped';
+  readonly status: 'pending' | 'in_flight';
   readonly sentCount: number;
+  readonly inFlightAt?: number;
+}
+
+interface LegacyPushJob extends Omit<PushJob, 'status'> {
+  readonly status: 'pending' | 'sent' | 'dropped';
   readonly completedAt?: number;
+}
+
+interface PushTombstone {
+  readonly id: string;
+  readonly completedAt: number;
+  readonly expiresAt: number;
+}
+
+interface PushMetrics {
+  admitted: number;
+  delivered: number;
+  suppressed: number;
+  retries: number;
+  dropped: number;
+  permanentFailures: number;
+  prunedBindings: number;
+  admissionFailures: number;
+  tombstonesPruned: number;
+  migratedTerminal: number;
+  lastSaturationAt?: number;
+}
+
+interface PushPageCheckpoint {
+  readonly fromCursor: number;
+  readonly cursor: number;
+  readonly eventCount: number;
+  nextIndex: number;
+  readonly digest: string;
 }
 
 interface VapidKeys {
@@ -59,6 +92,19 @@ interface VapidKeys {
 interface IdentityPushState {
   bindings: PushSubscriptionRecord[];
   jobs: PushJob[];
+  tombstones: PushTombstone[];
+  notificationCursor: number | null;
+  notificationPage?: PushPageCheckpoint;
+  metrics: PushMetrics;
+  saturated: boolean;
+}
+
+interface PushStateV3 {
+  version: 3;
+  vapid: VapidKeys;
+  vapidFingerprint: string;
+  configEpoch: number;
+  identities: Record<string, IdentityPushState>;
 }
 
 interface PushStateV2 {
@@ -66,7 +112,7 @@ interface PushStateV2 {
   vapid: VapidKeys;
   vapidFingerprint: string;
   configEpoch: number;
-  identities: Record<string, IdentityPushState>;
+  identities: Record<string, { bindings: PushSubscriptionRecord[]; jobs: LegacyPushJob[] }>;
 }
 
 interface LegacyPushState {
@@ -87,13 +133,27 @@ export interface PushStoreDependencies {
   ) => Promise<unknown>;
 }
 
+export type PushAdmission = {
+  status: 'queued' | 'duplicate' | 'no_targets' | 'saturated';
+  jobId?: string;
+  /** The source-page index was committed in the same file write as admission. */
+  checkpointed?: boolean;
+};
+
 const MAX_BINDINGS = 32;
 const MAX_ENDPOINT_LENGTH = 2_048;
 const MAX_LABEL_LENGTH = 160;
-const MAX_JOBS_PER_IDENTITY = 4_096;
+const MAX_RECORDS_PER_IDENTITY = 4_096;
+const MAX_TOMBSTONES_PER_IDENTITY = 256;
 const JOB_EXPIRY_MS = 24 * 60 * 60 * 1_000;
-const TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const TOMBSTONE_RETENTION_MS = 15 * 60 * 1_000;
 const MAX_ATTEMPTS = 6;
+
+const emptyMetrics = (): PushMetrics => ({
+  admitted: 0, delivered: 0, suppressed: 0, retries: 0, dropped: 0,
+  permanentFailures: 0, prunedBindings: 0, admissionFailures: 0,
+  tombstonesPruned: 0, migratedTerminal: 0,
+});
 
 function nonEmpty(value: unknown, max = Number.MAX_SAFE_INTEGER): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -150,9 +210,7 @@ function validBinding(value: unknown): value is PushSubscriptionRecord {
     && (row.label === undefined || nonEmpty(row.label, MAX_LABEL_LENGTH));
 }
 
-function validJob(value: unknown): value is PushJob {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const row = value as Partial<PushJob>;
+function validJobBase(row: Partial<PushJob>): boolean {
   return nonEmpty(row.id, 2_048) && nonEmpty(row.identityCid, 512) && nonEmpty(row.wireId, 1_024)
     && (row.kind === 'message' || row.kind === 'file' || row.kind === 'photo' || row.kind === 'voice')
     && nonEmpty(row.contactId, 512) && (row.senderName === undefined || nonEmpty(row.senderName, 512))
@@ -162,9 +220,46 @@ function validJob(value: unknown): value is PushJob {
     && row.targetBindingIds.every((id) => nonEmpty(id, 128)) && Array.isArray(row.deliveredBindingIds)
     && row.deliveredBindingIds.length <= MAX_BINDINGS
     && row.deliveredBindingIds.every((id) => nonEmpty(id, 128))
-    && (row.status === 'pending' || row.status === 'sent' || row.status === 'dropped')
-    && Number.isSafeInteger(row.sentCount) && row.sentCount! >= 0
+    && Number.isSafeInteger(row.sentCount) && row.sentCount! >= 0;
+}
+
+function validJob(value: unknown): value is PushJob {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushJob>;
+  return validJobBase(row) && (row.status === 'pending' || row.status === 'in_flight')
+    && (row.inFlightAt === undefined || Number.isFinite(row.inFlightAt));
+}
+
+function validLegacyJob(value: unknown): value is LegacyPushJob {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<LegacyPushJob>;
+  return validJobBase(row as Partial<PushJob>) && (row.status === 'pending' || row.status === 'sent' || row.status === 'dropped')
     && (row.completedAt === undefined || Number.isFinite(row.completedAt));
+}
+
+function validTombstone(value: unknown): value is PushTombstone {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushTombstone>;
+  return nonEmpty(row.id, 2_048) && Number.isFinite(row.completedAt) && Number.isFinite(row.expiresAt);
+}
+
+function validMetrics(value: unknown): value is PushMetrics {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushMetrics>;
+  return ['admitted', 'delivered', 'suppressed', 'retries', 'dropped', 'permanentFailures', 'prunedBindings',
+    'admissionFailures', 'tombstonesPruned', 'migratedTerminal'].every((key) =>
+    Number.isSafeInteger(row[key as keyof PushMetrics]) && Number(row[key as keyof PushMetrics]) >= 0)
+    && (row.lastSaturationAt === undefined || Number.isFinite(row.lastSaturationAt));
+}
+
+function validPageCheckpoint(value: unknown): value is PushPageCheckpoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Partial<PushPageCheckpoint>;
+  return Number.isSafeInteger(row.fromCursor) && row.fromCursor! >= 0
+    && Number.isSafeInteger(row.cursor) && row.cursor! >= row.fromCursor!
+    && Number.isSafeInteger(row.eventCount) && row.eventCount! >= 0
+    && Number.isSafeInteger(row.nextIndex) && row.nextIndex! >= 0 && row.nextIndex! <= row.eventCount!
+    && nonEmpty(row.digest, 128) && /^[A-Za-z0-9_-]+$/.test(row.digest);
 }
 
 function validVapid(value: unknown): value is VapidKeys {
@@ -181,6 +276,26 @@ function validVapid(value: unknown): value is VapidKeys {
   }
 }
 
+function validV3(value: unknown): value is PushStateV3 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Partial<PushStateV3>;
+  if (state.version !== 3 || !validVapid(state.vapid) || !nonEmpty(state.vapidFingerprint, 128)
+    || !Number.isSafeInteger(state.configEpoch) || state.configEpoch! < 1
+    || !state.identities || typeof state.identities !== 'object' || Array.isArray(state.identities)) return false;
+  return Object.entries(state.identities).every(([cid, identity]) => nonEmpty(cid, 512)
+    && !!identity && typeof identity === 'object'
+    && Array.isArray(identity.bindings) && identity.bindings.length <= MAX_BINDINGS && identity.bindings.every(validBinding)
+    && Array.isArray(identity.jobs) && Array.isArray(identity.tombstones)
+    && identity.jobs.length + identity.tombstones.length <= MAX_RECORDS_PER_IDENTITY
+    && identity.tombstones.length <= MAX_TOMBSTONES_PER_IDENTITY
+    && identity.jobs.every((job) => validJob(job) && job.identityCid === cid)
+    && identity.tombstones.every(validTombstone)
+    && (identity.notificationCursor === null || (Number.isSafeInteger(identity.notificationCursor) && identity.notificationCursor >= 0))
+    && (identity.notificationPage === undefined || (validPageCheckpoint(identity.notificationPage)
+      && identity.notificationCursor !== null && identity.notificationPage.fromCursor === identity.notificationCursor))
+    && validMetrics(identity.metrics) && typeof identity.saturated === 'boolean');
+}
+
 function validV2(value: unknown): value is PushStateV2 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const state = value as Partial<PushStateV2>;
@@ -190,8 +305,8 @@ function validV2(value: unknown): value is PushStateV2 {
   return Object.entries(state.identities).every(([cid, identity]) => nonEmpty(cid, 512)
     && !!identity && typeof identity === 'object'
     && Array.isArray(identity.bindings) && identity.bindings.length <= MAX_BINDINGS && identity.bindings.every(validBinding)
-    && Array.isArray(identity.jobs) && identity.jobs.length <= MAX_JOBS_PER_IDENTITY
-    && identity.jobs.every((job) => validJob(job) && job.identityCid === cid));
+    && Array.isArray(identity.jobs) && identity.jobs.length <= MAX_RECORDS_PER_IDENTITY
+    && identity.jobs.every((job) => validLegacyJob(job) && job.identityCid === cid));
 }
 
 function validLegacy(value: unknown): value is LegacyPushState {
@@ -217,8 +332,12 @@ function preservedStateError(file: string, reason: string): Error {
   );
 }
 
-function identityState(state: PushStateV2, cid: string): IdentityPushState {
-  return state.identities[cid] ??= { bindings: [], jobs: [] };
+function newIdentityState(): IdentityPushState {
+  return { bindings: [], jobs: [], tombstones: [], notificationCursor: null, metrics: emptyMetrics(), saturated: false };
+}
+
+function identityState(state: PushStateV3, cid: string): IdentityPushState {
+  return state.identities[cid] ??= newIdentityState();
 }
 
 function privateEvent(event: PushEvent): PushEvent {
@@ -226,6 +345,14 @@ function privateEvent(event: PushEvent): PushEvent {
     : event.kind === 'voice' ? 'New voice message'
       : event.kind === 'photo' ? 'New photo' : 'New file';
   return { ...event, title: 'ours messenger', body };
+}
+
+function invalidDeviceToken(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const raw = (error as { body?: unknown; reason?: unknown }).reason ?? (error as { body?: unknown }).body;
+  const body = typeof raw === 'string' ? raw.slice(0, 2_048)
+    : Buffer.isBuffer(raw) ? raw.subarray(0, 2_048).toString('utf8') : '';
+  return /\b(?:BadDeviceToken|DeviceTokenNotForTopic|Unregistered)\b/.test(body);
 }
 
 const LEGACY_LOCAL_VAPID_SUBJECT = 'mailto:admin@localhost';
@@ -249,9 +376,9 @@ export class PushStore {
   private readonly file: string;
   private readonly identityCid: string;
   private readonly sendNotification: NonNullable<PushStoreDependencies['sendNotification']>;
-  private state: PushStateV2;
+  private state: PushStateV3;
 
-  private constructor(file: string, identityCid: string, state: PushStateV2, dependencies: PushStoreDependencies) {
+  private constructor(file: string, identityCid: string, state: PushStateV3, dependencies: PushStoreDependencies) {
     this.file = file;
     this.identityCid = identityCid;
     this.state = state;
@@ -272,7 +399,7 @@ export class PushStore {
 
     const file = join(stateDir, 'push.json');
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    let parsed: PushStateV2 | LegacyPushState | undefined;
+    let parsed: PushStateV3 | PushStateV2 | LegacyPushState | undefined;
     try {
       const stat = lstatSync(file);
       if (!stat.isFile() || stat.isSymbolicLink()) throw preservedStateError(file, 'not a safe regular file');
@@ -282,7 +409,7 @@ export class PushStore {
       } catch (error) {
         throw preservedStateError(file, `corrupt or unreadable (${error instanceof Error ? error.message : String(error)})`);
       }
-      if (validV2(value) || validLegacy(value)) parsed = value;
+      if (validV3(value) || validV2(value) || validLegacy(value)) parsed = value;
       else throw preservedStateError(file, 'schema-invalid');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -307,8 +434,8 @@ export class PushStore {
     }
     const selectedFingerprint = fingerprint(selected.publicKey);
 
-    let state: PushStateV2;
-    if (parsed && validV2(parsed)) {
+    let state: PushStateV3;
+    if (parsed && validV3(parsed)) {
       const rotated = parsed.vapidFingerprint !== selectedFingerprint;
       state = {
         ...parsed,
@@ -316,29 +443,60 @@ export class PushStore {
         vapidFingerprint: selectedFingerprint,
         configEpoch: rotated ? parsed.configEpoch + 1 : parsed.configEpoch,
       };
+    } else if (parsed && validV2(parsed)) {
+      const rotated = parsed.vapidFingerprint !== selectedFingerprint;
+      const now = Date.now();
+      state = {
+        version: 3,
+        vapid: selected,
+        vapidFingerprint: selectedFingerprint,
+        configEpoch: rotated ? parsed.configEpoch + 1 : parsed.configEpoch,
+        identities: Object.fromEntries(Object.entries(parsed.identities).map(([cid, old]) => {
+          const pending = old.jobs.filter((row) => row.status === 'pending').map((row): PushJob => ({
+            id: row.id, identityCid: row.identityCid, wireId: row.wireId, kind: row.kind,
+            contactId: row.contactId, senderName: row.senderName, createdAt: row.createdAt,
+            expiresAt: row.expiresAt, attempts: row.attempts, nextAttemptAt: row.nextAttemptAt,
+            targetBindingIds: [...row.targetBindingIds], deliveredBindingIds: [...row.deliveredBindingIds],
+            status: 'pending', sentCount: row.sentCount,
+          }));
+          const terminal = old.jobs.filter((row) => row.status !== 'pending');
+          const tombstones = terminal
+            .filter((row) => row.completedAt !== undefined && now - row.completedAt <= TOMBSTONE_RETENTION_MS)
+            .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
+            .slice(0, MAX_TOMBSTONES_PER_IDENTITY)
+            .map((row): PushTombstone => ({ id: row.id, completedAt: row.completedAt!, expiresAt: row.completedAt! + TOMBSTONE_RETENTION_MS }));
+          const metrics = emptyMetrics();
+          metrics.admitted = old.jobs.length;
+          metrics.delivered = terminal.reduce((sum, row) => sum + (row.status === 'sent' ? row.sentCount : 0), 0);
+          metrics.dropped = terminal.filter((row) => row.status === 'dropped').length;
+          metrics.migratedTerminal = terminal.length;
+          metrics.tombstonesPruned = terminal.length - tombstones.length;
+          return [cid, { bindings: old.bindings, jobs: pending, tombstones, notificationCursor: null, metrics, saturated: false }];
+        })),
+      };
     } else {
       const oldFingerprint = parsed ? fingerprint(parsed.vapid.publicKey) : selectedFingerprint;
       const now = new Date().toISOString();
       state = {
-        version: 2,
+        version: 3,
         vapid: selected,
         vapidFingerprint: selectedFingerprint,
         configEpoch: 1,
         identities: {
           [identityCid]: {
+            ...newIdentityState(),
             bindings: (parsed?.subscriptions ?? []).map((row) => ({
               bindingId: randomUUID(), endpoint: row.endpoint, keys: row.keys,
               createdAt: row.createdAt, updatedAt: now, label: row.label,
               vapidFingerprint: oldFingerprint, configEpoch: 1, preview: 'full',
             })),
-            jobs: [],
           },
         },
       };
     }
 
     const store = new PushStore(file, identityCid, state, deps);
-    store.pruneTerminal(Date.now());
+    store.recoverAndPrune(Date.now());
     store.persist();
     return store;
   }
@@ -432,32 +590,137 @@ export class PushStore {
     return removed;
   }
 
-  enqueueJob(input: { wireId: string; kind: PushKind; contactId: string; senderName?: string }, now = Date.now()): boolean {
+  get notificationCursor(): number | null {
+    return identityState(this.state, this.identityCid).notificationCursor;
+  }
+
+  commitNotificationCursor(cursor: number): void {
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('push notification cursor must be a non-negative safe integer');
+    const owner = identityState(this.state, this.identityCid);
+    if (owner.notificationCursor === cursor && owner.notificationPage === undefined) return;
+    owner.notificationCursor = cursor;
+    delete owner.notificationPage;
+    this.persist();
+  }
+
+  get notificationPageProgress(): Readonly<PushPageCheckpoint> | null {
+    const page = identityState(this.state, this.identityCid).notificationPage;
+    return page ? { ...page } : null;
+  }
+
+  beginNotificationPage(input: Omit<PushPageCheckpoint, 'nextIndex'>): Readonly<PushPageCheckpoint> {
+    if (!validPageCheckpoint({ ...input, nextIndex: 0 })) throw new Error('push notification page checkpoint is invalid');
+    const owner = identityState(this.state, this.identityCid);
+    if (owner.notificationCursor !== input.fromCursor) {
+      throw new Error('push notification page does not start at the committed cursor');
+    }
+    if (owner.notificationPage) return { ...owner.notificationPage };
+    owner.notificationPage = { ...input, nextIndex: 0 };
+    this.persist();
+    return { ...owner.notificationPage };
+  }
+
+  advanceNotificationPage(nextIndex: number, durable = false): void {
+    const owner = identityState(this.state, this.identityCid);
+    const page = owner.notificationPage;
+    if (!page || !Number.isSafeInteger(nextIndex) || nextIndex !== page.nextIndex + 1 || nextIndex > page.eventCount) {
+      throw new Error('push notification page progress is invalid');
+    }
+    page.nextIndex = nextIndex;
+    if (durable) this.persist();
+  }
+
+  checkpointNotificationPage(): void {
+    if (!identityState(this.state, this.identityCid).notificationPage) {
+      throw new Error('push notification page checkpoint is missing');
+    }
+    this.persist();
+  }
+
+  commitNotificationPage(): void {
+    const owner = identityState(this.state, this.identityCid);
+    const page = owner.notificationPage;
+    if (!page || page.nextIndex !== page.eventCount) throw new Error('push notification page is incomplete');
+    owner.notificationCursor = page.cursor;
+    delete owner.notificationPage;
+    owner.saturated = false;
+    this.persist();
+  }
+
+  admitJob(
+    input: { wireId: string; kind: PushKind; contactId: string; senderName?: string },
+    now = Date.now(),
+    notificationPageNextIndex?: number,
+  ): PushAdmission {
     if (!nonEmpty(input.wireId, 1_024) || !nonEmpty(input.contactId, 512)
       || (input.senderName !== undefined && !nonEmpty(input.senderName, 512))) {
       throw new Error('push job correlation metadata is invalid or too long');
     }
     const targets = this.list().map((row) => row.bindingId);
-    if (targets.length === 0) return false;
+    if (targets.length === 0) return { status: 'no_targets' };
     const id = `${this.identityCid}:${input.wireId}:${input.kind}`;
     const owner = identityState(this.state, this.identityCid);
-    this.pruneTerminal(now);
-    if (owner.jobs.some((job) => job.id === id)) return false;
-    if (owner.jobs.length >= MAX_JOBS_PER_IDENTITY) return false;
+    const checkpointAdmission = () => {
+      if (notificationPageNextIndex === undefined) return false;
+      const page = owner.notificationPage;
+      if (!page || notificationPageNextIndex !== page.nextIndex + 1 || notificationPageNextIndex > page.eventCount) {
+        throw new Error('push notification page admission checkpoint is invalid');
+      }
+      page.nextIndex = notificationPageNextIndex;
+      return true;
+    };
+    this.pruneTombstones(owner, now);
+    if (owner.jobs.some((job) => job.id === id) || owner.tombstones.some((row) => row.id === id)) {
+      const checkpointed = checkpointAdmission();
+      if (checkpointed) this.persist();
+      return { status: 'duplicate', jobId: id, ...(checkpointed ? { checkpointed: true } : {}) };
+    }
+    // Tombstones are expendable dedupe hints; pending/retry work is not. Always
+    // evict the oldest hint before refusing durable work at the combined cap.
+    while (owner.jobs.length + owner.tombstones.length >= MAX_RECORDS_PER_IDENTITY && owner.tombstones.length > 0) {
+      owner.tombstones.shift();
+      owner.metrics.tombstonesPruned++;
+    }
+    if (owner.jobs.length + owner.tombstones.length >= MAX_RECORDS_PER_IDENTITY) {
+      owner.saturated = true;
+      owner.metrics.admissionFailures++;
+      owner.metrics.lastSaturationAt = now;
+      this.persist();
+      return { status: 'saturated', jobId: id };
+    }
     owner.jobs.push({
       id, identityCid: this.identityCid, wireId: input.wireId, kind: input.kind,
       contactId: input.contactId, senderName: input.senderName,
       createdAt: now, expiresAt: now + JOB_EXPIRY_MS, attempts: 0, nextAttemptAt: now,
       targetBindingIds: targets, deliveredBindingIds: [], status: 'pending', sentCount: 0,
     });
+    owner.metrics.admitted++;
+    // A normal admission proves general capacity recovered. During a paused
+    // source page, keep health sticky until that whole saved boundary commits;
+    // otherwise a crash between the first resumed event and page commit could
+    // make the remaining catch-up look healthy.
+    if (owner.notificationPage === undefined) owner.saturated = false;
+    const checkpointed = checkpointAdmission();
     this.persist();
-    return true;
+    return { status: 'queued', jobId: id, ...(checkpointed ? { checkpointed: true } : {}) };
+  }
+
+  enqueueJob(input: { wireId: string; kind: PushKind; contactId: string; senderName?: string }, now = Date.now()): boolean {
+    return this.admitJob(input, now).status === 'queued';
   }
 
   dueJobs(now = Date.now()): PushJob[] {
     return identityState(this.state, this.identityCid).jobs
       .filter((job) => job.status === 'pending' && job.nextAttemptAt <= now)
       .map((job) => ({ ...job, targetBindingIds: [...job.targetBindingIds], deliveredBindingIds: [...job.deliveredBindingIds] }));
+  }
+
+  claimJob(jobId: string, now = Date.now()): boolean {
+    const job = identityState(this.state, this.identityCid).jobs.find((row) => row.id === jobId);
+    if (!job || job.status !== 'pending' || job.nextAttemptAt > now) return false;
+    Object.assign(job, { status: 'in_flight', inFlightAt: now });
+    this.persist();
+    return true;
   }
 
   nextJobDelay(now = Date.now()): number | null {
@@ -467,27 +730,31 @@ export class PushStore {
   }
 
   retryJob(jobId: string, now = Date.now(), random: () => number = Math.random): boolean {
-    const job = identityState(this.state, this.identityCid).jobs.find((row) => row.id === jobId);
-    if (!job || job.status !== 'pending') return false;
+    const owner = identityState(this.state, this.identityCid);
+    const job = owner.jobs.find((row) => row.id === jobId);
+    if (!job || (job.status !== 'pending' && job.status !== 'in_flight')) return false;
     const attempts = job.attempts + 1;
     if (attempts >= MAX_ATTEMPTS || now >= job.expiresAt) {
-      Object.assign(job, { attempts, status: 'dropped', completedAt: now });
+      owner.metrics.dropped++;
+      this.finishJob(owner, job, now);
       this.persist();
       return false;
     }
     const base = Math.min(60_000, 1_000 * (2 ** (attempts - 1)));
     const jitter = Math.floor(base * 0.25 * Math.max(0, Math.min(1, random())));
-    Object.assign(job, { attempts, nextAttemptAt: Math.min(job.expiresAt, now + base + jitter) });
+    Object.assign(job, { attempts, nextAttemptAt: Math.min(job.expiresAt, now + base + jitter), status: 'pending' });
+    delete (job as { inFlightAt?: number }).inFlightAt;
+    owner.metrics.retries++;
     this.persist();
     return true;
   }
 
   suppressJob(jobId: string, now = Date.now()): boolean {
-    const job = identityState(this.state, this.identityCid).jobs.find((row) => row.id === jobId);
+    const owner = identityState(this.state, this.identityCid);
+    const job = owner.jobs.find((row) => row.id === jobId);
     if (!job || job.status !== 'pending') return false;
-    Object.assign(job, {
-      status: 'sent', completedAt: now, deliveredBindingIds: [...job.targetBindingIds], sentCount: 0,
-    });
+    owner.metrics.suppressed++;
+    this.finishJob(owner, job, now);
     this.persist();
     return true;
   }
@@ -508,7 +775,10 @@ export class PushStore {
     Object.assign(job, { deliveredBindingIds: [...completed] });
     const outstanding = job.targetBindingIds.some((id) => !completed.has(id)
       && owner.bindings.some((binding) => binding.bindingId === id));
-    if (!outstanding) Object.assign(job, { status: 'sent', completedAt: now });
+    if (!outstanding) {
+      owner.metrics.suppressed++;
+      this.finishJob(owner, job, now);
+    }
     this.persist();
     return suppressed;
   }
@@ -518,7 +788,7 @@ export class PushStore {
   }> {
     const owner = identityState(this.state, this.identityCid);
     const job = owner.jobs.find((row) => row.id === jobId);
-    if (!job || job.status !== 'pending') return { sent: 0, pruned: 0, retried: 0, dropped: 0 };
+    if (!job || job.status !== 'in_flight') return { sent: 0, pruned: 0, retried: 0, dropped: 0 };
     const completed = new Set(job.deliveredBindingIds);
     const targets = job.targetBindingIds
       .map((id) => owner.bindings.find((binding) => binding.bindingId === id))
@@ -540,7 +810,7 @@ export class PushStore {
         sent++;
       } catch (error) {
         const status = (error as { statusCode?: number }).statusCode;
-        if (status === 404 || status === 410) {
+        if (status === 404 || status === 410 || invalidDeviceToken(error)) {
           completed.add(binding.bindingId);
           dead.add(binding.bindingId);
           pruned++;
@@ -554,31 +824,80 @@ export class PushStore {
     }));
     if (dead.size) owner.bindings = owner.bindings.filter((binding) => !dead.has(binding.bindingId));
     Object.assign(job, { deliveredBindingIds: [...completed], sentCount: job.sentCount + sent });
+    owner.metrics.delivered += sent;
+    owner.metrics.permanentFailures += dropped;
+    owner.metrics.prunedBindings += pruned;
     const outstanding = job.targetBindingIds.some((id) => !completed.has(id) && owner.bindings.some((binding) => binding.bindingId === id));
     if (outstanding && transient) {
       this.persist();
       const retried = this.retryJob(job.id, now, random) ? transient : 0;
       return { sent, pruned, retried, dropped: dropped + (retried ? 0 : transient) };
     }
-    Object.assign(job, { status: job.sentCount > 0 ? 'sent' : 'dropped', completedAt: now });
+    if (dropped > 0 && job.sentCount === 0) owner.metrics.dropped++;
+    this.finishJob(owner, job, now);
     this.persist();
     return { sent, pruned, retried: 0, dropped };
   }
 
-  queueStats(): { pending: number; sent: number; dropped: number; depth: number } {
-    const jobs = identityState(this.state, this.identityCid).jobs;
+  queueStats(): {
+    pending: number; inFlight: number; sent: number; dropped: number; depth: number; tombstones: number;
+    capacity: number; saturated: boolean; healthy: boolean; admissionFailures: number; delivered: number;
+    retries: number; permanentFailures: number; prunedBindings: number; lastSaturationAt?: number;
+  } {
+    const owner = identityState(this.state, this.identityCid);
+    const jobs = owner.jobs;
     return {
-      pending: jobs.filter((job) => job.status === 'pending').length,
-      sent: jobs.filter((job) => job.status === 'sent').length,
-      dropped: jobs.filter((job) => job.status === 'dropped').length,
-      depth: jobs.length,
+      pending: jobs.length,
+      inFlight: jobs.filter((job) => job.status === 'in_flight').length,
+      sent: owner.metrics.delivered + owner.metrics.suppressed,
+      dropped: owner.metrics.dropped,
+      depth: jobs.length + owner.tombstones.length,
+      tombstones: owner.tombstones.length,
+      capacity: MAX_RECORDS_PER_IDENTITY,
+      saturated: owner.saturated,
+      healthy: !owner.saturated,
+      admissionFailures: owner.metrics.admissionFailures,
+      delivered: owner.metrics.delivered,
+      retries: owner.metrics.retries,
+      permanentFailures: owner.metrics.permanentFailures,
+      prunedBindings: owner.metrics.prunedBindings,
+      ...(owner.metrics.lastSaturationAt === undefined ? {} : { lastSaturationAt: owner.metrics.lastSaturationAt }),
     };
   }
 
-  private pruneTerminal(now: number): void {
-    for (const identity of Object.values(this.state.identities)) {
-      identity.jobs = identity.jobs.filter((job) => job.status === 'pending'
-        || job.completedAt === undefined || now - job.completedAt <= TERMINAL_RETENTION_MS);
+  private finishJob(owner: IdentityPushState, job: PushJob, now: number): void {
+    owner.jobs = owner.jobs.filter((row) => row.id !== job.id);
+    owner.tombstones.push({ id: job.id, completedAt: now, expiresAt: now + TOMBSTONE_RETENTION_MS });
+    this.pruneTombstones(owner, now);
+  }
+
+  private pruneTombstones(owner: IdentityPushState, now: number): void {
+    const before = owner.tombstones.length;
+    owner.tombstones = owner.tombstones.filter((row) => row.expiresAt > now)
+      .sort((a, b) => a.completedAt - b.completedAt);
+    if (owner.tombstones.length > MAX_TOMBSTONES_PER_IDENTITY) {
+      owner.tombstones.splice(0, owner.tombstones.length - MAX_TOMBSTONES_PER_IDENTITY);
+    }
+    owner.metrics.tombstonesPruned += before - owner.tombstones.length;
+  }
+
+  private recoverAndPrune(now: number): void {
+    for (const owner of Object.values(this.state.identities)) {
+      for (const job of owner.jobs) {
+        if (job.status === 'in_flight') {
+          Object.assign(job, { status: 'pending', nextAttemptAt: Math.min(job.nextAttemptAt, now) });
+          delete (job as { inFlightAt?: number }).inFlightAt;
+        }
+      }
+      this.pruneTombstones(owner, now);
+      // A partial source page is durable evidence that at least one eligible
+      // event was refused. Draining pending work creates capacity, but cannot
+      // make health green until the watcher actually resumes that page. Keep
+      // the saturation signal sticky across restart/source outage; a successful
+      // admission clears it in admitJob().
+      if (owner.jobs.length < MAX_RECORDS_PER_IDENTITY && owner.notificationPage === undefined) {
+        owner.saturated = false;
+      }
     }
   }
 
@@ -587,6 +906,7 @@ export class PushStore {
     const wire = `compat-${randomUUID()}`;
     this.enqueueJob({ wireId: wire, kind: event.kind, contactId: event.contact_id });
     const id = `${this.identityCid}:${wire}:${event.kind}`;
+    this.claimJob(id);
     const result = await this.dispatchJob(id, event);
     return { sent: result.sent, pruned: result.pruned, failed: result.retried + result.dropped, errors: [] };
   }

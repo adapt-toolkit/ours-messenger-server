@@ -47,31 +47,44 @@ const watchBus = new MessengerEventBus();
 const watched = watchBus.subscribe(8);
 let attempts = 0;
 const warnings = [];
-const pushes = [];
+const admitted = [];
 const controllerWait = async () => {};
-const handle = startWatcher(
-  {
-    getHistoryItem: async () => ({
-      direction: 'in', wire_id: 'WIRE-2', text: 'the full push body', peer: { id: 'CID-A', name: 'Alice' },
-    }),
+const cursorStore = (cursor = 0) => ({
+  notificationCursor: cursor,
+  notificationPageProgress: null,
+  commitNotificationCursor(next) { this.notificationCursor = next; this.notificationPageProgress = null; },
+  beginNotificationPage(page) {
+    this.notificationPageProgress = { ...page, nextIndex: 0 };
+    return { ...this.notificationPageProgress };
   },
+  advanceNotificationPage(next) { this.notificationPageProgress.nextIndex = next; },
+  checkpointNotificationPage() {},
+  commitNotificationPage() {
+    this.notificationCursor = this.notificationPageProgress.cursor;
+    this.notificationPageProgress = null;
+  },
+});
+const handle = startWatcher(
+  { version: async () => ({ ok: true }) },
   'Me',
-  { send: async (event) => { pushes.push(event); return { sent: 1, pruned: 0, failed: 0, errors: [] }; } },
+  cursorStore(),
   { info() {}, warn(message) { warnings.push(message); } },
   watchBus,
   {
     wait: controllerWait,
     probe: async () => ({ ok: true }),
-    watch: (_identity, signal) => {
+    delivery: { admit(record) { admitted.push(record); return { status: 'queued' }; } },
+    readPage: async (_identity, _since, signal) => {
       attempts++;
-      if (attempts === 1) return (async function* () {
-        yield { event: 'message_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'WIRE-2', date: 'D' };
-        throw new Error('forced disconnect SECRET-WATCH-PATH-/private/token');
-      })();
-      return (async function* () {
-        yield { event: 'receipt_received', sender_id: 'CID-A', kind: 'delivered', wire_ids: ['WIRE-2'], date: 'D2' };
-        if (!signal.aborted) await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
-      })();
+      if (attempts === 1) return { cursor: 10, events: [
+        { event: 'message_received', sender_id: 'CID-A', sender_name: 'Alice', wire_id: 'WIRE-2', date: 'D' },
+      ] };
+      if (attempts === 2) throw new Error('forced disconnect SECRET-WATCH-PATH-/private/token');
+      if (attempts === 3) return { cursor: 20, events: [
+        { event: 'receipt_received', sender_id: 'CID-A', kind: 'delivered', wire_ids: ['WIRE-2'], date: 'D2' },
+      ] };
+      if (!signal.aborted) await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      return { cursor: 20, events: [] };
     },
   },
 );
@@ -79,16 +92,7 @@ assert.equal((await watched.next()).type, 'message_received');
 assert.deepEqual(await watched.next(), { type: 'sync_required', reason: 'daemon_unavailable' });
 assert.deepEqual(await watched.next(), { type: 'sync_required', reason: 'daemon_reconnected' });
 assert.equal((await watched.next()).type, 'receipt_received');
-assert.equal(pushes.length, 1, 'message event remains a push subscriber input');
-assert.deepEqual(pushes[0], {
-  v: 1,
-  kind: 'message',
-  title: 'Alice',
-  body: 'the full push body',
-  contact_id: 'CID-A',
-  wire_id: 'WIRE-2',
-  url: '/chats/CID-A',
-}, 'push is encrypted by Web Push with the canonical full text and click-through identifiers');
+assert.equal(admitted.length, 2, 'notification records are durably admitted before their cursor commits');
 assert.ok(warnings.some((line) => line.includes('watch stream') && line.includes('correlation')),
   'disconnect is observable through a correlation id');
 assert.ok(!warnings.join('\n').includes('SECRET-WATCH-PATH'), 'watch errors never expose exception content');
@@ -99,18 +103,23 @@ assert.equal(handle.stats.reconnects, 1);
 const fileBus = new MessengerEventBus();
 const fileEvents = fileBus.subscribe(2);
 let durableEnqueues = 0;
+let filePages = 0;
+const fileCursor = cursorStore();
 const fileHandle = startWatcher(
-  { listIncomingFiles: async () => { throw new Error('canonical projection is temporarily behind'); } },
+  { version: async () => ({ ok: true }) },
   'Me',
-  { send: async () => ({ sent: 0, pruned: 0, failed: 0, errors: [] }) },
+  fileCursor,
   { info() {}, warn() {} },
   fileBus,
   {
-    delivery: { enqueue() { durableEnqueues++; return true; } },
-    watch: () => (async function* () {
-      yield { event: 'file_received', sender_id: 'CID-A', wire_id: 'FILE-LAG', date: 'D4' };
-    })(),
-    wait: (_ms, signal) => new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true })),
+    delivery: { admit() { durableEnqueues++; return { status: 'queued' }; } },
+    readPage: async (_identity, _since, signal) => {
+      if (filePages++ === 0) return {
+        cursor: 30, events: [{ event: 'file_received', sender_id: 'CID-A', wire_id: 'FILE-LAG', date: 'D4' }],
+      };
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      return { cursor: 30, events: [] };
+    },
   },
 );
 assert.equal((await fileEvents.next()).type, 'file_received');

@@ -42,6 +42,10 @@ const startRuntime = async () => {
     stateDir: '/operator/daemon',
     leaseToken: 'fixture-lease',
     described: { ownership: 'shared-daemon' },
+    async readNotificationPage(_identity, since, signal) {
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      return { cursor: typeof since === 'number' ? since : 0, events: [] };
+    },
     async close() {
       await client.releaseLease();
       runtimeClosed = true;

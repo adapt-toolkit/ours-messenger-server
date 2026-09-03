@@ -396,7 +396,10 @@ export async function start(
       store: push, client: runtime.client, identityCid: bound.cid, log,
       foregroundBindingIds: () => presence.onlineBindings(bound.cid),
     });
-    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, { delivery });
+    watcher = startWatcher(runtime.client, cfg.identity, push, log, events, {
+      delivery,
+      readPage: runtime.readNotificationPage,
+    });
 
     const readyDeps: ApiDeps = {
       runtime,
@@ -404,8 +407,8 @@ export async function start(
       config: cfg,
       buildInfo,
       watcherStats: () => ({
-        ...(watcher?.stats ?? { pushes: 0, events: 0, reconnects: 0 }),
-        ...(delivery?.stats ?? { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0 }),
+        ...(watcher?.stats ?? { pushes: 0, events: 0, reconnects: 0, cursorCommits: 0, saturationEvents: 0 }),
+        ...(delivery?.stats ?? { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0, suppressed: 0, saturationEvents: 0 }),
         presenceIdentities: presence.onlineCount,
         presenceSockets: presence.socketCount,
       }),
