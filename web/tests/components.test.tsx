@@ -124,7 +124,7 @@ const commandPanel = renderToStaticMarkup(<CommandPanel
       },
     }],
   }}
-  recipientName="Alice" storageScope="ME-CID" busy={false} onRefresh={() => {}} onClose={() => {}} onSend={async () => ({
+  recipientName="Alice" busy={false} onRefresh={() => {}} onClose={() => {}} onSend={async () => ({
     invocation_id: crypto.randomUUID(), recipient_cid: 'ALICE-CID', catalog_fingerprint: 'A'.repeat(43),
     command: 'notes.create', wire_id: 'WIRE', delivery: 'e2e', status: 'accepted',
     payload_fingerprint: 'B'.repeat(43), deduplicated: false,
@@ -134,21 +134,36 @@ assert.match(commandPanel, /aria-label="Send a typed command"/, 'command form ha
 assert.match(commandPanel, /Empty key value \*/, 'required empty-string object keys remain editable');
 assert.match(commandPanel, /Add priority/, 'optional properties without defaults stay omitted behind an accessible add control');
 assert.doesNotMatch(commandPanel, /Remove priority/, 'an omitted optional property has no field/remove control yet');
-assert.match(commandPanel, /Confirm sending this command/, 'mutation confirmation is explicit');
+assert.doesNotMatch(commandPanel, /Confirm sending this command/, 'commands do not require a second acknowledgement before send');
 assert.ok(!commandPanel.includes('<img src=x'), 'untrusted command documentation is escaped');
 
 const coworkCatalogPanel = renderToStaticMarkup(<CommandPanel
   catalog={{ recipient_cid: 'COWORK-ROOM-CID', fingerprint: 'C'.repeat(43), commands: [{
-    name: 'list-members',
-    description: 'List the room roster using contact-safe member fields.',
-    input_schema: { type: 'object', additionalProperties: false },
-  }] }} recipientName="Cowork room" storageScope="OWNER-CID" busy={false}
+    name: 'remove-member',
+    description: 'Remove a room member.',
+    input_schema: {
+      type: 'object', additionalProperties: false,
+      required: ['participant_id', 'expected_membership_epoch', 'confirm', 'idempotency_key'],
+      properties: {
+        participant_id: {
+          type: 'string', pattern: '^[0-7][0-9a-hjkmnp-tv-z]{25}$',
+        },
+        expected_membership_epoch: { type: 'integer', minimum: 0 },
+        confirm: { const: true },
+        idempotency_key: { type: 'string', pattern: '^[A-Za-z0-9._:-]{1,128}$' },
+      },
+    },
+  }] }} recipientName="Cowork room" busy={false}
   onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('discovery does not authorize execution'); }}
 />);
 assert.match(coworkCatalogPanel, /<legend>Arguments<\/legend>/,
-  'the exact authenticated Cowork list-members schema renders as a strict object form');
+  'the authenticated Cowork remove-member schema renders as a strict object form');
 assert.doesNotMatch(coworkCatalogPanel, /Cannot render this command safely/,
-  'additionalProperties false is accepted instead of being mistaken for an unsupported keyword');
+  'the bounded room-id pattern is accepted instead of being mistaken for an unsupported keyword');
+assert.match(coworkCatalogPanel, /participant_id does not match the required format/,
+  'an invalid initial pattern value has a clear field-level error');
+assert.match(coworkCatalogPanel, /Fixed value: true/,
+  'the exact Cowork consent constant renders as a fixed, non-editable argument');
 
 for (const [additionalProperties, message] of [
   [true, 'additionalProperties: true is not supported'],
@@ -157,7 +172,7 @@ for (const [additionalProperties, message] of [
   const panel = renderToStaticMarkup(<CommandPanel
     catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
       name: 'unbounded', input_schema: { type: 'object', additionalProperties },
-    }] }} recipientName="Alice" storageScope="ME-CID" busy={false}
+    }] }} recipientName="Alice" busy={false}
     onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
   />);
   assert.match(panel, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
@@ -167,12 +182,44 @@ for (const [additionalProperties, message] of [
 const unsupportedPanel = renderToStaticMarkup(<CommandPanel
   catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
     name: 'unsafe', input_schema: { type: 'object', oneOf: [{ type: 'string' }] },
-  }] }} recipientName="Alice" storageScope="ME-CID" busy={false} onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
+  }] }} recipientName="Alice" busy={false} onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
 />);
 assert.match(unsupportedPanel, /role="alert"/, 'unsupported schema constructs are visibly refused');
 assert.match(unsupportedPanel, /Unsupported JSON Schema keyword: oneOf/);
+for (const [pattern, message] of [
+  ['^a+$', 'pattern must use only bounded, non-grouped expressions'],
+  ['^' + 'a?'.repeat(80) + 'a'.repeat(80) + 'b$', 'pattern must use only bounded, non-grouped expressions'],
+  ['a{256}'.repeat(40) + 'b', 'pattern must be anchored with ^ and $'],
+  ['^a{1,2}a{1,2}$', 'a variable pattern repetition is supported only once, at the end'],
+  ['^a{257}$', 'pattern repetition must not exceed 256'],
+  ['a'.repeat(257), 'pattern exceeds 256 characters'],
+] as const) {
+  const panel = renderToStaticMarkup(<CommandPanel
+    catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
+      name: 'unsafe-pattern', input_schema: { type: 'string', pattern },
+    }] }} recipientName="Alice" busy={false}
+    onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
+  />);
+  assert.match(panel, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    'unsafe or excessive regular-expression work is rejected before rendering');
+}
 assert.equal(validateCommandValue({ type: 'array', minItems: 1, items: { type: 'integer' } }, []),
   'Arguments has too few items');
+assert.equal(validateCommandValue({ type: 'string', pattern: '^[0-7][0-9a-hjkmnp-tv-z]{25}$' },
+  '01jd7q4h9m2v8xk3znbc5regty'), null, 'the Cowork room-id pattern accepts a valid lowercase ULID');
+assert.equal(validateCommandValue({ type: 'string', pattern: '^[A-Za-z0-9._:-]{1,128}$' },
+  'remove.member:epoch-4'), null, 'the Cowork idempotency-key pattern remains supported');
+assert.equal(validateCommandValue({ type: 'string', pattern: '^[0-7][0-9a-hjkmnp-tv-z]{25}$' },
+  'not-a-room-id'), 'Arguments does not match the required format', 'pattern mismatch is a clear validation error');
+assert.equal(validateCommandValue({ type: 'string', pattern: '^' + 'a?'.repeat(80) + 'a'.repeat(80) + 'b$' },
+  'a'.repeat(160)), 'Arguments cannot be validated safely: pattern must use only bounded, non-grouped expressions',
+  'hostile repeated optionals are rejected before regular-expression evaluation');
+assert.equal(validateCommandValue({ type: 'string', pattern: 'a{256}'.repeat(40) + 'b' },
+  'a'.repeat(65534)), 'Arguments cannot be validated safely: pattern must be anchored with ^ and $',
+  'expensive unanchored fixed repeats are rejected before regular-expression evaluation');
+assert.equal(validateCommandValue({ const: true }, true), null, 'a fixed consent argument validates without an editable control');
+assert.equal(validateCommandValue({ const: true }, false), 'Arguments must use the fixed value',
+  'a fixed consent argument cannot be changed client-side');
 assert.equal(validateCommandValue({ type: 'array', items: { type: 'integer' } }, [1.5]),
   'Arguments[0] must be an integer');
 assert.equal(validateCommandValue({ type: 'object', required: [''], properties: { '': { type: 'string' } } }, { '': '' }), null,
@@ -208,7 +255,7 @@ for (let depth = 0; depth < 7; depth++) nestedSchema = {
 const tooDeepPanel = renderToStaticMarkup(<CommandPanel
   catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
     name: 'too-deep', input_schema: nestedSchema,
-  }] }} recipientName="Alice" storageScope="ME-CID" busy={false}
+  }] }} recipientName="Alice" busy={false}
   onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
 />);
 assert.match(tooDeepPanel, /Schema depth exceeds 6/, 'strict nested objects retain the renderer depth bound');
@@ -219,7 +266,7 @@ const tooManyPanel = renderToStaticMarkup(<CommandPanel
       type: 'object', additionalProperties: false,
       properties: Object.fromEntries(Array.from({ length: 64 }, (_, index) => [`field${index}`, { type: 'string' }])),
     },
-  }] }} recipientName="Alice" storageScope="ME-CID" busy={false}
+  }] }} recipientName="Alice" busy={false}
   onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
 />);
 assert.match(tooManyPanel, /Schema exceeds 64 controls/, 'strict objects retain the renderer control bound');

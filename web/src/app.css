@@ -903,8 +903,6 @@
 .command-panel .linkbtn:active:not(:disabled) { background:var(--surface-3); transform:translateY(1px); }
 .command-panel .linkbtn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .command-property-add,.command-property-remove { justify-self:start; }
-.command-attempt { display:grid; gap:6px; padding:10px; border:1px solid var(--warn); border-radius:9px; background:var(--warn-soft); overflow-wrap:anywhere; }
-.command-attempt-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
 .command-object { display:grid; gap:9px; min-width:0; border:1px solid var(--line); border-radius:10px; padding:10px; }
 .command-check { display:flex; gap:8px; align-items:flex-start; font-size:.84rem; }
 .command-status { min-height:1.2em; color:var(--text-2); font-weight:600; }
@@ -927,5 +925,5 @@
   .composer .command-trigger > span { display:none; }
 }
 @media (prefers-reduced-motion:reduce) { .command-panel .linkbtn:active:not(:disabled),.command-trigger:active:not(:disabled) { transform:none; } }
-@media (prefers-contrast:more) { .command-panel,.command-property,.command-object,.command-attempt { border-color:currentColor; box-shadow:none; } }
-@media (forced-colors:active) { .command-panel,.command-attempt { border:1px solid ButtonText; background:Canvas; color:CanvasText; box-shadow:none; } }
+@media (prefers-contrast:more) { .command-panel,.command-property,.command-object { border-color:currentColor; box-shadow:none; } }
+@media (forced-colors:active) { .command-panel { border:1px solid ButtonText; background:Canvas; color:CanvasText; box-shadow:none; } }

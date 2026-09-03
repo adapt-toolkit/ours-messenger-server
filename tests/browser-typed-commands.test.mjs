@@ -23,7 +23,7 @@ const browser = await chromium.launch({ headless: true });
 
 try {
   const sends = [];
-  let sendMode = 'response-loss';
+  const sendModes = [];
   let releaseSend = null;
   const messages = [
     { dir: 'out', text: '', date: '2026-09-03T00:00:00Z', read: true, wire_id: 'COMMAND-OLD', peer_cid: 'PEER', receipt: 'delivered', reply_to: null, message_kind: 'command', typed: { kind: 'command', command: 'old.command', arguments: {} } },
@@ -49,6 +49,12 @@ try {
           otherTags: { type: 'array', title: 'Other tags', items: { type: 'string' }, default: [] },
         },
       },
+    }, {
+      name: 'remove-member', description: 'Remove a Cowork member', input_schema: {
+        type: 'object', additionalProperties: false, required: ['member'], properties: {
+          member: { type: 'string', title: 'Member', pattern: '^[A-F0-9]{64}$' },
+        },
+      },
     }],
   };
   const installRoutes = (targetContext) => targetContext.route('**/api/**', async (route) => {
@@ -64,11 +70,12 @@ try {
     if (path === '/api/contacts/PEER/commands') return json(catalog);
     if (path === '/api/commands/send') {
       const body = request.postDataJSON(); sends.push(body);
+      const sendMode = sendModes.shift() ?? 'accepted';
       if (sendMode === 'response-loss') return route.abort('connectionreset');
       if (sendMode === 'hold-accepted') await new Promise((done) => { releaseSend = done; });
       return json({
         invocation_id: body.invocation_id, recipient_cid: 'PEER', catalog_fingerprint: body.catalog_fingerprint,
-        command: body.command, wire_id: 'WIRE-NEW', delivery: 'e2e', status: sendMode === 'hold-accepted' ? 'accepted' : sendMode,
+        command: body.command, wire_id: `WIRE-${sends.length}`, delivery: 'e2e', status: sendMode === 'hold-accepted' ? 'accepted' : sendMode,
         payload_fingerprint: 'B'.repeat(43), deduplicated: true,
       });
     }
@@ -136,62 +143,73 @@ try {
   assert.equal(await panel.getByRole('button', { name: 'Send command' }).isDisabled(), true,
     'an oversized free-form array is blocked in the browser before an invocation is reserved');
   await otherTags.fill('[]');
-  await panel.getByLabel(/Confirm sending/).check();
-
   const sendButton = panel.getByRole('button', { name: 'Send command' });
-  await page.evaluate(() => {
-    const button = document.querySelector('.command-panel .btn.primary');
-    button?.click(); button?.click();
-  });
-  await panel.getByText(/state is indeterminate/i).waitFor();
-  assert.equal(await panel.locator('.command-status').getAttribute('data-state'), 'indeterminate',
-    'response loss is visibly classified as indeterminate');
-  assert.equal(sends.length, 1, 'two synchronous activations create one request');
-  assert.equal(new Set(sends.map((body) => body.invocation_id)).size, 1, 'one stable invocation id belongs to the attempt');
+  assert.equal(await panel.getByLabel(/Confirm sending/).count(), 0, 'typed commands require no acknowledgement checkbox');
+  sendModes.push('hold-accepted');
+  await sendButton.click();
+  assert.equal(sends.length, 1, 'the first command request starts immediately');
   assert.deepEqual(sends[0].arguments, {
     required: 'present', optionalText: '', zero: 0, flag: false, nil: null, '': '', tags: [0], otherTags: [],
   }, 'omission and explicit empty/zero/false/null/empty-key values remain distinct and faithful');
-  assert.equal(await sendButton.isDisabled(), true, 'an indeterminate attempt stays locked');
+  assert.equal(await panel.getByLabel('Required').inputValue(), '',
+    'submission resets the command form before its request resolves');
+  await panel.getByLabel('Required').fill('again');
+  await sendButton.click();
+  await panel.getByText(/values\.capture sent/).waitFor();
+  assert.equal(sends.length, 2, 'the same command can be sent again while its previous request is delayed');
+  assert.equal(new Set(sends.slice(0, 2).map((body) => body.invocation_id)).size, 2,
+    'each immediate resubmission receives an independent invocation id');
 
-  const savedInvocation = sends[0].invocation_id;
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Recipient commands' }).click();
-  const restored = page.getByRole('form', { name: 'Send a typed command' });
-  await restored.getByText(`Saved attempt: indeterminate`).waitFor();
-  assert.match(await restored.locator('.command-attempt .mono').innerText(), new RegExp(savedInvocation), 'reload restores the identity/recipient-scoped attempt');
-  sendMode = 'hold-accepted';
-  await restored.getByRole('button', { name: 'Reconcile saved attempt' }).click();
-  await restored.locator('.command-status[data-state="pending"]').waitFor();
+  await panel.locator('select').first().selectOption('remove-member');
+  const memberField = panel.getByRole('textbox', { name: /^Member/ });
+  await memberField.fill('not-a-cid');
+  await panel.getByRole('alert').getByText(/required format/).waitFor();
+  assert.equal(await sendButton.isDisabled(), true, 'an invalid pattern value blocks only that form with a field error');
+  await memberField.fill('A'.repeat(64));
+  assert.equal(await sendButton.isDisabled(), false, 'the bounded Cowork member pattern accepts a valid CID');
+  sendModes.push('pending');
+  await sendButton.click();
+  await panel.getByText(/delivery is pending/i).waitFor();
+  assert.equal(sends[2].command, 'remove-member', 'switching commands after a send uses the newly selected command');
+  assert.equal(await panel.locator('select').first().inputValue(), 'remove-member',
+    'pending delivery resets to a normal, reusable command form');
+
+  await panel.getByRole('textbox', { name: /^Member/ }).fill('B'.repeat(64));
+  sendModes.push('failed');
+  await sendButton.click();
+  await panel.getByText(/refused before delivery/i).waitFor();
+  assert.equal(await panel.locator('.command-status').getAttribute('data-state'), 'error',
+    'failed delivery is reported without locking the next invocation');
+  await panel.getByRole('textbox', { name: /^Member/ }).fill('C'.repeat(64));
+  await sendButton.click();
+  await panel.getByText(/remove-member sent/).waitFor();
+  assert.equal(sends.length, 5, 'a command with no eventual result does not block the next send');
+  assert.equal(messages.some((message) => message.reply_to?.wire_id === 'WIRE-5'), false,
+    'the fixture intentionally supplies no result for the accepted command');
   releaseSend?.();
-  await restored.getByText(/reconciled/i).waitFor();
-  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'success',
-    'accepted reconciliation is visibly classified as success');
-  assert.equal(sends.length, 2);
-  assert.equal(sends[1].invocation_id, savedInvocation, 'response-loss reconciliation replays the same stable invocation id');
+
+  sendModes.push('response-loss');
+  await panel.getByRole('textbox', { name: /^Member/ }).fill('D'.repeat(64));
+  await sendButton.click();
+  await panel.getByText(/could not be sent/i).waitFor();
+  await panel.getByRole('textbox', { name: /^Member/ }).fill('D'.repeat(64));
+  await sendButton.click();
+  await panel.getByText(/remove-member sent/).waitFor();
+  assert.equal(sends.length, 7, 'response loss does not require cancellation or acknowledgement before retry');
 
   const completed = page.getByText('Completed', { exact: true });
   await completed.waitFor();
   assert.equal(await completed.count(), 1, 'only the authenticated result for the exact outgoing command renders completed');
   assert.equal(await page.getByText(/Unmatched result · safe failure/).count(), 4,
     'wrong peer, ordinary/inbound reply targets, and missing replies never render completed');
-  page.once('dialog', (dialog) => dialog.accept());
-  await restored.getByRole('button', { name: 'Reset after verifying outcome' }).click();
-  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'success',
-    'explicit verified reset has visible completion feedback');
-  await restored.getByLabel(/Confirm sending/).check();
-  sendMode = 'pending';
-  await restored.getByRole('button', { name: 'Send command' }).click();
-  await restored.getByText(/delivery is pending/i).waitFor();
-  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'warning',
-    'pending delivery has a distinct warning state');
-  page.once('dialog', (dialog) => dialog.accept());
-  await restored.getByRole('button', { name: 'Reset after verifying outcome' }).click();
-  await restored.getByLabel(/Confirm sending/).check();
-  sendMode = 'failed';
-  await restored.getByRole('button', { name: 'Send command' }).click();
-  await restored.getByText(/refused before delivery/i).waitFor();
-  assert.equal(await restored.locator('.command-status').getAttribute('data-state'), 'error',
-    'refused delivery has a distinct error state');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Recipient commands' }).click();
+  const restored = page.getByRole('form', { name: 'Send a typed command' });
+  assert.equal(await restored.locator('.command-attempt').count(), 0,
+    'reload has no stale attempt gate to reconcile, acknowledge, cancel, or reset');
+  assert.equal(await restored.getByRole('button', { name: 'Send command' }).isDisabled(), false,
+    'the normal command form is immediately available after reload');
   const box = await restored.boundingBox();
   assert.ok(box && box.x >= 0 && box.x + box.width <= 390, 'command form remains within the narrow mobile viewport');
   const commandTrigger = page.getByRole('button', { name: 'Recipient commands' });
@@ -201,7 +219,7 @@ try {
     'close button restores focus to the Recipient commands trigger');
   await commandTrigger.click();
   await restored.waitFor();
-  await restored.getByRole('button', { name: 'Reset after verifying outcome' }).focus();
+  await restored.locator('select').first().focus();
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('form', { name: 'Send a typed command' }).count(), 0, 'keyboard Escape closes the command form');
   assert.equal(await commandTrigger.evaluate((element) => document.activeElement === element), true,
@@ -232,7 +250,7 @@ try {
   assert.equal(forcedStyle.backdropFilter, 'none', 'forced-colors mode retains a nonblocking material');
   await desktopContext.close();
 
-  console.log('browser-typed-commands OK — desktop/mobile/keyboard/preferences, semantic status, stable persisted attempt, strict correlation');
+  console.log('browser-typed-commands OK — immediate repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

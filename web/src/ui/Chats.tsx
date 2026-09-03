@@ -843,7 +843,6 @@ const TimelineRows = memo(function TimelineRows(props: {
 });
 
 export function Conversation(props: {
-  identityCid?: string;
   contact: ContactVM | null;
   // A bounded page of the history, newest-last. `hiddenEarlier` is how many
   // older entries exist above the page; onLoadEarlier widens the window.
@@ -1508,16 +1507,12 @@ export function Conversation(props: {
             key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
             catalog={commandCatalog}
             recipientName={contact.name}
-            storageScope={props.identityCid ?? 'unknown-identity'}
             busy={commandBusy}
             onRefresh={() => void loadCommands()}
             onClose={closeCommandPanel}
             onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
               if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
-              setCommandBusy(true);
-              try {
-                return await props.onSendCommand!(contact.id, command.name, args, invocationId, catalogFingerprint);
-              } finally { setCommandBusy(false); }
+              return props.onSendCommand!(contact.id, command.name, args, invocationId, catalogFingerprint);
             }}
           />
         )}
