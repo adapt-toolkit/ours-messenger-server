@@ -4,7 +4,7 @@ import { timeline } from '../src/App.js';
 import { Conversation } from '../src/ui/Chats.js';
 import { CommandPanel, validateCommandValue } from '../src/ui/CommandPanel.js';
 import { registerMediaRecords } from '../src/ui/fileStore.js';
-import type { ConversationPage } from '../src/types.js';
+import type { ConversationPage, JsonValue } from '../src/types.js';
 
 const muflPage: ConversationPage = {
   contact: 'ALICE-CID',
@@ -116,7 +116,7 @@ const commandPanel = renderToStaticMarkup(<CommandPanel
     recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
       name: 'notes.create', description: '<img src=x onerror=alert(1)>',
       input_schema: {
-        type: 'object', required: [''], properties: {
+        type: 'object', additionalProperties: false, required: [''], properties: {
           '': { type: 'string', title: 'Empty key value', default: '' },
           priority: { type: 'integer', enum: [0, 1], description: '<script>priority</script>' },
           tags: { type: 'array', items: { type: 'string' }, default: [] },
@@ -137,6 +137,33 @@ assert.doesNotMatch(commandPanel, /Remove priority/, 'an omitted optional proper
 assert.match(commandPanel, /Confirm sending this command/, 'mutation confirmation is explicit');
 assert.ok(!commandPanel.includes('<img src=x'), 'untrusted command documentation is escaped');
 
+const coworkCatalogPanel = renderToStaticMarkup(<CommandPanel
+  catalog={{ recipient_cid: 'COWORK-ROOM-CID', fingerprint: 'C'.repeat(43), commands: [{
+    name: 'list-members',
+    description: 'List the room roster using contact-safe member fields.',
+    input_schema: { type: 'object', additionalProperties: false },
+  }] }} recipientName="Cowork room" storageScope="OWNER-CID" busy={false}
+  onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('discovery does not authorize execution'); }}
+/>);
+assert.match(coworkCatalogPanel, /<legend>Arguments<\/legend>/,
+  'the exact authenticated Cowork list-members schema renders as a strict object form');
+assert.doesNotMatch(coworkCatalogPanel, /Cannot render this command safely/,
+  'additionalProperties false is accepted instead of being mistaken for an unsupported keyword');
+
+for (const [additionalProperties, message] of [
+  [true, 'additionalProperties: true is not supported'],
+  [{ type: 'string' }, 'Schema-valued additionalProperties is not supported'],
+] as const) {
+  const panel = renderToStaticMarkup(<CommandPanel
+    catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
+      name: 'unbounded', input_schema: { type: 'object', additionalProperties },
+    }] }} recipientName="Alice" storageScope="ME-CID" busy={false}
+    onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
+  />);
+  assert.match(panel, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    'unsupported open-object forms are rejected precisely');
+}
+
 const unsupportedPanel = renderToStaticMarkup(<CommandPanel
   catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
     name: 'unsafe', input_schema: { type: 'object', oneOf: [{ type: 'string' }] },
@@ -150,6 +177,67 @@ assert.equal(validateCommandValue({ type: 'array', items: { type: 'integer' } },
   'Arguments[0] must be an integer');
 assert.equal(validateCommandValue({ type: 'object', required: [''], properties: { '': { type: 'string' } } }, { '': '' }), null,
   'an empty-string key and value remain valid JsonValue rather than disappearing in truthiness checks');
+assert.equal(validateCommandValue({
+  type: 'object', additionalProperties: false, properties: { known: { type: 'string' } },
+}, { known: 'ok', extra: true }), 'Arguments.extra is not declared by the schema',
+'additionalProperties false rejects undeclared keys while retaining declared values');
+assert.equal(validateCommandValue({
+  type: 'object', additionalProperties: false, properties: {
+    nested: { type: 'object', additionalProperties: false, properties: { count: { type: 'integer' } } },
+  },
+}, { nested: { count: 1, extra: null } }), 'Arguments.nested.extra is not declared by the schema',
+'strict additionalProperties validation applies recursively');
+const objectPrototypeKeys = Object.getOwnPropertyNames(Object.prototype);
+for (const unsafe of ['__proto__', 'constructor', 'prototype']) {
+  const value = JSON.parse(`{"${unsafe}":null}`);
+  assert.equal(validateCommandValue({ type: 'object', additionalProperties: false }, value),
+    `Arguments.${unsafe} is not declared by the schema`,
+    `undeclared prototype-pollution key ${unsafe} is rejected without assigning it to another object`);
+}
+assert.deepEqual(Object.getOwnPropertyNames(Object.prototype), objectPrototypeKeys,
+  'validating prototype-sensitive own keys does not mutate Object.prototype');
+
+const declaredProtoSchema = JSON.parse('{"type":"object","additionalProperties":false,"required":["__proto__"],"properties":{"__proto__":{"type":"null"}}}');
+assert.equal(validateCommandValue(declaredProtoSchema, JSON.parse('{"__proto__":null}')), null,
+  'a declared JSON key named __proto__ remains safe and valid without ordinary-object assignment');
+
+let nestedSchema: Record<string, JsonValue> = { type: 'string' };
+for (let depth = 0; depth < 7; depth++) nestedSchema = {
+  type: 'object', additionalProperties: false, properties: { child: nestedSchema },
+};
+const tooDeepPanel = renderToStaticMarkup(<CommandPanel
+  catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
+    name: 'too-deep', input_schema: nestedSchema,
+  }] }} recipientName="Alice" storageScope="ME-CID" busy={false}
+  onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
+/>);
+assert.match(tooDeepPanel, /Schema depth exceeds 6/, 'strict nested objects retain the renderer depth bound');
+
+const tooManyPanel = renderToStaticMarkup(<CommandPanel
+  catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
+    name: 'too-many', input_schema: {
+      type: 'object', additionalProperties: false,
+      properties: Object.fromEntries(Array.from({ length: 64 }, (_, index) => [`field${index}`, { type: 'string' }])),
+    },
+  }] }} recipientName="Alice" storageScope="ME-CID" busy={false}
+  onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
+/>);
+assert.match(tooManyPanel, /Schema exceeds 64 controls/, 'strict objects retain the renderer control bound');
+
+let tooDeepValue: unknown = null;
+for (let depth = 0; depth < 13; depth++) tooDeepValue = [tooDeepValue];
+assert.equal(validateCommandValue({ type: 'array' }, tooDeepValue as never), 'Arguments exceeds depth 12',
+  'free-form JSON arrays retain the server argument depth bound');
+assert.equal(validateCommandValue({ type: 'array' }, Array.from({ length: 2048 }, () => null)),
+  'Arguments exceeds 2048 JSON values', 'free-form JSON arrays retain the server argument-node bound');
+assert.equal(validateCommandValue({ type: 'array' }, ['x'.repeat(65536)]),
+  'Arguments exceeds 65536 UTF-8 bytes', 'free-form JSON arrays retain the server argument-byte bound');
+assert.equal(validateCommandValue({
+  type: 'object', additionalProperties: false, required: ['', 'zero', 'flag', 'nil'], properties: {
+    '': { type: 'string' }, zero: { type: 'integer' }, flag: { type: 'boolean' }, nil: { type: 'null' },
+  },
+}, { '': '', zero: 0, flag: false, nil: null }), null,
+'strict objects preserve empty strings, zero, false, null, and empty-string keys');
 
 const roomEnvelope = (kind: string, text: string, extra: Record<string, unknown> = {}) => JSON.stringify({
   version: 1,

@@ -38,7 +38,7 @@ try {
   const catalog = {
     recipient_cid: 'PEER', fingerprint: 'A'.repeat(43), commands: [{
       name: 'values.capture', description: 'Capture explicit JSON values', input_schema: {
-        type: 'object', required: ['required'], properties: {
+        type: 'object', additionalProperties: false, required: ['required'], properties: {
           required: { type: 'string', title: 'Required' },
           optionalText: { type: 'string', title: 'Optional text' },
           zero: { type: 'integer', title: 'Zero' },
@@ -131,6 +131,11 @@ try {
   assert.equal(await tags.inputValue(), '[1', 'invalid array source remains visible instead of reverting to stale parsed data');
   assert.equal(await panel.getByRole('button', { name: 'Send command' }).isDisabled(), true, 'visible invalid array source blocks send');
   await tags.fill('[0]');
+  await otherTags.fill(JSON.stringify(['x'.repeat(65536)]));
+  await panel.getByRole('alert').getByText(/65536 UTF-8 bytes/).waitFor();
+  assert.equal(await panel.getByRole('button', { name: 'Send command' }).isDisabled(), true,
+    'an oversized free-form array is blocked in the browser before an invocation is reserved');
+  await otherTags.fill('[]');
   await panel.getByLabel(/Confirm sending/).check();
 
   const sendButton = panel.getByRole('button', { name: 'Send command' });
