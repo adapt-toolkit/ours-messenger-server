@@ -19,7 +19,9 @@ type Schema = { [key: string]: JsonValue };
 function safePatternError(value: JsonValue): string | null {
   if (typeof value !== 'string') return 'pattern must be a string';
   if (value.length > MAX_PATTERN_LENGTH) return `pattern exceeds ${MAX_PATTERN_LENGTH} characters`;
+  if (!value.startsWith('^') || !value.endsWith('$')) return 'pattern must be anchored with ^ and $';
   let inClass = false;
+  let variableRepetitionSeen = false;
   for (let index = 0; index < value.length; index++) {
     const character = value[index];
     if (character === '\\') {
@@ -32,7 +34,7 @@ function safePatternError(value: JsonValue): string | null {
       continue;
     }
     if (character === '[') { inClass = true; continue; }
-    if ('()*+|'.includes(character)) return 'pattern must use only bounded, non-grouped expressions';
+    if ('()?*+|'.includes(character)) return 'pattern must use only bounded, non-grouped expressions';
     if (character === '{') {
       const quantifier = /^\{(\d+)(?:,(\d+))?\}/.exec(value.slice(index));
       if (!quantifier) return 'pattern has an invalid or unbounded repetition';
@@ -40,6 +42,13 @@ function safePatternError(value: JsonValue): string | null {
       const maximum = Number(quantifier[2] ?? quantifier[1]);
       if (minimum > maximum || maximum > MAX_PATTERN_REPETITION) {
         return `pattern repetition must not exceed ${MAX_PATTERN_REPETITION}`;
+      }
+      if (minimum !== maximum) {
+        const remainder = value.slice(index + quantifier[0].length);
+        if (variableRepetitionSeen || (remainder !== '' && remainder !== '$')) {
+          return 'a variable pattern repetition is supported only once, at the end';
+        }
+        variableRepetitionSeen = true;
       }
       index += quantifier[0].length - 1;
     }

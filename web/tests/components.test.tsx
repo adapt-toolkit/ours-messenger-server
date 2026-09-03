@@ -188,6 +188,9 @@ assert.match(unsupportedPanel, /role="alert"/, 'unsupported schema constructs ar
 assert.match(unsupportedPanel, /Unsupported JSON Schema keyword: oneOf/);
 for (const [pattern, message] of [
   ['^a+$', 'pattern must use only bounded, non-grouped expressions'],
+  ['^' + 'a?'.repeat(80) + 'a'.repeat(80) + 'b$', 'pattern must use only bounded, non-grouped expressions'],
+  ['a{256}'.repeat(40) + 'b', 'pattern must be anchored with ^ and $'],
+  ['^a{1,2}a{1,2}$', 'a variable pattern repetition is supported only once, at the end'],
   ['^a{257}$', 'pattern repetition must not exceed 256'],
   ['a'.repeat(257), 'pattern exceeds 256 characters'],
 ] as const) {
@@ -204,8 +207,16 @@ assert.equal(validateCommandValue({ type: 'array', minItems: 1, items: { type: '
   'Arguments has too few items');
 assert.equal(validateCommandValue({ type: 'string', pattern: '^[0-7][0-9a-hjkmnp-tv-z]{25}$' },
   '01jd7q4h9m2v8xk3znbc5regty'), null, 'the Cowork room-id pattern accepts a valid lowercase ULID');
+assert.equal(validateCommandValue({ type: 'string', pattern: '^[A-Za-z0-9._:-]{1,128}$' },
+  'remove.member:epoch-4'), null, 'the Cowork idempotency-key pattern remains supported');
 assert.equal(validateCommandValue({ type: 'string', pattern: '^[0-7][0-9a-hjkmnp-tv-z]{25}$' },
   'not-a-room-id'), 'Arguments does not match the required format', 'pattern mismatch is a clear validation error');
+assert.equal(validateCommandValue({ type: 'string', pattern: '^' + 'a?'.repeat(80) + 'a'.repeat(80) + 'b$' },
+  'a'.repeat(160)), 'Arguments cannot be validated safely: pattern must use only bounded, non-grouped expressions',
+  'hostile repeated optionals are rejected before regular-expression evaluation');
+assert.equal(validateCommandValue({ type: 'string', pattern: 'a{256}'.repeat(40) + 'b' },
+  'a'.repeat(65534)), 'Arguments cannot be validated safely: pattern must be anchored with ^ and $',
+  'expensive unanchored fixed repeats are rejected before regular-expression evaluation');
 assert.equal(validateCommandValue({ const: true }, true), null, 'a fixed consent argument validates without an editable control');
 assert.equal(validateCommandValue({ const: true }, false), 'Arguments must use the fixed value',
   'a fixed consent argument cannot be changed client-side');
