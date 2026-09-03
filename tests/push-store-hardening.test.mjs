@@ -29,7 +29,7 @@ try {
   assert.equal(first.bindingCount, 1);
   assert.equal(lstatSync(join(root, 'push.json')).mode & 0o777, 0o600, 'push state remains owner-only');
   const disk = JSON.parse(readFileSync(join(root, 'push.json'), 'utf8'));
-  assert.equal(disk.version, 2, 'atomic state has an explicit schema version');
+  assert.equal(disk.version, 3, 'atomic state has an explicit schema version');
   assert.ok(disk.identities['CID-A'], 'bindings are nested under the configured identity CID');
 
   const idempotent = first.ensure(valid);
@@ -82,7 +82,7 @@ try {
   const migrated = PushStore.open(legacyRoot, 'CID-MIGRATED', env);
   assert.equal(migrated.bindingCount, 1, 'a valid version-1 subscription is preserved during migration');
   const disk = JSON.parse(readFileSync(join(legacyRoot, 'push.json'), 'utf8'));
-  assert.equal(disk.version, 2, 'legacy push state migrates atomically to the current schema');
+  assert.equal(disk.version, 3, 'legacy push state migrates atomically to the current schema');
   assert.equal(Object.keys(disk.identities['CID-MIGRATED'].bindings).length, 1,
     'legacy subscription is assigned only to the startup-bound identity');
   assert.equal(lstatSync(join(legacyRoot, 'push.json')).mode & 0o777, 0o600,

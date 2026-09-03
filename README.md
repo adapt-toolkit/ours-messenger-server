@@ -191,12 +191,25 @@ subscription. On iOS, install the site to the Home Screen before enabling push.
 
 Delivery jobs are durable, identity-scoped metadata keyed by authenticated
 sender CID, wire ID, and event kind. They never persist message text or file
-contents. Each attempt re-reads the canonical SDK projection; restart resumes
-pending work, duplicate watcher events converge to one job, 404/410 responses
-prune dead bindings, and transient network/429/5xx responses use bounded
-backoff with jitter and expiry. Push failures do not stop the watcher.
+contents. Each attempt re-reads the canonical SDK projection; restart restores
+pending or crash-interrupted work, duplicate watcher events converge to one
+job, 404/410 responses prune dead bindings, and transient network/429/5xx
+responses use bounded backoff with jitter and expiry. A successful delivery
+deletes the full job immediately and leaves only a 15-minute dedupe tombstone;
+tombstones are capped at 256 and delivery totals live in separate counters.
 
-An absent `push.json` is initialized on first run. An existing file that is
+Messenger persists a byte checkpoint for the daemon's separate durable,
+content-free notification log. A new installation primes at the current tip;
+after that, restart and reconnect resume from the committed checkpoint. A page
+checkpoint advances only after every eligible event has been durably admitted.
+If the queue is full, the checkpoint stays behind the refused event and the
+health/state surfaces expose saturation and cumulative admission failures.
+Messenger never scans unread message/file history to synthesize pushes.
+
+An absent `push.json` is initialized on first run. Version-2 state migrates
+atomically: valid pending/retry work is preserved, recent terminal rows are
+compacted into the small tombstone budget, and obsolete terminal history is
+removed while its totals move to counters. An existing file that is
 unreadable, malformed, or schema-invalid aborts startup without rewriting keys,
 bindings, or jobs; the error identifies the preserved path and requires the
 operator to restore it or explicitly move it aside before a new state is made.

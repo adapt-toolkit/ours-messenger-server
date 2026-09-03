@@ -904,11 +904,24 @@ const ROUTES: Record<string, Handler> = {
       const current = await within(client.currentIdentity(), deps.healthTimeoutMs ?? 1_500);
       const identity = publicIdentity(current);
       if (identity.cid !== deps.identityCid) throw new Error('bound identity mismatch');
+      const pushQueue = deps.push.queueStats();
+      if (pushQueue.healthy === false) {
+        sendJson(res, 503, {
+          status: 'degraded',
+          message: 'Push queue saturated',
+          version: deps.buildInfo.version,
+          sha: deps.buildInfo.sha,
+          identityCid: deps.identityCid,
+          pushQueue,
+        });
+        return undefined;
+      }
       sendJson(res, 200, {
         status: 'ok',
         version: deps.buildInfo.version,
         sha: deps.buildInfo.sha,
         identityCid: deps.identityCid,
+        pushQueue,
       });
     } catch {
       sendJson(res, 503, unavailable);

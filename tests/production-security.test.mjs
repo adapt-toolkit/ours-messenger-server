@@ -63,7 +63,7 @@ function makeDeps(client = {}) {
     push: {
       publicConfig: { publicKey: 'public', fingerprint: 'public-fingerprint', configEpoch: 1 },
       bindingCount: 0,
-      queueStats: () => ({ pending: 0, sent: 0, dropped: 0, depth: 0 }),
+      queueStats: () => ({ pending: 0, sent: 0, dropped: 0, depth: 0, healthy: true, saturated: false, admissionFailures: 0 }),
       ensure: () => ({}),
       delete: () => false,
     },
@@ -189,7 +189,17 @@ const healthy = await call(makeDeps({ currentIdentity: async () => ({ cid: 'BOUN
 assert.equal(healthy.status, 200);
 assert.deepEqual(healthy.json, {
   status: 'ok', version: BUILD.version, sha: BUILD.sha, identityCid: 'BOUND-CID',
+  pushQueue: { pending: 0, sent: 0, dropped: 0, depth: 0, healthy: true, saturated: false, admissionFailures: 0 },
 });
+
+const saturatedDeps = makeDeps({ currentIdentity: async () => ({ cid: 'BOUND-CID', name: 'Me' }) });
+saturatedDeps.push.queueStats = () => ({
+  pending: 0, sent: 4_096, dropped: 1, depth: 0, healthy: false, saturated: true, admissionFailures: 2,
+});
+const saturatedHealth = await call(saturatedDeps, { url: '/api/healthz' });
+assert.equal(saturatedHealth.status, 503, 'push saturation degrades health even when pending=0');
+assert.equal(saturatedHealth.json.pushQueue.admissionFailures, 2, 'health exposes cumulative admission failure visibility');
+assert.equal(saturatedHealth.json.pushQueue.dropped, 1, 'health does not let pending=0 mask dropped delivery work');
 
 const HEALTH_SECRET = 'TOKEN-health-secret-/private/path?query=secret';
 const unhealthyBodies = [];

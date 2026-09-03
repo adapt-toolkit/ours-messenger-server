@@ -6,10 +6,11 @@
 // the daemon process, broker connection, API token, or identity storage.
 
 import { randomBytes } from 'node:crypto';
-import { attachOursClient, type OursClient } from '@ours.network/sdk';
+import { attachOursClient, resolveDaemonConfig, type OursClient } from '@ours.network/sdk';
 import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { ConfigurationError } from './security.js';
+import type { NotificationPage } from './watch.js';
 
 export interface Runtime {
   readonly client: OursClient;
@@ -18,7 +19,34 @@ export interface Runtime {
   readonly leaseToken: string;
   /** Safe for logs and /api/state. It contains provenance, never token bytes. */
   readonly described: Readonly<Record<string, unknown>>;
+  readNotificationPage(identity: string, since: number | 'tip', signal: AbortSignal): Promise<NotificationPage>;
   close(): Promise<void>;
+}
+
+function daemonNotificationReader(leaseToken: string): Runtime['readNotificationPage'] {
+  let selected: ReturnType<typeof resolveDaemonConfig> | undefined;
+  return async (identity, since, signal) => {
+    selected ??= resolveDaemonConfig();
+    const url = `${selected.baseUrl.value}/identities/${encodeURIComponent(identity)}`
+      + `/notifications?since=${encodeURIComponent(String(since))}&kinds=inbound`;
+    const response = await fetch(url, {
+      headers: {
+        'x-ours-lease-token': leaseToken,
+        'x-ours-client-pid': String(process.pid),
+        ...(selected.token ? { 'x-ours-api-token': selected.token.value } : {}),
+      },
+      signal,
+    });
+    let body: unknown;
+    try { body = await response.json(); } catch { throw new Error(`daemon notification page returned HTTP ${response.status} with invalid JSON`); }
+    if (!response.ok) throw new Error(`daemon notification page returned HTTP ${response.status}`);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('daemon notification page is malformed');
+    const page = body as Partial<NotificationPage>;
+    if (!Number.isSafeInteger(page.cursor) || page.cursor! < 0 || !Array.isArray(page.events)) {
+      throw new Error('daemon notification page is malformed');
+    }
+    return { cursor: page.cursor!, events: page.events };
+  };
 }
 
 function hasCode(error: unknown, code: string): boolean {
@@ -50,6 +78,7 @@ export async function startRuntime(
       apiVisibility: 'daemon-configured',
       mcp: false,
     }),
+    readNotificationPage: daemonNotificationReader(leaseToken),
     async close() {
       if (closed) return;
       closed = true;

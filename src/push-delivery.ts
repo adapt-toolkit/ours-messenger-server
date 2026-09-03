@@ -1,5 +1,5 @@
 import type { OursClient } from '@ours.network/sdk';
-import type { PushEvent, PushJob, PushKind, PushStore } from './push.js';
+import type { PushAdmission, PushEvent, PushJob, PushKind, PushStore } from './push.js';
 import { reportFailure } from './security.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName, contactMessagePreview } from '../shared/roomMessageCore.mjs';
@@ -29,9 +29,11 @@ export interface PushDeliveryStats {
   retried: number;
   dropped: number;
   suppressed: number;
+  saturationEvents: number;
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+const bounded = (value: unknown, max: number): value is string => nonEmpty(value) && value.length <= max;
 
 function notificationKind(record: Record<string, unknown>): PushKind | null {
   if (record.event === 'message_received') return 'message';
@@ -41,7 +43,7 @@ function notificationKind(record: Record<string, unknown>): PushKind | null {
   return 'file';
 }
 
-async function projectFromSdk(
+export async function projectPushEvent(
   client: PushDeliveryOptions['client'],
   job: PushJob,
 ): Promise<PushEvent> {
@@ -81,7 +83,9 @@ async function projectFromSdk(
  * attempt re-reads the canonical SDK projection before encrypted delivery.
  */
 export class PushDeliveryQueue {
-  readonly stats: PushDeliveryStats = { queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0, suppressed: 0 };
+  readonly stats: PushDeliveryStats = {
+    queued: 0, sent: 0, pruned: 0, retried: 0, dropped: 0, suppressed: 0, saturationEvents: 0,
+  };
   private readonly store: PushStore;
   private readonly client: PushDeliveryOptions['client'];
   private readonly identityCid: string;
@@ -103,7 +107,7 @@ export class PushDeliveryQueue {
     this.log = options.log;
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
-    this.project = options.project ?? ((job) => projectFromSdk(this.client, job));
+    this.project = options.project ?? ((job) => projectPushEvent(this.client, job));
     this.isForeground = options.isForeground ?? (() => false);
     this.foregroundBindingIds = options.foregroundBindingIds ?? (() => new Set());
     this.automatic = options.autoStart !== false;
@@ -111,32 +115,45 @@ export class PushDeliveryQueue {
   }
 
   enqueue(record: Record<string, unknown>): boolean {
-    if (!nonEmpty(record.sender_id) || !nonEmpty(record.wire_id)) return false;
+    return this.admit(record).status === 'queued';
+  }
+
+  admit(record: Record<string, unknown>): PushAdmission {
+    if (!bounded(record.sender_id, 512) || !bounded(record.wire_id, 1_024)) return { status: 'no_targets' };
     const kind = notificationKind(record);
-    if (!kind || !this.store.hasBindings()) return false;
-    const queued = this.store.enqueueJob({
+    if (!kind || !this.store.hasBindings()) return { status: 'no_targets' };
+    const admission = this.store.admitJob({
       wireId: record.wire_id,
       kind,
       contactId: record.sender_id,
-      senderName: nonEmpty(record.sender_name) ? record.sender_name : undefined,
+      senderName: bounded(record.sender_name, 512) ? record.sender_name : undefined,
     }, this.now());
-    if (queued) {
+    if (admission.status === 'saturated') {
+      this.stats.saturationEvents++;
+      const state = this.store.queueStats();
+      this.log.warn(
+        `event=push_queue_saturated status=saturated wire=${record.wire_id} kind=${kind} `
+        + `pending=${state.pending} depth=${state.depth} capacity=${state.capacity} admission_failures=${state.admissionFailures}`,
+      );
+      return admission;
+    }
+    if (admission.status === 'queued') {
       this.stats.queued++;
       const jobId = `${this.identityCid}:${record.wire_id}:${kind}`;
       const suppressedBindings = this.store.suppressBindings(jobId, this.foregroundBindingIds(), this.now());
       if (suppressedBindings > 0) {
         this.stats.suppressed += suppressedBindings;
         this.log.info(`push queue: suppressed ${suppressedBindings} foreground binding(s) kind=${kind} wire=${record.wire_id}`);
-        if (this.store.queueStats().pending === 0) return true;
+        if (this.store.queueStats().pending === 0) return admission;
       } else if (this.isForeground() && this.store.suppressJob(jobId, this.now())) {
         this.stats.suppressed++;
         this.log.info(`push queue: suppressed foreground kind=${kind} wire=${record.wire_id}`);
-        return true;
+        return admission;
       }
       this.log.info(`push queue: queued kind=${kind} wire=${record.wire_id} depth=${this.store.queueStats().pending}`);
       if (this.automatic) this.schedule(0);
     }
-    return queued;
+    return admission;
   }
 
   async drainDue(): Promise<void> {
@@ -154,6 +171,7 @@ export class PushDeliveryQueue {
   private async drainOnce(): Promise<void> {
     for (const job of this.store.dueJobs(this.now())) {
       if (this.stopped) return;
+      if (!this.store.claimJob(job.id, this.now())) continue;
       let event: PushEvent;
       try {
         event = await this.project(job);
