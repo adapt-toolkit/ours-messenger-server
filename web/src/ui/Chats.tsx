@@ -389,6 +389,7 @@ export function Conversation(props: {
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
   const commandLoadRef = useRef<AbortController | null>(null);
+  const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const sendingRef = useRef(false);
@@ -455,6 +456,10 @@ export function Conversation(props: {
     } finally {
       if (commandLoadRef.current === controller) setCommandBusy(false);
     }
+  };
+  const closeCommandPanel = () => {
+    setCommandOpen(false);
+    commandTriggerRef.current?.focus();
   };
 
   useEffect(() => {
@@ -1167,7 +1172,7 @@ export function Conversation(props: {
             storageScope={props.identityCid ?? 'unknown-identity'}
             busy={commandBusy}
             onRefresh={() => void loadCommands()}
-            onClose={() => setCommandOpen(false)}
+            onClose={closeCommandPanel}
             onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
               if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
               setCommandBusy(true);
@@ -1204,9 +1209,9 @@ export function Conversation(props: {
         )}
         <div className={'composer' + (voiceActive ? ' recording' : '')}>
           {props.onLoadCommands && (
-            <button type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
+            <button ref={commandTriggerRef} type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
               aria-label="Recipient commands" aria-expanded={commandOpen}
-              disabled={commandBusy} onClick={() => commandOpen ? setCommandOpen(false) : void loadCommands()}>
+              disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : void loadCommands()}>
               /
             </button>
           )}

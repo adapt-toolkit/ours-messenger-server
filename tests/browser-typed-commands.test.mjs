@@ -137,9 +137,18 @@ try {
     'wrong peer, ordinary/inbound reply targets, and missing replies never render completed');
   const box = await restored.boundingBox();
   assert.ok(box && box.x >= 0 && box.x + box.width <= 390, 'command form remains within the narrow mobile viewport');
+  const commandTrigger = page.getByRole('button', { name: 'Recipient commands' });
+  await restored.getByRole('button', { name: 'Close commands' }).click();
+  assert.equal(await page.getByRole('form', { name: 'Send a typed command' }).count(), 0, 'close button closes the command form');
+  assert.equal(await commandTrigger.evaluate((element) => document.activeElement === element), true,
+    'close button restores focus to the Recipient commands trigger');
+  await commandTrigger.click();
+  await restored.waitFor();
   await restored.getByRole('button', { name: 'Reset after verifying outcome' }).focus();
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('form', { name: 'Send a typed command' }).count(), 0, 'keyboard Escape closes the command form');
+  assert.equal(await commandTrigger.evaluate((element) => document.activeElement === element), true,
+    'keyboard Escape restores focus to the Recipient commands trigger');
 
   console.log('browser-typed-commands OK — keyboard/mobile form, raw validation, stable persisted attempt, strict correlation');
 } finally {
