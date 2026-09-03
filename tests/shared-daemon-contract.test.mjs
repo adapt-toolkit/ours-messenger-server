@@ -74,6 +74,10 @@ class Response extends EventEmitter {
 
 const reads = [];
 const commandsSent = [];
+let advertisedCommands = [{
+  name: 'notes.create', description: 'Create a note',
+  input_schema: { type: 'object', required: [''], properties: { '': { type: 'string' } } },
+}];
 const historyClient = {
   listContacts: async () => ({ contacts: [{ container_id: 'CID-PEER', name: 'Peer' }], roots: [] }),
   listHistory: async (query) => {
@@ -115,10 +119,7 @@ const historyClient = {
   },
   listContactCommands: async ({ contact }) => {
     assert.equal(contact, 'CID-PEER');
-    return [{
-      name: 'notes.create', description: 'Create a note',
-      input_schema: { type: 'object', required: [''], properties: { '': { type: 'string' } } },
-    }];
+    return advertisedCommands;
   },
   sendCommand: async (input) => {
     commandsSent.push(input);
@@ -146,16 +147,16 @@ const deps = {
   identityCid: 'CID-MESSENGER',
 };
 
-async function request(method, url, body) {
-  const res = await rawRequest(method, url, body);
+async function request(method, url, body, activeDeps = deps) {
+  const res = await rawRequest(method, url, body, activeDeps);
   assert.equal(res.statusCode, 200, Buffer.concat(res.chunks).toString('utf8'));
   return res.json();
 }
 
-async function rawRequest(method, url, body) {
+async function rawRequest(method, url, body, activeDeps = deps) {
   const req = new Request(method, url, body);
   const res = new Response();
-  await serveApi(req, res, deps);
+  await serveApi(req, res, activeDeps);
   return res;
 }
 
@@ -201,6 +202,21 @@ const replay = await request('POST', '/api/commands/send', {
 assert.equal(replay.deduplicated, true);
 assert.equal(replay.wire_id, 'CMD-WIRE-1');
 assert.equal(commandsSent.length, 1, 'same invocation and payload is never sent twice');
+
+advertisedCommands = [];
+const replayAfterRestartAndRemoval = await request('POST', '/api/commands/send', {
+  contact: 'CID-PEER', recipient_cid: 'CID-PEER', command: 'notes.create', arguments: { '': '' },
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef',
+  catalog_fingerprint: catalog.fingerprint, confirmed: true,
+}, { ...deps });
+assert.equal(replayAfterRestartAndRemoval.deduplicated, true);
+assert.equal(replayAfterRestartAndRemoval.wire_id, 'CMD-WIRE-1');
+assert.equal(commandsSent.length, 1,
+  'restart replay returns the durable accepted outcome even after the command is removed from the live catalog');
+advertisedCommands = [{
+  name: 'notes.create', description: 'Create a note',
+  input_schema: { type: 'object', required: [''], properties: { '': { type: 'string' } } },
+}];
 
 const wrongRecipient = await rawRequest('POST', '/api/commands/send', {
   contact: 'CID-PEER', recipient_cid: 'CID-OTHER', command: 'notes.create', arguments: { '': '' },

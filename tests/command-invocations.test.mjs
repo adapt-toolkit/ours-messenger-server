@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CommandInvocationStore, invocationFingerprint } from '../src/command-invocations.ts';
+import {
+  CommandInvocationStore, InvocationCapacityError, invocationFingerprint, statusFor,
+} from '../src/command-invocations.ts';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'messenger-command-invocations-'));
 try {
@@ -37,6 +39,27 @@ try {
   assert.equal(replayAccepted.fresh, false);
   assert.equal(replayAccepted.record.wire_id, 'WIRE-1');
   assert.equal(replayAccepted.record.status, 'accepted');
+
+  const bounded = CommandInvocationStore.open(stateDir, 'CID-CAPACITY', 2);
+  const boundedInput = (id) => ({
+    ...invocation, invocation_id: id, payload_fingerprint: `${payloadFingerprint}-${id}`,
+  });
+  const oldest = boundedInput('00000000-0000-4000-8000-000000000001');
+  bounded.begin(oldest);
+  bounded.begin(boundedInput('00000000-0000-4000-8000-000000000002'));
+  assert.throws(() => bounded.begin(boundedInput('00000000-0000-4000-8000-000000000003')), InvocationCapacityError,
+    'capacity refuses a fresh send instead of forgetting an old idempotency key');
+  assert.equal(CommandInvocationStore.open(stateDir, 'CID-CAPACITY', 2).begin(oldest).fresh, false,
+    'the oldest indeterminate reservation survives capacity pressure and restart');
+
+  assert.equal(statusFor('e2e', 'W'), 'accepted');
+  assert.equal(statusFor('sent', 'W'), 'accepted');
+  assert.equal(statusFor('introduced', 'W'), 'accepted');
+  assert.equal(statusFor('migrating', 'W'), 'pending');
+  assert.equal(statusFor('deferred', 'W'), 'pending');
+  assert.equal(statusFor('refused', 'W'), 'failed');
+  assert.equal(statusFor('unknown', 'W'), 'indeterminate');
+  assert.equal(statusFor('e2e', null), 'indeterminate');
 } finally {
   rmSync(stateDir, { recursive: true, force: true });
 }
