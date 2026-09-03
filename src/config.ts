@@ -28,6 +28,9 @@ export interface MessengerConfig {
 
   /** Messenger-only state root (WebPush subscriptions and delivery queue). */
   readonly stateDir: string;
+
+  /** Emergency rollback switch for the typed-command surface. */
+  readonly typedCommands?: boolean;
 }
 
 export const DEFAULT_HTTP_PORT = 8420;
@@ -86,5 +89,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfi
     identity,
     force: boolOrUndefined(env.OURS_MESSENGER_FORCE, 'OURS_MESSENGER_FORCE') ?? false,
     stateDir: resolveOwnStateDir(env),
+    typedCommands: boolOrUndefined(env.OURS_MESSENGER_TYPED_COMMANDS, 'OURS_MESSENGER_TYPED_COMMANDS') ?? true,
   };
 }

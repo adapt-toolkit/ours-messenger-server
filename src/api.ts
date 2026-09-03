@@ -29,6 +29,7 @@ import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
 import { publicEngineError, publicInternalError } from './security.js';
+import { projectCatalog, requireBoundedJson } from './typed-commands.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName } from '../shared/roomMessageCore.mjs';
 
@@ -479,6 +480,39 @@ const ROUTES: Record<string, Handler> = {
       return { wire_id: null, delivery: INTRODUCED };
     }
     return { wire_id: wireId, delivery: 'tracked' };
+  },
+
+  'GET /api/contacts/:contact/commands': async ({ client, deps, params }) => {
+    if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
+    const peer = await resolveContact(client, params.contact);
+    return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
+  },
+
+  'POST /api/commands/send': async ({ client, deps, body }) => {
+    if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
+    const peer = await resolveContact(client, str(body, 'contact'));
+    const command = str(body, 'command');
+    const invocationId = str(body, 'invocation_id');
+    const fingerprint = str(body, 'catalog_fingerprint');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(invocationId)) {
+      throw bad('invocation_id must be a UUID v4');
+    }
+    if (!/^[A-Za-z0-9_-]{43}$/.test(fingerprint)) throw bad('catalog_fingerprint is invalid');
+    if (body.confirmed !== true) throw bad('explicit command confirmation is required');
+    requireBoundedJson(body.arguments, 'arguments');
+    const current = projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
+    if (current.fingerprint !== fingerprint || !current.commands.some((entry) => entry.name === command)) {
+      throw new HttpError(409, 'Command catalog changed; refresh before sending');
+    }
+    const result = await client.sendCommand({ contact: peer.cid, command, arguments: body.arguments });
+    return {
+      invocation_id: invocationId,
+      recipient_cid: peer.cid,
+      catalog_fingerprint: current.fingerprint,
+      command,
+      wire_id: outcomeWireId(result) ?? null,
+      delivery: outcomeKind(result) ?? 'unknown',
+    };
   },
 
   'POST /api/messages/send-file': async ({ client, body }) => {

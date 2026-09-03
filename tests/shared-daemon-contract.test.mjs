@@ -69,6 +69,7 @@ class Response extends EventEmitter {
 }
 
 const reads = [];
+const commandsSent = [];
 const historyClient = {
   listContacts: async () => ({ contacts: [{ container_id: 'CID-PEER', name: 'Peer' }], roots: [] }),
   listHistory: async (query) => {
@@ -107,6 +108,17 @@ const historyClient = {
   getMessages: async (input) => {
     reads.push(input);
     return { messages: input.wire_ids.map((wire_id) => ({ wire_id })) };
+  },
+  listContactCommands: async ({ contact }) => {
+    assert.equal(contact, 'CID-PEER');
+    return [{
+      name: 'notes.create', description: 'Create a note',
+      input_schema: { type: 'object', required: [''], properties: { '': { type: 'string' } } },
+    }];
+  },
+  sendCommand: async (input) => {
+    commandsSent.push(input);
+    return { kind: 'e2e', wireId: 'CMD-WIRE-1' };
   },
   listFiles: async ({ peer_cid, before_seq, limit }) => {
     assert.deepEqual({ peer_cid, before_seq, limit }, { peer_cid: 'CID-PEER', before_seq: undefined, limit: 200 });
@@ -151,6 +163,23 @@ assert.equal(older.preview, 'new', 'an older page retains the newest whole-dialo
 const marked = await request('POST', '/api/conversations/Peer/read', {});
 assert.equal(marked.marked, 2);
 assert.deepEqual(reads, [{ wire_ids: ['A1', 'A2'] }], 'reading Peer never consumes unread messages from another identity contact');
+
+const catalog = await request('GET', '/api/contacts/Peer/commands');
+assert.equal(catalog.recipient_cid, 'CID-PEER');
+assert.match(catalog.fingerprint, /^[A-Za-z0-9_-]{43}$/);
+assert.deepEqual(catalog.commands.map((entry) => entry.name), ['notes.create']);
+const commandSend = await request('POST', '/api/commands/send', {
+  contact: 'CID-PEER', command: 'notes.create', arguments: { '': '' },
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef',
+  catalog_fingerprint: catalog.fingerprint, confirmed: true,
+});
+assert.deepEqual(commandSend, {
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef', recipient_cid: 'CID-PEER',
+  catalog_fingerprint: catalog.fingerprint, command: 'notes.create',
+  wire_id: 'CMD-WIRE-1', delivery: 'e2e',
+});
+assert.deepEqual(commandsSent, [{ contact: 'CID-PEER', command: 'notes.create', arguments: { '': '' } }],
+  'typed send revalidates the CID-bound catalog and preserves empty-string keys');
 
 const files = await request('GET', '/api/conversations/Peer/files');
 assert.deepEqual(files.files.map((row) => ({ wire_id: row.wire_id, version: row.version, available: row.available })), [
