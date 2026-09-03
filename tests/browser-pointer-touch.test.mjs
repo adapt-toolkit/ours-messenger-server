@@ -171,7 +171,9 @@ try {
   const outgoingY = outgoingBox.y + outgoingBox.height / 2;
   await pen(session, 'mousePressed', outgoingX, outgoingY);
   await pen(session, 'mouseMoved', outgoingX - 18, outgoingY);
+  await page.waitForFunction(() => document.querySelector('#chat-message-TOUCH-25 .msg-row')?.hasPointerCapture(globalThis.__pointerId));
   await pen(session, 'mouseMoved', outgoingX - 76, outgoingY);
+  await outgoing.locator('.swipe-cue.armed').waitFor();
   await pen(session, 'mouseReleased', outgoingX - 76, outgoingY);
   await page.getByText('Replying to You', { exact: true }).waitFor();
   assert.equal(await page.getByText('Replying to You', { exact: true }).count(), 1, 'outgoing inward release commits once');
