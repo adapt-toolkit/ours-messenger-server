@@ -1,4 +1,4 @@
-import type { Receipt } from '../types.js';
+import type { Receipt, TypedEnvelope } from '../types.js';
 
 /** Messenger timeline shape, normalized exclusively by App's REST adapter. */
 export interface ChatMessage {
@@ -7,6 +7,8 @@ export interface ChatMessage {
   date: string;
   read: boolean;
   wireId: string;
+  /** Authenticated peer CID from the server's peer-filtered history row. */
+  peerCid?: string;
   replyTo: { wireId: string } | null;
   kind?: 'file';
   filename?: string;
@@ -18,4 +20,6 @@ export interface ChatMessage {
    * receipt yet", which is the ordinary case and does resolve.
    */
   receiptless?: boolean;
+  messageKind?: string;
+  typed?: TypedEnvelope | null;
 }

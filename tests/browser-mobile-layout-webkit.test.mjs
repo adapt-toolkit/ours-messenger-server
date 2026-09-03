@@ -568,6 +568,7 @@ try {
             const items = [node.querySelector('.composer-tool'), field, node.querySelector('.vr-mic')].map((item) => item.getBoundingClientRect());
             return {
               width: items[1].width, height: items[1].height, placeholder: field.placeholder,
+              toolCount: node.querySelectorAll('.composer-tool').length,
               placeholderColor: fieldStyle.getPropertyValue('--placeholder-color') || getComputedStyle(field, '::placeholder').color,
               wrapperBackground: wrapperStyle.backgroundColor, wrapperBorder: wrapperStyle.borderTopWidth,
               gaps: [items[1].left - items[0].right, items[2].left - items[1].right],
@@ -583,7 +584,8 @@ try {
           }
           assert.ok(Math.abs(equalChrome.attach.height - equalChrome.field.height) <= 1 && Math.abs(equalChrome.trailing.height - equalChrome.field.height) <= 1, `${engineName} ${width}px bottom controls share one height ${JSON.stringify(equalChrome)}`);
           assert.ok(equalChrome.status.left - equalChrome.back.right >= 10 && equalChrome.avatar.left - equalChrome.status.right >= 10, `${engineName} ${width}px equal-height header controls remain disjoint`);
-          assert.ok(collapsed.width >= 160 && collapsed.height >= 44 && collapsed.height <= 45 && collapsed.placeholder.length > 0,
+          const minimumInputWidth = width <= 350 && collapsed.toolCount > 1 ? 140 : 160;
+          assert.ok(collapsed.width >= minimumInputWidth && collapsed.height >= 44 && collapsed.height <= 45 && collapsed.placeholder.length > 0,
             `${engineName} ${dark ? 'dark' : 'light'} ${width}px fixed-open input stays recognizable ${JSON.stringify(collapsed)}`);
           assert.ok(!['transparent', 'rgba(0, 0, 0, 0)'].includes(collapsed.placeholderColor),
             `${engineName} ${dark ? 'dark' : 'light'} ${width}px collapsed placeholder remains visible (${collapsed.placeholderColor})`);

@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { counter } from './harness.mjs';
-import { ConversationPageError, projectPage } from '../src/conversation.ts';
+import { ConversationPageError, projectHistoryPage, projectPage } from '../src/conversation.ts';
 
 const t = counter();
 
@@ -108,6 +108,31 @@ const mixed = [
 const tail = projectPage('Peer', mixed, noReceipts, { limit: 1 });
 t.eq(tail.messages.length, 1, 'a one-entry page');
 t.eq(tail.unread, 3, 'unread counts unread INBOUND across the whole conversation — a badge that only counts what is on screen is not a badge');
+
+const typed = projectHistoryPage('CID-PEER', {
+  items: [
+    {
+      direction: 'in', text: '{"ok":true,"result":{"value":0}}', body: '{"ok":true,"result":{"value":0}}',
+      message_kind: 'command_result', date: 'D2', inbox_state: 'unread', delivery_state: null,
+      wire_id: 'RESULT', reply_to: { wire_id: 'COMMAND' }, peer: { id: 'CID-PEER', name: 'Peer' },
+    },
+    {
+      direction: 'out', text: '{"command":"notes.create","arguments":{"":""}}',
+      body: '{"command":"notes.create","arguments":{"":""}}', message_kind: 'command', date: 'D1',
+      inbox_state: 'read', delivery_state: 'delivered', wire_id: 'COMMAND', reply_to: null,
+      peer: { id: 'CID-PEER', name: 'Peer' },
+    },
+  ],
+  next_cursor: null,
+}, { total: 2, unread: 1 });
+t.eq(typed.messages.map((message) => message.message_kind), ['command', 'command_result'],
+  'typed history stays in ordinary chronological order');
+t.eq(typed.messages[0].typed, { kind: 'command', command: 'notes.create', arguments: { '': '' } },
+  'command JSON is projected structurally without prose parsing');
+t.eq(typed.messages[1].typed, { kind: 'command_result', outcome: { ok: true, result: { value: 0 } } },
+  'result JSON is correlated by its preserved reply pointer');
+t.eq(typed.messages.map((message) => message.peer_cid), ['CID-PEER', 'CID-PEER'],
+  'each typed row preserves its authenticated history peer CID for browser correlation');
 
 // ---- limit validation --------------------------------------------------------
 for (const bad of [0, -1, 1.5, 501, NaN]) {

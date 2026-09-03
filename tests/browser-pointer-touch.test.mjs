@@ -302,7 +302,7 @@ try {
   // disabled controls do not acquire the pressed presentation.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('.contact-row:not(.pending)').click();
-  const attach = page.locator('.composer-tool:not(.vr-mic)');
+  const attach = page.getByRole('button', { name: 'Attach a file or photo' });
   const attachBox = await attach.boundingBox();
   const rest = await styleOf(attach);
   await pen(session, 'mousePressed', attachBox.x + 20, attachBox.y + 20);
@@ -321,7 +321,7 @@ try {
   const reducePage = await reduceContext.newPage();
   const reduceSession = await reduceContext.newCDPSession(reducePage);
   await reducePage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
-  const reduceAttach = reducePage.locator('.composer-tool:not(.vr-mic)');
+  const reduceAttach = reducePage.getByRole('button', { name: 'Attach a file or photo' });
   await reduceAttach.waitFor();
   const reduceBox = await reduceAttach.boundingBox();
   const reduceRest = await styleOf(reduceAttach);

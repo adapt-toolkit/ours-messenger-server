@@ -29,6 +29,10 @@ import type { MessengerConfig } from './config.js';
 import type { BuildInfo } from './build-info.js';
 import { type MessengerEvent, MessengerEventBus, toSse } from './events.js';
 import { publicEngineError, publicInternalError } from './security.js';
+import { projectCatalog, requireBoundedJson } from './typed-commands.js';
+import {
+  CommandInvocationStore, InvocationCapacityError, InvocationConflictError, invocationFingerprint,
+} from './command-invocations.js';
 import { HtmlPreviewTransformError, MAX_HTML_PREVIEW_BYTES, transformHtmlPreview } from './html-preview-transform.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName } from '../shared/roomMessageCore.mjs';
@@ -55,10 +59,22 @@ export interface ApiDeps {
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
+  readonly commandInvocations?: CommandInvocationStore;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
   readonly sseQueueLimit?: number;
   readonly healthTimeoutMs?: number;
+}
+
+const invocationStores = new WeakMap<ApiDeps, CommandInvocationStore>();
+function invocationStore(deps: ApiDeps): CommandInvocationStore {
+  if (deps.commandInvocations) return deps.commandInvocations;
+  let store = invocationStores.get(deps);
+  if (!store) {
+    store = CommandInvocationStore.open(deps.config.stateDir, deps.identityCid);
+    invocationStores.set(deps, store);
+  }
+  return store;
 }
 
 class HttpError extends Error {
@@ -484,6 +500,73 @@ const ROUTES: Record<string, Handler> = {
       return { wire_id: null, delivery: INTRODUCED };
     }
     return { wire_id: wireId, delivery: 'tracked' };
+  },
+
+  'GET /api/contacts/:contact/commands': async ({ client, deps, params }) => {
+    if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
+    const peer = await resolveContact(client, params.contact);
+    return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
+  },
+
+  'POST /api/commands/send': async ({ client, deps, body }) => {
+    if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
+    const peer = await resolveContact(client, str(body, 'contact'));
+    const expectedRecipient = str(body, 'recipient_cid');
+    if (expectedRecipient !== peer.cid) throw new HttpError(409, 'Recipient changed; refresh commands');
+    const command = str(body, 'command');
+    const invocationId = str(body, 'invocation_id');
+    const fingerprint = str(body, 'catalog_fingerprint');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(invocationId)) {
+      throw bad('invocation_id must be a UUID v4');
+    }
+    if (!/^[A-Za-z0-9_-]{43}$/.test(fingerprint)) throw bad('catalog_fingerprint is invalid');
+    if (body.confirmed !== true) throw bad('explicit command confirmation is required');
+    try { requireBoundedJson(body.arguments, 'arguments'); }
+    catch { throw bad('arguments must be bounded valid JSON'); }
+    const payloadFingerprint = invocationFingerprint({
+      recipient_cid: peer.cid, command, arguments: body.arguments, catalog_fingerprint: fingerprint,
+    });
+    const store = invocationStore(deps);
+    try {
+      const existing = store.find({
+        invocation_id: invocationId, recipient_cid: peer.cid, payload_fingerprint: payloadFingerprint,
+      });
+      if (existing) return { ...existing, deduplicated: true };
+    } catch (error) {
+      if (error instanceof InvocationConflictError) {
+        throw new HttpError(409, 'invocation_id is already bound to another recipient or payload');
+      }
+      throw error;
+    }
+    const current = projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
+    if (current.fingerprint !== fingerprint || !current.commands.some((entry) => entry.name === command)) {
+      throw new HttpError(409, 'Command catalog changed; refresh before sending');
+    }
+    let reservation;
+    try {
+      reservation = store.begin({
+        invocation_id: invocationId, recipient_cid: peer.cid, payload_fingerprint: payloadFingerprint,
+        command, catalog_fingerprint: current.fingerprint,
+      });
+    } catch (error) {
+      if (error instanceof InvocationCapacityError) {
+        throw new HttpError(503, 'Command idempotency store is full; no command was sent');
+      }
+      if (error instanceof InvocationConflictError) {
+        throw new HttpError(409, 'invocation_id is already bound to another recipient or payload');
+      }
+      throw error;
+    }
+    if (!reservation.fresh) return { ...reservation.record, deduplicated: true };
+    const result = await client.sendCommand({ contact: peer.cid, command, arguments: body.arguments });
+    const completed = store.complete(invocationId, {
+      wire_id: outcomeWireId(result) ?? null,
+      delivery: outcomeKind(result) ?? 'unknown',
+    });
+    return {
+      ...completed,
+      deduplicated: false,
+    };
   },
 
   'POST /api/messages/send-file': async ({ client, body }) => {

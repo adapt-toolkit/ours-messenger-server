@@ -43,12 +43,15 @@ export function timeline(page: ReturnType<typeof pageFor>, media: readonly Media
     const normalized: ChatMessage = {
       dir: message.dir, text: message.text, date: message.date, read: message.read,
       wireId: message.wire_id, replyTo: message.reply_to ? { wireId: message.reply_to.wire_id } : null,
+      peerCid: message.peer_cid,
       receipt: message.receipt ?? undefined,
       // An outbound row with no wire id can never be named by a receipt — an
       // introduction-carried send, or a pre-1.4 entry restored from an old
       // backup. Saying "sent" of it is true; leaving the reader to assume a
       // receipt is merely late is not, since none is coming.
       receiptless: message.dir === 'out' && !message.wire_id,
+      messageKind: message.message_kind,
+      typed: message.typed,
     };
     if (message.wire_id) rows.set(message.wire_id, normalized); else legacy.push(normalized);
   }
@@ -595,6 +598,7 @@ export function AppShell() {
           onSendText={async (text, reply) => { const sent = await api.send(selectedView.id, text, reply); await refreshPage(selectedView.id, false); return sent.wire_id ?? undefined; }}
           onSendFile={async (att, reply) => { await api.sendFile(selectedView.id, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedView.id), refreshPage(selectedView.id, false)]); }}
         /> : <Conversation
+          identityCid={identity.cid}
           key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages} syncing={syncing}
           unreadOpen={unreadOpen?.contactCid === selectedCid ? unreadOpen : null}
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
@@ -639,6 +643,12 @@ export function AppShell() {
             // none to hand over, and the composer retires its copy in favour of
             // the row this dispatch just put in the store.
             return sent.wire_id ?? undefined;
+          }}
+          onLoadCommands={async (cid, signal) => api.commands(cid, signal)}
+          onSendCommand={async (cid, command, args, invocationId, fingerprint, signal) => {
+            const sent = await api.sendCommand(cid, command, args, invocationId, fingerprint, signal);
+            void refreshPage(cid, false);
+            return sent;
           }}
           onSendFile={async (att, reply) => { if (!selectedCid) return; await api.sendFile(selectedCid, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedCid), refreshPage(selectedCid, false)]); }}
           onFetchFile={async (wireId) => { await api.fetchFiles([wireId]); if (selectedCid) await refreshFiles(selectedCid); }}

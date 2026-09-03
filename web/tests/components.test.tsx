@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { timeline } from '../src/App.js';
 import { Conversation } from '../src/ui/Chats.js';
+import { CommandPanel, validateCommandValue } from '../src/ui/CommandPanel.js';
 import { registerMediaRecords } from '../src/ui/fileStore.js';
 import type { ConversationPage } from '../src/types.js';
 
@@ -80,6 +81,9 @@ const conversation = renderToStaticMarkup(<Conversation
     { dir: 'in', text: '', date: '2026-08-15T00:00:30Z', read: true, wireId: 'WIRE-MEDIA-IN', replyTo: { wireId: 'WIRE-0' }, kind: 'file', filename: 'voice-message-now.webm', mime: 'audio/webm;codecs=opus;x-ours-kind=voice-message' },
     { dir: 'out', text: '<img src=x onerror=alert(1)> **safe**', date: '2026-08-15T00:01:00Z', read: true, wireId: 'WIRE-1', replyTo: { wireId: 'WIRE-0' }, receipt: 'read' },
     { dir: 'out', text: '', date: '2026-08-15T00:01:30Z', read: true, wireId: 'WIRE-MEDIA-OUT', replyTo: null, kind: 'file', filename: 'photo.png', mime: 'image/png' },
+    { dir: 'out', text: '', date: '2026-08-15T00:02:00Z', read: true, wireId: 'WIRE-COMMAND', peerCid: 'ALICE-CID', replyTo: null, messageKind: 'command', typed: { kind: 'command', command: '<img onerror=run()>', arguments: { '': '', nested: [null, true, 0] } } },
+    { dir: 'in', text: '', date: '2026-08-15T00:02:30Z', read: true, wireId: 'WIRE-RESULT', peerCid: 'ALICE-CID', replyTo: { wireId: 'WIRE-COMMAND' }, messageKind: 'command_result', typed: { kind: 'command_result', outcome: { ok: false, error: 'policy_denied' } } },
+    { dir: 'in', text: '', date: '2026-08-15T00:03:00Z', read: true, wireId: 'WIRE-FUTURE', replyTo: null, messageKind: 'future_v2', typed: { kind: 'unknown', wire_kind: 'future_v2', malformed: false } },
   ]}
   hiddenEarlier={1} onLoadEarlier={() => {}} onBack={() => {}} onSend={async () => {}} onSendFile={async () => {}} onFetchFile={async () => {}} onRemove={() => {}} onRename={() => {}}
 />);
@@ -100,6 +104,52 @@ assert.ok(conversation.indexOf('chat-message-WIRE-1') < conversation.indexOf('ch
 assert.match(conversation, /<strong>safe<\/strong>/, 'safe GFM renders without raw HTML');
 assert.match(conversation, /quote-text[^>]*>\*\*original source\*\*</,
   'reply snippets preserve the canonical source instead of renderer-normalized markup');
+assert.match(conversation, /Accepted · pending result/, 'outbound commands expose their accepted/pending state');
+assert.match(conversation, /Result for &lt;img onerror=run\(\)&gt;/,
+  'results correlate to their command through the preserved reply wire id and escape the command name');
+assert.match(conversation, /Policy denied/, 'structured denial status is distinct from success');
+assert.ok(!conversation.includes('<script>unsafe</script>'), 'typed results never become raw HTML');
+assert.match(conversation, /Future typed message preserved/, 'unknown future typed kinds fail visibly and safely');
+
+const commandPanel = renderToStaticMarkup(<CommandPanel
+  catalog={{
+    recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
+      name: 'notes.create', description: '<img src=x onerror=alert(1)>',
+      input_schema: {
+        type: 'object', required: [''], properties: {
+          '': { type: 'string', title: 'Empty key value', default: '' },
+          priority: { type: 'integer', enum: [0, 1], description: '<script>priority</script>' },
+          tags: { type: 'array', items: { type: 'string' }, default: [] },
+        },
+      },
+    }],
+  }}
+  recipientName="Alice" storageScope="ME-CID" busy={false} onRefresh={() => {}} onClose={() => {}} onSend={async () => ({
+    invocation_id: crypto.randomUUID(), recipient_cid: 'ALICE-CID', catalog_fingerprint: 'A'.repeat(43),
+    command: 'notes.create', wire_id: 'WIRE', delivery: 'e2e', status: 'accepted',
+    payload_fingerprint: 'B'.repeat(43), deduplicated: false,
+  })}
+/>);
+assert.match(commandPanel, /aria-label="Send a typed command"/, 'command form has an accessible name');
+assert.match(commandPanel, /Empty key value \*/, 'required empty-string object keys remain editable');
+assert.match(commandPanel, /Add priority/, 'optional properties without defaults stay omitted behind an accessible add control');
+assert.doesNotMatch(commandPanel, /Remove priority/, 'an omitted optional property has no field/remove control yet');
+assert.match(commandPanel, /Confirm sending this command/, 'mutation confirmation is explicit');
+assert.ok(!commandPanel.includes('<img src=x'), 'untrusted command documentation is escaped');
+
+const unsupportedPanel = renderToStaticMarkup(<CommandPanel
+  catalog={{ recipient_cid: 'ALICE-CID', fingerprint: 'A'.repeat(43), commands: [{
+    name: 'unsafe', input_schema: { type: 'object', oneOf: [{ type: 'string' }] },
+  }] }} recipientName="Alice" storageScope="ME-CID" busy={false} onRefresh={() => {}} onClose={() => {}} onSend={async () => { throw new Error('must not run'); }}
+/>);
+assert.match(unsupportedPanel, /role="alert"/, 'unsupported schema constructs are visibly refused');
+assert.match(unsupportedPanel, /Unsupported JSON Schema keyword: oneOf/);
+assert.equal(validateCommandValue({ type: 'array', minItems: 1, items: { type: 'integer' } }, []),
+  'Arguments has too few items');
+assert.equal(validateCommandValue({ type: 'array', items: { type: 'integer' } }, [1.5]),
+  'Arguments[0] must be an integer');
+assert.equal(validateCommandValue({ type: 'object', required: [''], properties: { '': { type: 'string' } } }, { '': '' }), null,
+  'an empty-string key and value remain valid JsonValue rather than disappearing in truthiness checks');
 
 const roomEnvelope = (kind: string, text: string, extra: Record<string, unknown> = {}) => JSON.stringify({
   version: 1,

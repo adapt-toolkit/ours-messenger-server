@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { serveApi } from '../src/api.ts';
 import { bindIdentity, startRuntime } from '../src/daemon.ts';
 import { MessengerEventBus } from '../src/events.ts';
@@ -9,9 +12,10 @@ const BUILD = {
   name: '@ours.network/messenger-server', version: '0.1.0',
   sha: '1111111111111111111111111111111111111111', dirty: false,
 };
+const commandStateDir = mkdtempSync(join(tmpdir(), 'messenger-command-api-'));
 const CONFIG = {
   host: '127.0.0.1', port: 8420, publicOrigin: 'https://messenger.example.com',
-  identity: 'Messenger', force: false, stateDir: '/tmp/messenger-application-only',
+  identity: 'Messenger', force: false, stateDir: commandStateDir,
 };
 
 let attached = 0;
@@ -69,6 +73,11 @@ class Response extends EventEmitter {
 }
 
 const reads = [];
+const commandsSent = [];
+let advertisedCommands = [{
+  name: 'notes.create', description: 'Create a note',
+  input_schema: { type: 'object', required: [''], properties: { '': { type: 'string' } } },
+}];
 const historyClient = {
   listContacts: async () => ({ contacts: [{ container_id: 'CID-PEER', name: 'Peer' }], roots: [] }),
   listHistory: async (query) => {
@@ -108,6 +117,14 @@ const historyClient = {
     reads.push(input);
     return { messages: input.wire_ids.map((wire_id) => ({ wire_id })) };
   },
+  listContactCommands: async ({ contact }) => {
+    assert.equal(contact, 'CID-PEER');
+    return advertisedCommands;
+  },
+  sendCommand: async (input) => {
+    commandsSent.push(input);
+    return { kind: 'e2e', wireId: 'CMD-WIRE-1' };
+  },
   listFiles: async ({ peer_cid, before_seq, limit }) => {
     assert.deepEqual({ peer_cid, before_seq, limit }, { peer_cid: 'CID-PEER', before_seq: undefined, limit: 200 });
     return {
@@ -130,12 +147,17 @@ const deps = {
   identityCid: 'CID-MESSENGER',
 };
 
-async function request(method, url, body) {
-  const req = new Request(method, url, body);
-  const res = new Response();
-  await serveApi(req, res, deps);
+async function request(method, url, body, activeDeps = deps) {
+  const res = await rawRequest(method, url, body, activeDeps);
   assert.equal(res.statusCode, 200, Buffer.concat(res.chunks).toString('utf8'));
   return res.json();
+}
+
+async function rawRequest(method, url, body, activeDeps = deps) {
+  const req = new Request(method, url, body);
+  const res = new Response();
+  await serveApi(req, res, activeDeps);
+  return res;
 }
 
 const page = await request('GET', '/api/conversations/Peer/page?limit=2');
@@ -152,6 +174,66 @@ const marked = await request('POST', '/api/conversations/Peer/read', {});
 assert.equal(marked.marked, 2);
 assert.deepEqual(reads, [{ wire_ids: ['A1', 'A2'] }], 'reading Peer never consumes unread messages from another identity contact');
 
+const catalog = await request('GET', '/api/contacts/Peer/commands');
+assert.equal(catalog.recipient_cid, 'CID-PEER');
+assert.match(catalog.fingerprint, /^[A-Za-z0-9_-]{43}$/);
+assert.deepEqual(catalog.commands.map((entry) => entry.name), ['notes.create']);
+const commandSend = await request('POST', '/api/commands/send', {
+  contact: 'CID-PEER', recipient_cid: 'CID-PEER', command: 'notes.create', arguments: { '': '' },
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef',
+  catalog_fingerprint: catalog.fingerprint, confirmed: true,
+});
+assert.equal(commandSend.invocation_id, '73ee164e-1cf9-41e8-8409-f3775591beef');
+assert.equal(commandSend.recipient_cid, 'CID-PEER');
+assert.equal(commandSend.catalog_fingerprint, catalog.fingerprint);
+assert.equal(commandSend.command, 'notes.create');
+assert.equal(commandSend.wire_id, 'CMD-WIRE-1');
+assert.equal(commandSend.delivery, 'e2e');
+assert.equal(commandSend.status, 'accepted');
+assert.equal(commandSend.deduplicated, false);
+assert.deepEqual(commandsSent, [{ contact: 'CID-PEER', command: 'notes.create', arguments: { '': '' } }],
+  'typed send revalidates the CID-bound catalog and preserves empty-string keys');
+
+const replay = await request('POST', '/api/commands/send', {
+  contact: 'CID-PEER', recipient_cid: 'CID-PEER', command: 'notes.create', arguments: { '': '' },
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef',
+  catalog_fingerprint: catalog.fingerprint, confirmed: true,
+});
+assert.equal(replay.deduplicated, true);
+assert.equal(replay.wire_id, 'CMD-WIRE-1');
+assert.equal(commandsSent.length, 1, 'same invocation and payload is never sent twice');
+
+advertisedCommands = [];
+const replayAfterRestartAndRemoval = await request('POST', '/api/commands/send', {
+  contact: 'CID-PEER', recipient_cid: 'CID-PEER', command: 'notes.create', arguments: { '': '' },
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef',
+  catalog_fingerprint: catalog.fingerprint, confirmed: true,
+}, { ...deps });
+assert.equal(replayAfterRestartAndRemoval.deduplicated, true);
+assert.equal(replayAfterRestartAndRemoval.wire_id, 'CMD-WIRE-1');
+assert.equal(commandsSent.length, 1,
+  'restart replay returns the durable accepted outcome even after the command is removed from the live catalog');
+advertisedCommands = [{
+  name: 'notes.create', description: 'Create a note',
+  input_schema: { type: 'object', required: [''], properties: { '': { type: 'string' } } },
+}];
+
+const wrongRecipient = await rawRequest('POST', '/api/commands/send', {
+  contact: 'CID-PEER', recipient_cid: 'CID-OTHER', command: 'notes.create', arguments: { '': '' },
+  invocation_id: 'c0a03738-4233-4cd6-b12c-5a2339486240',
+  catalog_fingerprint: catalog.fingerprint, confirmed: true,
+});
+assert.equal(wrongRecipient.statusCode, 409, 'recipient CID is revalidated at the final send boundary');
+
+for (const invalidArguments of [undefined, { tooLarge: 'x'.repeat(65_537) },
+  { a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: { l: { m: 1 } } } } } } } } } } } } }]) {
+  const invalid = await rawRequest('POST', '/api/commands/send', {
+    contact: 'CID-PEER', recipient_cid: 'CID-PEER', command: 'notes.create', arguments: invalidArguments,
+    invocation_id: crypto.randomUUID(), catalog_fingerprint: catalog.fingerprint, confirmed: true,
+  });
+  assert.equal(invalid.statusCode, 400, 'missing, oversized, and over-deep arguments are client errors');
+}
+
 const files = await request('GET', '/api/conversations/Peer/files');
 assert.deepEqual(files.files.map((row) => ({ wire_id: row.wire_id, version: row.version, available: row.available })), [
   { wire_id: 'F1', version: 1, available: true },
@@ -162,5 +244,7 @@ const mediaReq = new Request('GET', '/api/media/F2');
 const mediaRes = new Response();
 await serveApi(mediaReq, mediaRes, deps);
 assert.equal(mediaRes.statusCode, 409, 'an unread inbound file cannot bypass the explicit fetch route');
+
+rmSync(commandStateDir, { recursive: true, force: true });
 
 console.log('shared-daemon-contract OK — one daemon, one identity lease, external history schema, selective read');

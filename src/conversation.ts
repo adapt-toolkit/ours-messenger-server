@@ -13,6 +13,7 @@
 // visible peer's unread wire IDs and consumes only that subset through the SDK.
 
 import type { HistoryMessage, HistoryPage } from '@ours.network/sdk';
+import { parseTypedEnvelope, type TypedEnvelope } from './typed-commands.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactMessagePreview } from '../shared/roomMessageCore.mjs';
 
@@ -27,8 +28,11 @@ export interface ConversationMessage {
   readonly date: string;
   readonly read: boolean;
   readonly wire_id: string;
+  readonly peer_cid: string;
   readonly receipt: Receipt;
   readonly reply_to?: { readonly wire_id: string; readonly sentence?: number } | null;
+  readonly message_kind?: string;
+  readonly typed?: TypedEnvelope | null;
 }
 
 export interface ReceiptsResult {
@@ -162,10 +166,13 @@ export function projectHistoryPage(
     date: row.date,
     read: row.direction === 'out' || row.inbox_state === 'read',
     wire_id: row.wire_id,
+    peer_cid: row.peer.id,
     receipt: row.direction === 'out' && (row.delivery_state === 'delivered' || row.delivery_state === 'read')
       ? row.delivery_state
       : null,
     reply_to: row.reply_to,
+    message_kind: row.message_kind ?? 'text',
+    typed: parseTypedEnvelope(row.message_kind ?? 'text', row.body),
   })).reverse();
   return {
     contact,

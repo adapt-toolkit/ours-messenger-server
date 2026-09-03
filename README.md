@@ -66,6 +66,7 @@ OURS_MESSENGER_PORT              default 8420; 0 selects a dynamic public port
 OURS_MESSENGER_PUBLIC_ORIGIN     required exact external http(s) origin
 OURS_MESSENGER_STATE_DIR         default ~/.ours-messenger
 OURS_MESSENGER_FORCE             default false
+OURS_MESSENGER_TYPED_COMMANDS    default true; false disables typed-command REST operations
 OURS_MESSENGER_VAPID_PUBLIC_KEY  optional; must be paired with the private key
 OURS_MESSENGER_VAPID_PRIVATE_KEY optional secret; never expose to the browser
 OURS_MESSENGER_VAPID_SUBJECT     default mailto:admin@localhost
@@ -124,6 +125,49 @@ in a sandboxed frame with a deny-by-default CSP, and Markdown is rendered to
 React nodes without raw HTML execution. Direct media responses allowlist only
 raster image/audio/video MIME types for inline use; HTML, SVG, XML, PDF, scripts,
 and unknown formats are opaque attachments with `nosniff` and a sandboxing CSP.
+
+### Recipient-scoped typed commands
+
+The command button in a conversation discovers the selected contact's
+authenticated SDK catalog and binds the returned fingerprint to that exact
+recipient CID. A submission carries the recipient CID, catalog fingerprint, and
+a browser-generated invocation ID; the server rechecks all three immediately
+before calling the SDK. Every command requires an explicit confirmation. The
+Messenger server never registers handlers or executes recipient code locally.
+
+The generated form deliberately supports a bounded JSON Schema subset:
+`type`, `title`, `description`, `default`, `enum`, `minimum`, `maximum`,
+`minLength`, `maxLength`, `properties`, `required`, `items`, `minItems`, and
+`maxItems`; supported values are object, array, string, number, integer,
+boolean, and null. Catalogs are capped at 64 commands, schemas/arguments at 64
+KiB, JSON nesting at 12 levels, and rendered controls at 64. Unsupported
+keywords or ambiguous schemas are refused visibly rather than guessed. Names,
+documentation, values, errors, and results render only as escaped React text or
+JSON.
+
+Invocation reservations are written atomically under
+`OURS_MESSENGER_STATE_DIR` before network transmission. Repeating an identical
+ID returns its durable accepted, pending, failed, or indeterminate outcome
+without retransmission, including after restart or catalog removal; reusing an
+ID for another CID or payload is rejected. At the fixed store limit, new sends
+fail closed instead of discarding earlier mutation keys. An interrupted send
+stays indeterminate and the UI tells the user to inspect conversation history,
+never to retry blindly. Before transmission, the browser also saves the current
+attempt under an identity-and-recipient-scoped local key. A reload exposes that
+attempt and can reconcile it by replaying the same invocation ID through the
+server dedupe store; starting another attempt requires an explicit reset after
+the user verifies the outcome. Optional schema properties remain omitted until
+added and can be removed again, while explicit empty strings, zero, false, null,
+arrays, and empty-string keys are preserved. Invalid raw array input remains
+visible, is announced, and blocks submission.
+
+Commands and command results remain ordinary encrypted history entries. A
+result is accepted as completed only when it has the strict SDK `{ok,result}`
+or `{ok:false,error}` shape, comes from the authenticated expected peer CID, and
+replies to the exact outgoing typed-command row. Malformed or unmatched results
+render as safe failures in normal chronology. Set
+`OURS_MESSENGER_TYPED_COMMANDS=false` for immediate rollback without changing
+text or file behavior.
 
 ## WebPush
 

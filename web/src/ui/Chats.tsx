@@ -15,6 +15,8 @@ import { isCompressibleImage } from './imageCompressionCore.mjs';
 import { MessageReceipt } from './MessageReceipt';
 import { MessageMarkdown } from './MessageMarkdown';
 import { ApiError } from '../api';
+import type { CommandCatalog, CommandDefinition, JsonValue, SendCommandResult } from '../types.js';
+import { CommandPanel } from './CommandPanel.js';
 import { AnimatePresence, motion } from 'framer-motion';
 import { interfaceSpring } from './motionSystem';
 import { SWIPE_DISTANCE_PX, classifyReplyIntent, shouldCommitReply } from './swipeReplyCore';
@@ -584,6 +586,7 @@ const TimelineRows = memo(function TimelineRows(props: {
   hiddenEarlier: number;
   unreadWireId?: string;
   roomLines: ReadonlyMap<ChatMessage, RoomLine | null>;
+  contactCid: string;
   contactName: string;
   onStartReply: (reply: ReplyDraft) => void;
   onPreview: (record: FileRecord) => void;
@@ -591,7 +594,7 @@ const TimelineRows = memo(function TimelineRows(props: {
 }) {
   const {
     messages, optimisticSend, sentKeys, hiddenEarlier, unreadWireId,
-    roomLines, contactName, onStartReply, onPreview, onFetchFile,
+    roomLines, contactCid, contactName, onStartReply, onPreview, onFetchFile,
   } = props;
   const byWireId = new Map<string, ChatMessage>();
   for (const message of messages) if (message.wireId) byWireId.set(message.wireId, message);
@@ -733,6 +736,63 @@ const TimelineRows = memo(function TimelineRows(props: {
           );
         }
 
+        if (message.typed) {
+          const request = message.typed.kind === 'command_result' && message.replyTo
+            ? byWireId.get(message.replyTo.wireId)
+            : undefined;
+          const correlatedResult = message.typed.kind === 'command_result' && message.dir === 'in'
+            && message.peerCid === contactCid && request?.dir === 'out' && request.peerCid === contactCid
+            && request.typed?.kind === 'command';
+          const failureCode = message.typed.kind === 'command_result' && !message.typed.outcome.ok
+            ? message.typed.outcome.error.toLowerCase()
+            : '';
+          const state = message.typed.kind === 'command'
+            ? (message.dir === 'out' ? 'Accepted · pending result' : 'Received command')
+            : message.typed.kind === 'unknown'
+              ? 'Safe failure'
+              : message.dir === 'out' ? 'Result sent'
+                : !correlatedResult ? 'Unmatched result · safe failure'
+                  : failureCode === 'validation_denied' || failureCode === 'validation_failed' ? 'Validation denied'
+                    : failureCode === 'policy_denied' || failureCode === 'unauthorized' || failureCode === 'forbidden' ? 'Policy denied'
+                      : message.typed.outcome.ok ? 'Completed' : 'Failed';
+          const title = message.typed.kind === 'command'
+            ? message.typed.command
+            : message.typed.kind === 'command_result'
+              ? `Result for ${correlatedResult && request?.typed?.kind === 'command' ? request.typed.command : 'unmatched command'}`
+              : `Unsupported ${message.typed.wire_kind}`;
+          const detail = message.typed.kind === 'command' ? message.typed.arguments
+            : message.typed.kind === 'command_result' ? message.typed.outcome
+              : { safe_failure: message.typed.malformed ? 'Malformed typed message' : 'Future typed message preserved' };
+          return (
+            <motion.div
+              className="message-motion"
+              key={key}
+              id={domId}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={interfaceSpring}
+            >
+              {unreadDivider}
+              <SwipeReplyRow
+                dir={message.dir}
+                rowClass={groupClass}
+                canReply={!!message.wireId}
+                onReply={() => startReply(message)}
+                after={replyButton}
+              >
+                <div className={`ours-message typed-message ours-message--${message.dir}`}>
+                  <div className="typed-message-kind">{message.typed.kind === 'command' ? 'Command' : message.typed.kind === 'command_result' ? 'Result' : 'Typed message'}</div>
+                  <strong>{title}</strong>
+                  <div className="typed-message-state" role="status">{state}</div>
+                  <pre>{JSON.stringify(detail, null, 2)}</pre>
+                  <div className="bubble-at">{fmtTime(message.date)}{message.dir === 'out' && <MessageReceipt receipt={message.receipt} receiptless={message.receiptless} />}</div>
+                </div>
+              </SwipeReplyRow>
+            </motion.div>
+          );
+        }
+
         const quote = quoteFor(message);
         return (
           <motion.div
@@ -783,6 +843,7 @@ const TimelineRows = memo(function TimelineRows(props: {
 });
 
 export function Conversation(props: {
+  identityCid?: string;
   contact: ContactVM | null;
   // A bounded page of the history, newest-last. `hiddenEarlier` is how many
   // older entries exist above the page; onLoadEarlier widens the window.
@@ -794,6 +855,11 @@ export function Conversation(props: {
   onOpenContact?: () => void;
   /** Resolves with the canonical wire id of the delivered message when it has one. */
   onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<string | void>;
+  onLoadCommands?: (contactCid: string, signal?: AbortSignal) => Promise<CommandCatalog>;
+  onSendCommand?: (
+    contactCid: string, command: string, args: JsonValue, invocationId: string,
+    catalogFingerprint: string, signal?: AbortSignal,
+  ) => Promise<SendCommandResult>;
   /** Canonical state is still catching up: shown inline, never as a screen. */
   syncing?: 'connecting' | 'updating' | null;
   /** @deprecated Contact management lives on ContactScreen. */
@@ -827,6 +893,11 @@ export function Conversation(props: {
   const [sendingFile, setSendingFile] = useState(false);
   const [processingFile, setProcessingFile] = useState(false);
   const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
+  const [commandCatalog, setCommandCatalog] = useState<CommandCatalog | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandBusy, setCommandBusy] = useState(false);
+  const commandLoadRef = useRef<AbortController | null>(null);
+  const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
@@ -907,10 +978,42 @@ export function Conversation(props: {
     setProcessingFile(false);
     fileReadGenerationRef.current += 1;
     setPreviewRec(null);
+    commandLoadRef.current?.abort();
+    setCommandCatalog(null);
+    setCommandOpen(false);
+    setCommandBusy(false);
     sentKeysRef.current.clear();
     followTargetRef.current = null;
     followTopRef.current = null;
   }, [contact?.id]);
+
+  const loadCommands = async () => {
+    if (!contact || !props.onLoadCommands) return;
+    commandLoadRef.current?.abort();
+    const controller = new AbortController();
+    commandLoadRef.current = controller;
+    setCommandBusy(true);
+    setError(null);
+    try {
+      const catalog = await props.onLoadCommands(contact.id, controller.signal);
+      if (!controller.signal.aborted && catalog.recipient_cid === contact.id) {
+        setCommandCatalog(catalog);
+        setCommandOpen(true);
+      } else if (!controller.signal.aborted) {
+        setError('Command discovery was refused because the authenticated recipient changed.');
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) setError(err instanceof ApiError
+        ? `Command discovery failed: ${err.message}`
+        : 'Command discovery failed safely. The recipient may be offline or unsupported.');
+    } finally {
+      if (commandLoadRef.current === controller) setCommandBusy(false);
+    }
+  };
+  const closeCommandPanel = () => {
+    setCommandOpen(false);
+    commandTriggerRef.current?.focus();
+  };
 
   useEffect(() => {
     if (!unknownSend) return;
@@ -1361,6 +1464,7 @@ export function Conversation(props: {
             hiddenEarlier={props.hiddenEarlier ?? 0}
             unreadWireId={props.unreadOpen?.wireId}
             roomLines={roomLines}
+            contactCid={contact.id}
             contactName={contact.name}
             onStartReply={setReplyTo}
             onPreview={setPreviewRec}
@@ -1398,6 +1502,25 @@ export function Conversation(props: {
         </div>
       )}
       <div className="composer-wrap" ref={composerWrapRef}>
+        {commandBusy && !commandOpen && <div className="command-status pending" data-state="pending" role="status" aria-live="polite">Loading commands for {contact.name}…</div>}
+        {commandOpen && commandCatalog && props.onSendCommand && (
+          <CommandPanel
+            key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
+            catalog={commandCatalog}
+            recipientName={contact.name}
+            storageScope={props.identityCid ?? 'unknown-identity'}
+            busy={commandBusy}
+            onRefresh={() => void loadCommands()}
+            onClose={closeCommandPanel}
+            onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
+              if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
+              setCommandBusy(true);
+              try {
+                return await props.onSendCommand!(contact.id, command.name, args, invocationId, catalogFingerprint);
+              } finally { setCommandBusy(false); }
+            }}
+          />
+        )}
         {replyTo && (
           <div className="reply-bar">
             <div className="reply-bar-line" />
@@ -1424,6 +1547,14 @@ export function Conversation(props: {
           </div>
         )}
         <div className={'composer' + (voiceActive ? ' recording' : '')}>
+          {props.onLoadCommands && (
+            <button ref={commandTriggerRef} type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
+              aria-label="Recipient commands" aria-expanded={commandOpen}
+              disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : void loadCommands()}>
+              <Icon name="bolt" size={17} />
+              <span>Commands</span>
+            </button>
+          )}
           {props.onSendFile && (
             <>
               <input

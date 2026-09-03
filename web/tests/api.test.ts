@@ -75,6 +75,24 @@ assert.deepEqual(JSON.parse(String(calls.at(-1)?.init?.body)), { mode: 'public',
 await client.buildInfo();
 assert.equal(calls.at(-1)?.input, '/api/build-info');
 
+const commandController = new AbortController();
+await client.commands('CONTACT/A', commandController.signal);
+assert.equal(calls.at(-1)?.input, '/api/contacts/CONTACT%2FA/commands');
+assert.equal(calls.at(-1)?.init?.signal, commandController.signal);
+
+await client.sendCommand(
+  'CONTACT/A', 'notes.create', { '': '', nested: [null, true, 0] },
+  '73ee164e-1cf9-41e8-8409-f3775591beef', 'A'.repeat(43), commandController.signal,
+);
+assert.equal(calls.at(-1)?.input, '/api/commands/send');
+assert.equal(calls.at(-1)?.init?.signal, commandController.signal);
+assert.deepEqual(JSON.parse(String(calls.at(-1)?.init?.body)), {
+  contact: 'CONTACT/A', recipient_cid: 'CONTACT/A', command: 'notes.create',
+  arguments: { '': '', nested: [null, true, 0] },
+  invocation_id: '73ee164e-1cf9-41e8-8409-f3775591beef',
+  catalog_fingerprint: 'A'.repeat(43), confirmed: true,
+}, 'typed send binds the confirmed JSON payload and catalog to the recipient CID');
+
 const rejected = createApi(async () => new Response(
   JSON.stringify({ error: { code: 'BAD_REQUEST', message: 'text must be a non-empty string' } }),
   { status: 400 },

@@ -1,6 +1,6 @@
 import type {
-  BuildInfoView, ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
-  PushPreviewMode, SendMessageResult,
+  BuildInfoView, CommandCatalog, ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
+  JsonValue, PushPreviewMode, SendCommandResult, SendMessageResult,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -74,6 +74,22 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
         signal,
         body: JSON.stringify({ contact, text, ...(replyTo ? { reply_to_wire_id: replyTo } : {}) }),
       }),
+    commands: (contact: string, signal?: AbortSignal) =>
+      request<CommandCatalog>(`/api/contacts/${encodeURIComponent(contact)}/commands`, { signal }),
+    sendCommand: (
+      contact: string,
+      command: string,
+      args: JsonValue,
+      invocationId: string,
+      catalogFingerprint: string,
+      signal?: AbortSignal,
+    ) => request<SendCommandResult>('/api/commands/send', {
+      method: 'POST', signal,
+      body: JSON.stringify({
+        contact, recipient_cid: contact, command, arguments: args, invocation_id: invocationId,
+        catalog_fingerprint: catalogFingerprint, confirmed: true,
+      }),
+    }),
     sendFile: async (contact: string, file: Blob, filename: string, mime: string, replyTo?: string) =>
       request<unknown>('/api/messages/send-file', {
         method: 'POST',

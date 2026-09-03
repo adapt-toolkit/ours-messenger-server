@@ -121,7 +121,7 @@ try {
   assert.match(jumpScroll.element.className, /(?:^|\s)messages(?:\s|$)/, 'media jump scrolls the message container');
   assert.equal(jumpScroll.element.options.behavior, 'auto', 'real reduced-motion media jump uses auto scrolling');
   assert.deepEqual(jumpScroll.after, jumpScroll.before, 'media jump does not scroll the document');
-  const press = reduced.page.locator('.composer-tool:not(.vr-mic)');
+  const press = reduced.page.getByRole('button', { name: 'Attach a file or photo' });
   const pressBox = await press.boundingBox();
   const pressPoint = { x: pressBox.x + pressBox.width / 2, y: pressBox.y + pressBox.height / 2 };
   const pressTarget = await reduced.page.evaluate(({ x, y }) => {

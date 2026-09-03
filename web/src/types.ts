@@ -1,4 +1,22 @@
 export type Receipt = 'delivered' | 'read' | null;
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+export interface CommandDefinition {
+  name: string;
+  description?: string;
+  input_schema: { [key: string]: JsonValue };
+}
+
+export interface CommandCatalog {
+  recipient_cid: string;
+  fingerprint: string;
+  commands: CommandDefinition[];
+}
+
+export type TypedEnvelope =
+  | { kind: 'command'; command: string; arguments: JsonValue }
+  | { kind: 'command_result'; outcome: { ok: true; result: JsonValue } | { ok: false; error: string } }
+  | { kind: 'unknown'; wire_kind: string; malformed: boolean };
 
 export interface IdentityView {
   name: string;
@@ -45,8 +63,24 @@ export interface ConversationMessage {
   date: string;
   read: boolean;
   wire_id: string;
+  /** Authenticated history peer; absent only when talking to an older server. */
+  peer_cid?: string;
   receipt: Receipt;
   reply_to?: ReplyReference | null;
+  message_kind?: string;
+  typed?: TypedEnvelope | null;
+}
+
+export interface SendCommandResult {
+  invocation_id: string;
+  recipient_cid: string;
+  catalog_fingerprint: string;
+  command: string;
+  wire_id: string | null;
+  delivery: string;
+  status: 'indeterminate' | 'accepted' | 'pending' | 'failed';
+  payload_fingerprint: string;
+  deduplicated: boolean;
 }
 
 export interface ReplyReference {
