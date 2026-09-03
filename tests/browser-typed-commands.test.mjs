@@ -278,8 +278,23 @@ try {
   await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor();
   assert.equal(await availabilityPage.getByRole('form', { name: 'Send a typed command' }).count(), 0,
     'reopening discovers newly available commands without opening the panel');
-  await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).click();
   advertisedCatalog = { ...catalog, fingerprint: 'D'.repeat(43), commands: [] };
+  const refreshedEmpty = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.getByRole('button', { name: 'Refresh' }).click();
+  await refreshedEmpty;
+  assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
+    'refreshing an open panel hides its trigger when the canonical catalog becomes empty');
+  assert.equal(await availabilityPage.locator('textarea').evaluate((element) => document.activeElement === element), true,
+    'removing the focused command surface restores focus to the stable composer input');
+  await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
+  advertisedCatalog = catalog;
+  const restoredLoad = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
+  await availabilityPage.locator('.contact-row').filter({ hasText: 'Peer' }).click();
+  await restoredLoad;
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor();
+  await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
+  advertisedCatalog = { ...catalog, fingerprint: 'E'.repeat(43), commands: [] };
   const removedLoad = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
   await availabilityPage.locator('.contact-row').filter({ hasText: 'Peer' }).click();
   await removedLoad;

@@ -997,7 +997,10 @@ export function Conversation(props: {
       const catalog = await props.onLoadCommands(contact.id, controller.signal);
       if (!controller.signal.aborted && catalog.recipient_cid === contact.id) {
         setCommandCatalog(catalog);
-        if (catalog.commands.length === 0) setCommandOpen(false);
+        if (catalog.commands.length === 0) {
+          setCommandOpen(false);
+          if (commandOpen) requestAnimationFrame(() => composerInputRef.current?.focus({ preventScroll: true }));
+        }
         else if (openWhenAvailable) setCommandOpen(true);
       } else if (!controller.signal.aborted) {
         setCommandCatalog(null);
