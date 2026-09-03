@@ -124,6 +124,16 @@ function legacyState(jobs) {
     // checkpoint. Replaying the daemon page resumes at event 4096; WIRE-0 never
     // depends on its already-evicted tombstone.
     const restarted = PushStore.open(dir, 'CID-ME', env, { sendNotification: async () => { sends++; } });
+    assert.deepEqual(
+      {
+        pending: restarted.queueStats().pending,
+        saturated: restarted.queueStats().saturated,
+        healthy: restarted.queueStats().healthy,
+        admissionFailures: restarted.queueStats().admissionFailures,
+      },
+      { pending: 0, saturated: true, healthy: false, admissionFailures: 1 },
+      'restart keeps a refused source event unhealthy before replay is available',
+    );
     const secondQueue = new PushDeliveryQueue(queueOptions(restarted));
     assert.equal(applyNotificationPage(page, restarted, secondQueue, bus, watchStats, { info() {}, warn() {} }), true);
     assert.equal(restarted.notificationCursor, 200);
@@ -138,6 +148,8 @@ function legacyState(jobs) {
 
     const stats = restarted.queueStats();
     assert.equal(stats.pending, 0);
+    assert.equal(stats.saturated, false);
+    assert.equal(stats.healthy, true, 'health recovers only after the refused source page commits');
     assert.equal(stats.delivered, 4_200);
     assert.ok(stats.tombstones <= 256);
     assert.ok(stats.depth <= 256, `durable records remain bounded (depth=${stats.depth})`);

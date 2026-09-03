@@ -643,6 +643,7 @@ export class PushStore {
     if (!page || page.nextIndex !== page.eventCount) throw new Error('push notification page is incomplete');
     owner.notificationCursor = page.cursor;
     delete owner.notificationPage;
+    owner.saturated = false;
     this.persist();
   }
 
@@ -694,7 +695,11 @@ export class PushStore {
       targetBindingIds: targets, deliveredBindingIds: [], status: 'pending', sentCount: 0,
     });
     owner.metrics.admitted++;
-    owner.saturated = false;
+    // A normal admission proves general capacity recovered. During a paused
+    // source page, keep health sticky until that whole saved boundary commits;
+    // otherwise a crash between the first resumed event and page commit could
+    // make the remaining catch-up look healthy.
+    if (owner.notificationPage === undefined) owner.saturated = false;
     const checkpointed = checkpointAdmission();
     this.persist();
     return { status: 'queued', jobId: id, ...(checkpointed ? { checkpointed: true } : {}) };
@@ -885,7 +890,14 @@ export class PushStore {
         }
       }
       this.pruneTombstones(owner, now);
-      if (owner.jobs.length < MAX_RECORDS_PER_IDENTITY) owner.saturated = false;
+      // A partial source page is durable evidence that at least one eligible
+      // event was refused. Draining pending work creates capacity, but cannot
+      // make health green until the watcher actually resumes that page. Keep
+      // the saturation signal sticky across restart/source outage; a successful
+      // admission clears it in admitJob().
+      if (owner.jobs.length < MAX_RECORDS_PER_IDENTITY && owner.notificationPage === undefined) {
+        owner.saturated = false;
+      }
     }
   }
 
