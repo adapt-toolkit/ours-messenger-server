@@ -859,6 +859,11 @@
 .command-field { display:grid; gap:5px; font-size:.86rem; }
 .command-field > input,.command-field > select,.command-field > textarea { width:100%; border:1px solid var(--line); border-radius:9px; padding:9px; color:var(--text); background:var(--surface-2); font:inherit; }
 .command-field small,.command-object > p { color:var(--text-3); }
+.command-field-error { color:var(--danger); font-size:.8rem; }
+.command-property { display:grid; gap:5px; padding:8px; border:1px solid var(--line); border-radius:9px; }
+.command-property-add,.command-property-remove { justify-self:start; }
+.command-attempt { display:grid; gap:6px; padding:10px; border:1px solid var(--warning); border-radius:9px; overflow-wrap:anywhere; }
+.command-attempt-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
 .command-object { display:grid; gap:9px; min-width:0; border:1px solid var(--line); border-radius:10px; padding:10px; }
 .command-check { display:flex; gap:8px; align-items:flex-start; font-size:.84rem; }
 .command-status { min-height:1.2em; color:var(--text-2); }

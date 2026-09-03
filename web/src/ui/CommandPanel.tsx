@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ApiError } from '../api.js';
 import type { CommandCatalog, CommandDefinition, JsonValue, SendCommandResult } from '../types.js';
 
@@ -123,8 +123,12 @@ function initialValue(schema: Schema): JsonValue {
   if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
   if (schema.type === 'object') {
     const result: Record<string, JsonValue> = Object.create(null);
+    const required = new Set(Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === 'string')
+      : []);
     for (const [key, child] of Object.entries((schema.properties ?? {}) as Record<string, JsonValue>)) {
-      result[key] = initialValue(child as Schema);
+      const childSchema = child as Schema;
+      if (required.has(key) || childSchema.default !== undefined) result[key] = initialValue(childSchema);
     }
     return result;
   }
@@ -139,10 +143,72 @@ function labelFor(schema: Schema, fallback: string): string {
   return typeof schema.title === 'string' && schema.title ? schema.title : fallback || '(empty key)';
 }
 
-function Field(props: {
-  schema: Schema; name: string; value: JsonValue; required?: boolean; onChange(value: JsonValue): void;
+function withProperty(record: Record<string, JsonValue>, key: string, value: JsonValue): Record<string, JsonValue> {
+  const next: Record<string, JsonValue> = Object.create(null);
+  for (const [existingKey, existingValue] of Object.entries(record)) next[existingKey] = existingValue;
+  next[key] = value;
+  return next;
+}
+
+function withoutProperty(record: Record<string, JsonValue>, key: string): Record<string, JsonValue> {
+  const next: Record<string, JsonValue> = Object.create(null);
+  for (const [existingKey, existingValue] of Object.entries(record)) {
+    if (existingKey !== key) next[existingKey] = existingValue;
+  }
+  return next;
+}
+
+function ArrayField(props: {
+  schema: Schema; label: string; path: string; value: JsonValue; required?: boolean;
+  description?: string; onChange(value: JsonValue): void; onValidityChange(path: string, error: string | null): void;
 }) {
-  const { schema, name, value, required, onChange } = props;
+  const { schema, label, path, value, required, description, onChange, onValidityChange } = props;
+  const generatedId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const pathId = path.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'root';
+  const helpId = `command-array-${pathId}-${generatedId}-help`;
+  const [raw, setRaw] = useState(() => JSON.stringify(value, null, 2));
+  const [error, setError] = useState<string | null>(null);
+  const lastEmitted = useRef(JSON.stringify(value));
+
+  useEffect(() => {
+    const external = JSON.stringify(value);
+    if (external !== lastEmitted.current) {
+      lastEmitted.current = external;
+      setRaw(JSON.stringify(value, null, 2));
+      setError(null);
+      onValidityChange(path, null);
+    }
+  }, [onValidityChange, path, value]);
+  useEffect(() => () => onValidityChange(path, null), [onValidityChange, path]);
+
+  const update = (nextRaw: string) => {
+    setRaw(nextRaw);
+    let parsed: unknown;
+    try { parsed = JSON.parse(nextRaw); }
+    catch { const nextError = `${label} must contain valid JSON`; setError(nextError); onValidityChange(path, nextError); return; }
+    if (!Array.isArray(parsed)) {
+      const nextError = `${label} must be a JSON array`;
+      setError(nextError); onValidityChange(path, nextError); return;
+    }
+    const nextError = validateCommandValue(schema, parsed, label);
+    setError(nextError); onValidityChange(path, nextError);
+    lastEmitted.current = JSON.stringify(parsed);
+    onChange(parsed);
+  };
+
+  return <label className="command-field"><span>{label}{required ? ' *' : ''}</span>
+    <textarea value={raw} rows={3} aria-describedby={helpId} aria-invalid={error ? 'true' : undefined}
+      onChange={(event) => update(event.target.value)} />
+    <small id={helpId}>{description ?? 'JSON array'}</small>
+    {error && <span className="command-field-error" role="alert">{error}</span>}
+  </label>;
+}
+
+function Field(props: {
+  schema: Schema; name: string; path: string; value: JsonValue; required?: boolean;
+  onChange(value: JsonValue): void; onValidityChange(path: string, error: string | null): void;
+}) {
+  const { schema, name, path, value, required, onChange, onValidityChange } = props;
   const label = labelFor(schema, name);
   const description = typeof schema.description === 'string' ? schema.description : undefined;
   if (Array.isArray(schema.enum)) {
@@ -155,16 +221,29 @@ function Field(props: {
     const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const requiredKeys = new Set(Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === 'string') : []);
     return <fieldset className="command-object"><legend>{label}</legend>{description && <p>{description}</p>}
-      {Object.entries((schema.properties ?? {}) as Record<string, JsonValue>).map(([key, child]) =>
-        <Field key={key} schema={child as Schema} name={key} value={record[key] ?? initialValue(child as Schema)}
-          required={requiredKeys.has(key)} onChange={(next) => onChange({ ...record, [key]: next })} />)}
+      {Object.entries((schema.properties ?? {}) as Record<string, JsonValue>).map(([key, child]) => {
+        const childSchema = child as Schema;
+        const present = Object.hasOwn(record, key);
+        const childLabel = labelFor(childSchema, key);
+        const childPath = `${path}.${key || '(empty key)'}`;
+        if (!present && !requiredKeys.has(key)) {
+          return <button key={key} type="button" className="linkbtn command-property-add"
+            onClick={() => onChange(withProperty(record, key, initialValue(childSchema)))}>Add {childLabel}</button>;
+        }
+        return <div className="command-property" key={key}>
+          <Field schema={childSchema} name={key} path={childPath}
+            value={present ? record[key] : initialValue(childSchema)} required={requiredKeys.has(key)}
+            onValidityChange={onValidityChange}
+            onChange={(next) => onChange(withProperty(record, key, next))} />
+          {!requiredKeys.has(key) && <button type="button" className="linkbtn command-property-remove"
+            aria-label={`Remove ${childLabel}`} onClick={() => onChange(withoutProperty(record, key))}>Remove</button>}
+        </div>;
+      })}
     </fieldset>;
   }
   if (schema.type === 'array') {
-    return <label className="command-field"><span>{label}{required ? ' *' : ''}</span>
-      <textarea value={JSON.stringify(value, null, 2)} rows={3} aria-describedby={`${name}-array-help`}
-        onChange={(event) => { try { const next = JSON.parse(event.target.value); if (Array.isArray(next)) onChange(next); } catch { /* visible native text remains until corrected */ } }} />
-      <small id={`${name}-array-help`}>{description ?? 'JSON array'}</small></label>;
+    return <ArrayField schema={schema} label={label} path={path} value={value} required={required}
+      description={description} onChange={onChange} onValidityChange={onValidityChange} />;
   }
   if (schema.type === 'boolean') {
     return <label className="command-check"><input type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} /> {label}</label>;
@@ -185,40 +264,91 @@ function Field(props: {
 
 export function CommandPanel(props: {
   catalog: CommandCatalog;
+  storageScope: string;
   busy: boolean;
   onRefresh(): void;
   onClose(): void;
-  onSend(command: CommandDefinition, args: JsonValue, invocationId: string): Promise<SendCommandResult>;
+  onSend(command: CommandDefinition, args: JsonValue, invocationId: string, catalogFingerprint: string): Promise<SendCommandResult>;
 }) {
-  const [selectedName, setSelectedName] = useState(props.catalog.commands[0]?.name ?? '');
+  type Attempt = {
+    version: 1; recipientCid: string; catalogFingerprint: string; command: string; arguments: JsonValue;
+    invocationId: string; state: 'reserved' | SendCommandResult['status'];
+  };
+  const storageKey = `ours-command-attempt:${props.storageScope}:${props.catalog.recipient_cid}`;
+  const readAttempt = (): Attempt | null => {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as Partial<Attempt> | null;
+      return parsed?.version === 1 && parsed.recipientCid === props.catalog.recipient_cid
+        && typeof parsed.command === 'string' && typeof parsed.invocationId === 'string'
+        && typeof parsed.catalogFingerprint === 'string' && Object.hasOwn(parsed, 'arguments')
+        && (parsed.state === 'reserved' || parsed.state === 'accepted' || parsed.state === 'pending'
+          || parsed.state === 'failed' || parsed.state === 'indeterminate')
+        ? parsed as Attempt : null;
+    } catch { return null; }
+  };
+  const initialAttempt = useMemo(readAttempt, [storageKey]);
+  const [attempt, setAttempt] = useState<Attempt | null>(initialAttempt);
+  const [selectedName, setSelectedName] = useState(initialAttempt?.command ?? props.catalog.commands[0]?.name ?? '');
   const command = props.catalog.commands.find((entry) => entry.name === selectedName) ?? props.catalog.commands[0];
   const unsupported = useMemo(() => command ? schemaError(command.input_schema) : null, [command]);
-  const [value, setValue] = useState<JsonValue>(() => command ? initialValue(command.input_schema) : null);
+  const [value, setValue] = useState<JsonValue>(() => initialAttempt?.arguments ?? (command ? initialValue(command.input_schema) : null));
   const [confirmed, setConfirmed] = useState(false);
   const [status, setStatus] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const inFlightRef = useRef(false);
+  const noteFieldError = useCallback((path: string, error: string | null) => {
+    setFieldErrors((current) => {
+      if (error === null) {
+        if (!Object.hasOwn(current, path)) return current;
+        const next = { ...current }; delete next[path]; return next;
+      }
+      return current[path] === error ? current : { ...current, [path]: error };
+    });
+  }, []);
+  const persistAttempt = (next: Attempt | null) => {
+    setAttempt(next);
+    if (typeof localStorage === 'undefined') return;
+    if (next) localStorage.setItem(storageKey, JSON.stringify(next)); else localStorage.removeItem(storageKey);
+  };
 
   const choose = (name: string) => {
     const next = props.catalog.commands.find((entry) => entry.name === name);
-    setSelectedName(name); setValue(next ? initialValue(next.input_schema) : null); setConfirmed(false); setStatus('');
+    if (attempt) return;
+    setSelectedName(name); setValue(next ? initialValue(next.input_schema) : null); setConfirmed(false); setStatus(''); setFieldErrors({});
   };
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!command || unsupported || !confirmed || props.busy) return;
-    const validationError = validateCommandValue(command.input_schema, value);
-    if (validationError) { setStatus(`Validation denied: ${validationError}`); return; }
-    const invocation = crypto.randomUUID();
-    setStatus('Sending encrypted command…');
+  const sendAttempt = async (current: Attempt, definition: CommandDefinition) => {
+    if (inFlightRef.current || props.busy) return;
+    inFlightRef.current = true;
+    setStatus(current.state === 'reserved' ? 'Sending encrypted command…' : 'Reconciling the existing command attempt…');
     try {
-      const sent = await props.onSend(command, value, invocation);
-      if (sent.status === 'failed') setStatus('Command was refused before delivery.');
-      else if (sent.status === 'pending') setStatus('Command delivery is pending; do not submit it again.');
-      else if (sent.status === 'indeterminate' || !sent.wire_id) setStatus('Command state is indeterminate; do not retry blindly.');
-      else setStatus(sent.deduplicated ? 'Command was already accepted; pending result.' : 'Command accepted and pending result.');
+      const sent = await props.onSend(definition, current.arguments, current.invocationId, current.catalogFingerprint);
+      const settled = { ...current, state: sent.status } satisfies Attempt;
+      persistAttempt(settled);
+      if (sent.status === 'failed') setStatus('Command was refused before delivery. Verify the outcome before starting a new attempt.');
+      else if (sent.status === 'pending') setStatus('Command delivery is pending; reconcile this attempt instead of submitting it again.');
+      else if (sent.status === 'indeterminate' || !sent.wire_id) setStatus('Command state is indeterminate; reconcile this attempt or verify its outcome before reset.');
+      else setStatus(sent.deduplicated ? 'Existing command attempt reconciled; pending result.' : 'Command accepted and pending result.');
     } catch (error) {
+      const unknown = { ...current, state: 'indeterminate' as const };
+      persistAttempt(unknown);
       setStatus(error instanceof ApiError
-        ? `Command was not sent: ${error.message}`
-        : 'Command connection was interrupted; its state may be indeterminate. Check the conversation before retrying.');
-    }
+        ? `Command response was not confirmed: ${error.message}. Reconcile this attempt before any reset.`
+        : 'Command connection was interrupted; its state is indeterminate. Reconcile this attempt before any reset.');
+    } finally { inFlightRef.current = false; }
+  };
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!command || unsupported || !confirmed || props.busy || inFlightRef.current || attempt) return;
+    const visibleError = Object.values(fieldErrors)[0];
+    const validationError = visibleError ?? validateCommandValue(command.input_schema, value);
+    if (validationError) { setStatus(`Validation denied: ${validationError}`); return; }
+    const next: Attempt = {
+      version: 1, recipientCid: props.catalog.recipient_cid, catalogFingerprint: props.catalog.fingerprint,
+      command: command.name, arguments: value, invocationId: crypto.randomUUID(), state: 'reserved',
+    };
+    persistAttempt(next);
+    void sendAttempt(next, command);
   };
   return <form className="command-panel" aria-label="Send a typed command" onSubmit={submit}
     onKeyDown={(event) => { if (event.key === 'Escape') props.onClose(); }}>
@@ -231,10 +361,24 @@ export function CommandPanel(props: {
       </select></label>
       {command?.description && <p>{command.description}</p>}
       {unsupported ? <div className="banner error" role="alert">Cannot render this command safely: {unsupported}</div>
-        : command && <Field schema={command.input_schema} name="Arguments" value={value} onChange={setValue} />}
+        : command && <Field schema={command.input_schema} name="Arguments" path="Arguments" value={value}
+          onChange={setValue} onValidityChange={noteFieldError} />}
       <label className="command-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
         Confirm sending this command. It may change data on the recipient.</label>
-      <button className="btn primary" disabled={!!unsupported || !confirmed || props.busy}>Send command</button>
+      <button className="btn primary" disabled={!!unsupported || !confirmed || props.busy || !!attempt || Object.keys(fieldErrors).length > 0}>Send command</button>
+      {attempt && <div className="command-attempt" role="status">
+        <strong>Saved attempt: {attempt.state}</strong>
+        <span className="mono">{attempt.invocationId}</span>
+        <div className="command-attempt-actions">
+          <button type="button" className="btn" disabled={props.busy}
+            onClick={() => void sendAttempt(attempt, { name: attempt.command, input_schema: {} })}>Reconcile saved attempt</button>
+          <button type="button" className="linkbtn" onClick={() => {
+            if (window.confirm('Only reset after checking the conversation and verifying this attempt cannot still execute. Continue?')) {
+              persistAttempt(null); setStatus('Saved attempt reset after explicit verification.'); setConfirmed(false);
+            }
+          }}>Reset after verifying outcome</button>
+        </div>
+      </div>}
       <div className="command-status" role="status" aria-live="polite">{status}</div>
     </>}
   </form>;

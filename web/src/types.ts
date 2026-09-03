@@ -15,7 +15,7 @@ export interface CommandCatalog {
 
 export type TypedEnvelope =
   | { kind: 'command'; command: string; arguments: JsonValue }
-  | { kind: 'command_result'; outcome: JsonValue }
+  | { kind: 'command_result'; outcome: { ok: true; result: JsonValue } | { ok: false; error: string } }
   | { kind: 'unknown'; wire_kind: string; malformed: boolean };
 
 export interface IdentityView {
@@ -63,6 +63,8 @@ export interface ConversationMessage {
   date: string;
   read: boolean;
   wire_id: string;
+  /** Authenticated history peer; absent only when talking to an older server. */
+  peer_cid?: string;
   receipt: Receipt;
   reply_to?: ReplyReference | null;
   message_kind?: string;

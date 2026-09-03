@@ -16,7 +16,9 @@ export interface CommandCatalogView {
 
 export type TypedEnvelope =
   | { readonly kind: 'command'; readonly command: string; readonly arguments: JsonValue }
-  | { readonly kind: 'command_result'; readonly outcome: JsonValue }
+  | { readonly kind: 'command_result'; readonly outcome:
+      | { readonly ok: true; readonly result: JsonValue }
+      | { readonly ok: false; readonly error: string } }
   | { readonly kind: 'unknown'; readonly wire_kind: string; readonly malformed: boolean };
 
 function jsonMetrics(value: JsonValue, depth = 0): { nodes: number; depth: number } {
@@ -103,5 +105,18 @@ export function parseTypedEnvelope(wireKind: string, body: string): TypedEnvelop
     }
     return { kind: 'command', command: record.command, arguments: record.arguments as JsonValue };
   }
-  return { kind: 'command_result', outcome: parsed as JsonValue };
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { kind: 'unknown', wire_kind: wireKind, malformed: true };
+  }
+  const record = parsed as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (record.ok === true && keys.length === 2 && keys[0] === 'ok' && keys[1] === 'result'
+    && Object.hasOwn(record, 'result')) {
+    return { kind: 'command_result', outcome: { ok: true, result: record.result as JsonValue } };
+  }
+  if (record.ok === false && keys.length === 2 && keys[0] === 'error' && keys[1] === 'ok'
+    && typeof record.error === 'string' && record.error.length > 0 && record.error.length <= MAX_COMMAND_DESCRIPTION_LENGTH) {
+    return { kind: 'command_result', outcome: { ok: false, error: record.error } };
+  }
+  return { kind: 'unknown', wire_kind: wireKind, malformed: true };
 }

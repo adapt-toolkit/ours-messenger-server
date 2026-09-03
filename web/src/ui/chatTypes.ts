@@ -7,6 +7,8 @@ export interface ChatMessage {
   date: string;
   read: boolean;
   wireId: string;
+  /** Authenticated peer CID from the server's peer-filtered history row. */
+  peerCid?: string;
   replyTo: { wireId: string } | null;
   kind?: 'file';
   filename?: string;

@@ -43,6 +43,7 @@ export function timeline(page: ReturnType<typeof pageFor>, media: readonly Media
     const normalized: ChatMessage = {
       dir: message.dir, text: message.text, date: message.date, read: message.read,
       wireId: message.wire_id, replyTo: message.reply_to ? { wireId: message.reply_to.wire_id } : null,
+      peerCid: message.peer_cid,
       receipt: message.receipt ?? undefined,
       // An outbound row with no wire id can never be named by a receipt — an
       // introduction-carried send, or a pre-1.4 entry restored from an old
@@ -487,6 +488,7 @@ export function AppShell() {
       <main className={'section signal-stage' + (state.mobileDetailOpen ? ' show-detail' : '')}>
         <ChatList contacts={viewContacts} roots={rootViews(state.contacts)} selected={selectedCid} onSelect={(cid) => { if (!cid.startsWith('pending:')) void selectContact(cid); }} onInvite={openInvites} onSettings={() => setModal('settings')} />
         <Conversation
+          identityCid={identity.cid}
           key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages} syncing={syncing}
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
           onLoadEarlier={selectedCid && historyBusy !== selectedCid ? () => void loadOlder(selectedCid) : undefined}

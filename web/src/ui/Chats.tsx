@@ -333,6 +333,7 @@ function SwipeReplyRow(props: {
 }
 
 export function Conversation(props: {
+  identityCid?: string;
   contact: ContactVM | null;
   // A bounded page of the history, newest-last. `hiddenEarlier` is how many
   // older entries exist above the page; onLoadEarlier widens the window.
@@ -1058,24 +1059,25 @@ export function Conversation(props: {
                 const request = m.typed.kind === 'command_result' && m.replyTo
                   ? byWireId.get(m.replyTo.wireId)
                   : undefined;
-                const outcome = m.typed.kind === 'command_result' ? m.typed.outcome : null;
-                const outcomeRecord = outcome && typeof outcome === 'object' && !Array.isArray(outcome)
-                  ? outcome as Record<string, JsonValue>
-                  : null;
-                const errorRecord = outcomeRecord?.error && typeof outcomeRecord.error === 'object'
-                  && !Array.isArray(outcomeRecord.error) ? outcomeRecord.error as Record<string, JsonValue> : null;
-                const denial = String(outcomeRecord?.status ?? outcomeRecord?.code ?? errorRecord?.code ?? '').toLowerCase();
+                const correlatedResult = m.typed.kind === 'command_result' && m.dir === 'in'
+                  && m.peerCid === contact?.id && request?.dir === 'out' && request.peerCid === contact?.id
+                  && request.typed?.kind === 'command';
+                const failureCode = m.typed.kind === 'command_result' && !m.typed.outcome.ok
+                  ? m.typed.outcome.error.toLowerCase()
+                  : '';
                 const state = m.typed.kind === 'command'
                   ? (m.dir === 'out' ? 'Accepted · pending result' : 'Received command')
                   : m.typed.kind === 'unknown'
                     ? 'Safe failure'
-                    : denial.includes('validation') ? 'Validation denied'
-                      : denial.includes('policy') || denial.includes('unauthorized') || denial.includes('forbidden') ? 'Policy denied'
-                        : outcomeRecord?.ok === false ? 'Failed' : 'Completed';
+                    : m.dir === 'out' ? 'Result sent'
+                      : !correlatedResult ? 'Unmatched result · safe failure'
+                        : failureCode === 'validation_denied' || failureCode === 'validation_failed' ? 'Validation denied'
+                          : failureCode === 'policy_denied' || failureCode === 'unauthorized' || failureCode === 'forbidden' ? 'Policy denied'
+                            : m.typed.outcome.ok ? 'Completed' : 'Failed';
                 const title = m.typed.kind === 'command'
                   ? m.typed.command
                   : m.typed.kind === 'command_result'
-                    ? `Result for ${request?.typed?.kind === 'command' ? request.typed.command : m.replyTo?.wireId ?? 'unknown command'}`
+                    ? `Result for ${correlatedResult && request?.typed?.kind === 'command' ? request.typed.command : 'unmatched command'}`
                     : `Unsupported ${m.typed.wire_kind}`;
                 const detail = m.typed.kind === 'command' ? m.typed.arguments
                   : m.typed.kind === 'command_result' ? m.typed.outcome
@@ -1162,14 +1164,15 @@ export function Conversation(props: {
           <CommandPanel
             key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
             catalog={commandCatalog}
+            storageScope={props.identityCid ?? 'unknown-identity'}
             busy={commandBusy}
             onRefresh={() => void loadCommands()}
             onClose={() => setCommandOpen(false)}
-            onSend={async (command: CommandDefinition, args, invocationId) => {
+            onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
               if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
               setCommandBusy(true);
               try {
-                return await props.onSendCommand!(contact.id, command.name, args, invocationId, commandCatalog.fingerprint);
+                return await props.onSendCommand!(contact.id, command.name, args, invocationId, catalogFingerprint);
               } finally { setCommandBusy(false); }
             }}
           />

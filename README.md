@@ -152,9 +152,20 @@ without retransmission, including after restart or catalog removal; reusing an
 ID for another CID or payload is rejected. At the fixed store limit, new sends
 fail closed instead of discarding earlier mutation keys. An interrupted send
 stays indeterminate and the UI tells the user to inspect conversation history,
-never to retry blindly. Commands and command results remain ordinary encrypted
-history entries; results correlate to requests through the authenticated reply
-wire ID and render in normal chronology. Set
+never to retry blindly. Before transmission, the browser also saves the current
+attempt under an identity-and-recipient-scoped local key. A reload exposes that
+attempt and can reconcile it by replaying the same invocation ID through the
+server dedupe store; starting another attempt requires an explicit reset after
+the user verifies the outcome. Optional schema properties remain omitted until
+added and can be removed again, while explicit empty strings, zero, false, null,
+arrays, and empty-string keys are preserved. Invalid raw array input remains
+visible, is announced, and blocks submission.
+
+Commands and command results remain ordinary encrypted history entries. A
+result is accepted as completed only when it has the strict SDK `{ok,result}`
+or `{ok:false,error}` shape, comes from the authenticated expected peer CID, and
+replies to the exact outgoing typed-command row. Malformed or unmatched results
+render as safe failures in normal chronology. Set
 `OURS_MESSENGER_TYPED_COMMANDS=false` for immediate rollback without changing
 text or file behavior.
 

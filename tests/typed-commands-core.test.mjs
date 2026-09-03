@@ -44,6 +44,15 @@ assert.deepEqual(
 assert.deepEqual(parseTypedEnvelope('command_result', '{"ok":true,"result":0}'), {
   kind: 'command_result', outcome: { ok: true, result: 0 },
 });
+assert.deepEqual(parseTypedEnvelope('command_result', '{"ok":false,"error":"policy_denied"}'), {
+  kind: 'command_result', outcome: { ok: false, error: 'policy_denied' },
+});
+for (const malformedResult of ['null', '0', '"done"', '{}', '{"result":0}', '{"ok":true}',
+  '{"ok":false}', '{"ok":false,"error":{"code":"policy_denied"}}', '{"ok":true,"result":0,"extra":1}']) {
+  assert.deepEqual(parseTypedEnvelope('command_result', malformedResult),
+    { kind: 'unknown', wire_kind: 'command_result', malformed: true },
+    `malformed command_result is never projected as success: ${malformedResult}`);
+}
 assert.deepEqual(parseTypedEnvelope('command', '{bad'), { kind: 'unknown', wire_kind: 'command', malformed: true });
 assert.deepEqual(parseTypedEnvelope('future_command_v2', '{}'), {
   kind: 'unknown', wire_kind: 'future_command_v2', malformed: false,

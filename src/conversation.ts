@@ -28,6 +28,7 @@ export interface ConversationMessage {
   readonly date: string;
   readonly read: boolean;
   readonly wire_id: string;
+  readonly peer_cid: string;
   readonly receipt: Receipt;
   readonly reply_to?: { readonly wire_id: string; readonly sentence?: number } | null;
   readonly message_kind?: string;
@@ -162,6 +163,7 @@ export function projectHistoryPage(
     date: row.date,
     read: row.direction === 'out' || row.inbox_state === 'read',
     wire_id: row.wire_id,
+    peer_cid: row.peer.id,
     receipt: row.direction === 'out' && (row.delivery_state === 'delivered' || row.delivery_state === 'read')
       ? row.delivery_state
       : null,
