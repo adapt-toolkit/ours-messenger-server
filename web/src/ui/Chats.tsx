@@ -15,6 +15,8 @@ import { isCompressibleImage } from './imageCompressionCore.mjs';
 import { MessageReceipt } from './MessageReceipt';
 import { MessageMarkdown } from './MessageMarkdown';
 import { ApiError } from '../api';
+import type { CommandCatalog, CommandDefinition, JsonValue, SendCommandResult } from '../types.js';
+import { CommandPanel } from './CommandPanel.js';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   groupConversationsByIdentity,
@@ -340,6 +342,11 @@ export function Conversation(props: {
   onBack: () => void;
   /** Resolves with the canonical wire id of the delivered message when it has one. */
   onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<string | void>;
+  onLoadCommands?: (contactCid: string, signal?: AbortSignal) => Promise<CommandCatalog>;
+  onSendCommand?: (
+    contactCid: string, command: string, args: JsonValue, invocationId: string,
+    catalogFingerprint: string, signal?: AbortSignal,
+  ) => Promise<SendCommandResult>;
   /** Canonical state is still catching up: shown inline, never as a screen. */
   syncing?: 'connecting' | 'updating' | null;
   onRemove: () => void;
@@ -377,6 +384,10 @@ export function Conversation(props: {
   const [processingFile, setProcessingFile] = useState(false);
   const [previewRec, setPreviewRec] = useState<FileRecord | null>(null);
   const [showSharedMedia, setShowSharedMedia] = useState(false);
+  const [commandCatalog, setCommandCatalog] = useState<CommandCatalog | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandBusy, setCommandBusy] = useState(false);
+  const commandLoadRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const sendingRef = useRef(false);
@@ -412,10 +423,38 @@ export function Conversation(props: {
     fileReadGenerationRef.current += 1;
     setPreviewRec(null);
     setShowSharedMedia(false);
+    commandLoadRef.current?.abort();
+    setCommandCatalog(null);
+    setCommandOpen(false);
+    setCommandBusy(false);
     sentKeysRef.current.clear();
     followTargetRef.current = null;
     followTopRef.current = null;
   }, [contact?.id]);
+
+  const loadCommands = async () => {
+    if (!contact || !props.onLoadCommands) return;
+    commandLoadRef.current?.abort();
+    const controller = new AbortController();
+    commandLoadRef.current = controller;
+    setCommandBusy(true);
+    setError(null);
+    try {
+      const catalog = await props.onLoadCommands(contact.id, controller.signal);
+      if (!controller.signal.aborted && catalog.recipient_cid === contact.id) {
+        setCommandCatalog(catalog);
+        setCommandOpen(true);
+      } else if (!controller.signal.aborted) {
+        setError('Command discovery was refused because the authenticated recipient changed.');
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) setError(err instanceof ApiError
+        ? `Command discovery failed: ${err.message}`
+        : 'Command discovery failed safely. The recipient may be offline or unsupported.');
+    } finally {
+      if (commandLoadRef.current === controller) setCommandBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!unknownSend) return;
@@ -1015,6 +1054,46 @@ export function Conversation(props: {
                 );
               }
 
+              if (m.typed) {
+                const request = m.typed.kind === 'command_result' && m.replyTo
+                  ? byWireId.get(m.replyTo.wireId)
+                  : undefined;
+                const outcome = m.typed.kind === 'command_result' ? m.typed.outcome : null;
+                const outcomeRecord = outcome && typeof outcome === 'object' && !Array.isArray(outcome)
+                  ? outcome as Record<string, JsonValue>
+                  : null;
+                const errorRecord = outcomeRecord?.error && typeof outcomeRecord.error === 'object'
+                  && !Array.isArray(outcomeRecord.error) ? outcomeRecord.error as Record<string, JsonValue> : null;
+                const denial = String(outcomeRecord?.status ?? outcomeRecord?.code ?? errorRecord?.code ?? '').toLowerCase();
+                const state = m.typed.kind === 'command'
+                  ? (m.dir === 'out' ? 'Accepted · pending result' : 'Received command')
+                  : m.typed.kind === 'unknown'
+                    ? 'Safe failure'
+                    : denial.includes('validation') ? 'Validation denied'
+                      : denial.includes('policy') || denial.includes('unauthorized') || denial.includes('forbidden') ? 'Policy denied'
+                        : outcomeRecord?.ok === false ? 'Failed' : 'Completed';
+                const title = m.typed.kind === 'command'
+                  ? m.typed.command
+                  : m.typed.kind === 'command_result'
+                    ? `Result for ${request?.typed?.kind === 'command' ? request.typed.command : m.replyTo?.wireId ?? 'unknown command'}`
+                    : `Unsupported ${m.typed.wire_kind}`;
+                const detail = m.typed.kind === 'command' ? m.typed.arguments
+                  : m.typed.kind === 'command_result' ? m.typed.outcome
+                    : { safe_failure: m.typed.malformed ? 'Malformed typed message' : 'Future typed message preserved' };
+                return <motion.div className="message-motion" key={key} id={domId}
+                  initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                  <SwipeReplyRow dir={m.dir} rowClass={grpCls} canReply={!!m.wireId} onReply={() => startReply(m)} after={replyButton}>
+                    <div className={`ours-message typed-message ours-message--${m.dir}`}>
+                      <div className="typed-message-kind">{m.typed.kind === 'command' ? 'Command' : m.typed.kind === 'command_result' ? 'Result' : 'Typed message'}</div>
+                      <strong>{title}</strong>
+                      <div className="typed-message-state" role="status">{state}</div>
+                      <pre>{JSON.stringify(detail, null, 2)}</pre>
+                      <div className="bubble-at">{fmtTime(m.date)}{m.dir === 'out' && <MessageReceipt receipt={m.receipt} receiptless={m.receiptless} />}</div>
+                    </div>
+                  </SwipeReplyRow>
+                </motion.div>;
+              }
+
               const quote = quoteFor(m);
               return (
                 <motion.div
@@ -1078,6 +1157,23 @@ export function Conversation(props: {
         </div>
       )}
       <div className="composer-wrap">
+        {commandBusy && !commandOpen && <div className="command-status" role="status" aria-live="polite">Loading recipient commands…</div>}
+        {commandOpen && commandCatalog && props.onSendCommand && (
+          <CommandPanel
+            key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
+            catalog={commandCatalog}
+            busy={commandBusy}
+            onRefresh={() => void loadCommands()}
+            onClose={() => setCommandOpen(false)}
+            onSend={async (command: CommandDefinition, args, invocationId) => {
+              if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
+              setCommandBusy(true);
+              try {
+                return await props.onSendCommand!(contact.id, command.name, args, invocationId, commandCatalog.fingerprint);
+              } finally { setCommandBusy(false); }
+            }}
+          />
+        )}
         {replyTo && (
           <div className="reply-bar">
             <div className="reply-bar-line" />
@@ -1104,6 +1200,13 @@ export function Conversation(props: {
           </div>
         )}
         <div className={'composer' + (voiceActive ? ' recording' : '')}>
+          {props.onLoadCommands && (
+            <button type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
+              aria-label="Recipient commands" aria-expanded={commandOpen}
+              disabled={commandBusy} onClick={() => commandOpen ? setCommandOpen(false) : void loadCommands()}>
+              /
+            </button>
+          )}
           {props.onSendFile && (
             <>
               <input
