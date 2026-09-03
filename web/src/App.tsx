@@ -598,7 +598,6 @@ export function AppShell() {
           onSendText={async (text, reply) => { const sent = await api.send(selectedView.id, text, reply); await refreshPage(selectedView.id, false); return sent.wire_id ?? undefined; }}
           onSendFile={async (att, reply) => { await api.sendFile(selectedView.id, new Blob([att.bytes as BlobPart], { type: att.mime }), att.filename, att.mime, reply); await Promise.all([refreshFiles(selectedView.id), refreshPage(selectedView.id, false)]); }}
         /> : <Conversation
-          identityCid={identity.cid}
           key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages} syncing={syncing}
           unreadOpen={unreadOpen?.contactCid === selectedCid ? unreadOpen : null}
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
