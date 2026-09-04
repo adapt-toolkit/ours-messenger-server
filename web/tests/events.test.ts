@@ -29,8 +29,16 @@ assert.ok(source.listeners.has('file_received'), 'foreground media invalidations
 source.onopen?.();
 source.emit('file_received', { v: 1, contact_id: 'PEER', wire_id: 'FILE-1', date: '2026-08-15T00:00:00Z' });
 assert.equal(events[0]?.type, 'file_received');
-assert.deepEqual(states, ['connecting', 'live']);
+source.onerror?.();
+source.onopen?.();
+source.emit('receipt_received', {
+  v: 1, contact_id: 'ROOM', kind: 'delivered', wire_ids: ['ROOM-WIRE'], date: '2026-08-15T00:00:01Z',
+});
+assert.deepEqual(events[1], {
+  v: 1, type: 'receipt_received', contact_id: 'ROOM', kind: 'delivered', wire_ids: ['ROOM-WIRE'], date: '2026-08-15T00:00:01Z',
+}, 'the same EventSource subscription delivers room receipts after reconnect/resume');
+assert.deepEqual(states, ['connecting', 'live', 'retrying', 'live']);
 disconnect();
 assert.equal(source.closed, true);
 
-console.log('web-events OK — file_received is bound, parsed, and delivered');
+console.log('web-events OK — file and room-receipt events survive reconnect/resume');

@@ -915,6 +915,9 @@
 .typed-message { min-width:min(330px,78vw); }
 .typed-message-kind { color:var(--accent); font-size:.72rem; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
 .typed-message-state { margin-top:3px; color:var(--text-2); font-size:.75rem; }
+.ours-message--out.typed-message :is(.typed-message-kind,.typed-message-state,.bubble-at) { color:var(--on-accent); opacity:1; }
+.ours-message--out.typed-message .bubble-at .ticks,
+.ours-message--out.typed-message .bubble-at .ticks.read { color:inherit; opacity:1; }
 .typed-message pre { max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:.75rem/1.45 var(--font-mono); }
 @media (max-width:860px) { .command-panel { max-height:48vh; border-radius:12px; } .command-field { font-size:1rem; } .typed-message { min-width:0; } }
 @media (prefers-reduced-motion:reduce) { .command-panel .linkbtn:active:not(:disabled),.command-trigger:active:not(:disabled) { transform:none; } }

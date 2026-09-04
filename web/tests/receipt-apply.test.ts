@@ -96,6 +96,41 @@ const receipt = (kind: 'delivered' | 'read', wireIds: string[]) =>
   );
 }
 
+// 4b. Room receipts are scoped by the authenticated room contact, even when a
+//     different room happens to contain the same wire id and is currently open.
+//     Switching back reveals the in-place update; no reopen-driven refresh is
+//     needed to manufacture it.
+{
+  const ROOM = 'ROOM';
+  const OTHER_ROOM = 'OTHER-ROOM';
+  let state = initialState({ name: 'chats', contactCid: OTHER_ROOM });
+  state = appReducer(state, {
+    type: 'snapshot', identity: IDENTITY!, contacts: {
+      contacts: [
+        { name: 'ours-cowork-receipts-room-01hzyk8m0000000000000000aa', container_id: ROOM },
+        { name: 'ours-cowork-other-room-01hzyk8m0000000000000000ab', container_id: OTHER_ROOM },
+      ],
+      pending: [],
+    },
+  });
+  const page = (contact: string) => ({
+    contact, messages: [message('SHARED-WIRE')], total: 1, unread: 0, hasMore: false, nextBefore: null,
+  });
+  state = appReducer(state, { type: 'page', contactCid: ROOM, page: page(ROOM) });
+  state = appReducer(state, { type: 'page', contactCid: OTHER_ROOM, page: page(OTHER_ROOM) });
+  state = appReducer(state, {
+    type: 'receipt', contactCid: ROOM, kind: 'delivered', wireIds: ['SHARED-WIRE'],
+  });
+
+  assert.equal(pageFor(state, ROOM)?.messages[0]?.receipt, 'delivered',
+    'an off-screen room receives its live delivered transition immediately');
+  assert.equal(pageFor(state, OTHER_ROOM)?.messages[0]?.receipt, null,
+    'the selected room is untouched even when it contains the same wire id');
+  state = appReducer(state, { type: 'route', route: { name: 'chats', contactCid: ROOM } });
+  assert.equal(pageFor(state, ROOM)?.messages[0]?.receipt, 'delivered',
+    'rapid navigation reveals the already-applied room receipt without a reload');
+}
+
 // 5. An event naming messages we do not hold is a no-op, not a crash — and does
 //    not churn state, since every dispatch re-renders the conversation.
 {

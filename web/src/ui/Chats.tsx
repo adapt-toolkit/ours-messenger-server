@@ -1519,7 +1519,6 @@ export function Conversation(props: {
         </div>
       )}
       <div className="composer-wrap" ref={composerWrapRef}>
-        {commandBusy && !commandOpen && <div className="command-status pending" data-state="pending" role="status" aria-live="polite">Loading commands for {contact.name}…</div>}
         {commandOpen && commandCatalog && props.onSendCommand && (
           <CommandPanel
             key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
