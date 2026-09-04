@@ -1,6 +1,6 @@
 {
   "name": "@ours.network/messenger-server",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "Self-hosted messenger application for one identity on a shared ours daemon, with REST/SSE API, focused web client, and WebPush.",
   "type": "module",
   "license": "FSL-1.1-Apache-2.0",
