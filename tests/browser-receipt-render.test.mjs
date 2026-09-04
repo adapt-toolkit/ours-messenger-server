@@ -25,6 +25,8 @@ import { extname, join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 
 const HOLD_MS = 8000;
+const ROOM_CID = 'ROOM';
+const ROOM_NAME = 'ours-cowork-receipts-room-01hzyk8m0000000000000000aa';
 const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the receipt render gate');
 
@@ -63,9 +65,9 @@ const server = createServer((request, response) => {
     return json({ name: 'Me', cid: 'ME-CID' });
   }
   if (url.pathname === '/api/build-info') return json({ name: '@ours.network/messenger-server', version: '0.1.0', sha: 'fixture' });
-  if (url.pathname === '/api/contacts') return json({ contacts: [{ name: 'Peer', container_id: 'PEER' }], pending: [] });
-  if (url.pathname === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
-  if (url.pathname === '/api/conversations/PEER/read') return json({ contact: 'PEER', marked: 0 });
+  if (url.pathname === '/api/contacts') return json({ contacts: [{ name: ROOM_NAME, container_id: ROOM_CID }], pending: [] });
+  if (url.pathname === `/api/conversations/${ROOM_CID}/files`) return json({ contact: ROOM_CID, files: [] });
+  if (url.pathname === `/api/conversations/${ROOM_CID}/read`) return json({ contact: ROOM_CID, marked: 0 });
   if (url.pathname === '/api/messages/send') {
     let body = '';
     request.on('data', (chunk) => { body += chunk; });
@@ -79,9 +81,9 @@ const server = createServer((request, response) => {
     });
     return;
   }
-  if (url.pathname === '/api/conversations/PEER/page') {
+  if (url.pathname === `/api/conversations/${ROOM_CID}/page`) {
     const messages = sent ? [{ ...sent, receipt: Date.now() < holdUntil ? null : sent.receipt }] : [];
-    return json({ contact: 'PEER', messages, total: messages.length, unread: 0, hasMore: false, nextBefore: null });
+    return json({ contact: ROOM_CID, messages, total: messages.length, unread: 0, hasMore: false, nextBefore: null });
   }
   const candidate = resolve(webRoot, `.${decodeURIComponent(url.pathname)}`);
   const path = candidate.startsWith(`${webRoot}/`) && existsSync(candidate) && statSync(candidate).isFile()
@@ -104,7 +106,7 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
 const page = await context.newPage();
 page.on('pageerror', (error) => { throw error; });
-await page.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+await page.goto(`${origin}/chats/${ROOM_CID}`, { waitUntil: 'domcontentloaded' });
 await page.locator('.composer textarea').waitFor({ timeout: 20_000 });
 
 const ticks = () => page.$$eval('[data-receipt-status]', (nodes) => nodes.map((n) => n.getAttribute('data-receipt-status')));
@@ -147,7 +149,7 @@ assert.ok(activeStream, 'the browser handled a live probe before the receipt fix
 
 holdUntil = Date.now() + HOLD_MS;
 sent.receipt = 'delivered';
-emit('receipt_received', { contact_id: 'PEER', kind: 'delivered', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:01.000Z' });
+emit('receipt_received', { contact_id: ROOM_CID, kind: 'delivered', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:01.000Z' });
 
 // Five seconds is still inside the eight-second hold while allowing a heavily
 // loaded Actions runner enough time to schedule Chromium. Before the fix this
@@ -169,7 +171,7 @@ assert.ok((await ticks()).includes('delivered'),
 
 // ---- ordering: delivered then read ends at read ----------------------------
 sent.receipt = 'read';
-emit('receipt_received', { contact_id: 'PEER', kind: 'read', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:06.000Z' });
+emit('receipt_received', { contact_id: ROOM_CID, kind: 'read', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:06.000Z' });
 await page.waitForFunction(
   () => [...document.querySelectorAll('[data-receipt-status]')].some((node) => node.getAttribute('data-receipt-status') === 'read'),
   null,
@@ -178,7 +180,7 @@ await page.waitForFunction(
 assert.ok((await ticks()).includes('read'), 'a read receipt after delivered moves the tick to read');
 
 // ---- ordering: a late DELIVERED event must not walk read backwards ---------
-emit('receipt_received', { contact_id: 'PEER', kind: 'delivered', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:07.000Z' });
+emit('receipt_received', { contact_id: ROOM_CID, kind: 'delivered', wire_ids: ['WIRE-SENT'], date: '2026-08-15T00:00:07.000Z' });
 await page.waitForTimeout(1200);
 const finalTicks = await ticks();
 assert.ok(finalTicks.includes('read') && !finalTicks.includes('delivered'),
@@ -187,4 +189,4 @@ assert.ok(finalTicks.includes('read') && !finalTicks.includes('delivered'),
 await browser.close();
 server.close();
 for (const stream of streams) stream.end();
-console.log('browser-receipt-render OK — the tick arrives from the event, survives stale pages, and never walks backwards');
+console.log('browser-receipt-render OK — the room tick arrives from the event, survives stale pages, and never walks backwards');
