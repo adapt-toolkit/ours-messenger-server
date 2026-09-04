@@ -23,12 +23,22 @@ export interface Runtime {
   close(): Promise<void>;
 }
 
+const MESSENGER_NOTIFICATION_EVENTS = new Set([
+  'message_received',
+  'file_received',
+  'receipt_received',
+]);
+
 function daemonNotificationReader(leaseToken: string): Runtime['readNotificationPage'] {
   let selected: ReturnType<typeof resolveDaemonConfig> | undefined;
   return async (identity, since, signal) => {
     selected ??= resolveDaemonConfig();
     const url = `${selected.baseUrl.value}/identities/${encodeURIComponent(identity)}`
-      + `/notifications?since=${encodeURIComponent(String(since))}&kinds=inbound`;
+      // Do not select the SDK's `inbound` set here. It intentionally means only
+      // message/file arrivals; delivery/read receipts are separate notification
+      // events. This cursor feeds both Web Push and the browser SSE bus, whose
+      // admission/normalization layers already ignore or reduce each event kind.
+      + `/notifications?since=${encodeURIComponent(String(since))}`;
     const response = await fetch(url, {
       headers: {
         'x-ours-lease-token': leaseToken,
@@ -45,7 +55,15 @@ function daemonNotificationReader(leaseToken: string): Runtime['readNotification
     if (!Number.isSafeInteger(page.cursor) || page.cursor! < 0 || !Array.isArray(page.events)) {
       throw new Error('daemon notification page is malformed');
     }
-    return { cursor: page.cursor!, events: page.events };
+    return {
+      cursor: page.cursor!,
+      // Asking without `kinds` is the only public daemon query that includes
+      // receipts. Keep the previous messenger-only boundary locally so contact,
+      // lifecycle, and future events do not become cross-chat invalidations.
+      events: page.events.filter((record) => record !== null && typeof record === 'object'
+        && !Array.isArray(record)
+        && MESSENGER_NOTIFICATION_EVENTS.has((record as Record<string, unknown>).event as string)),
+    };
   };
 }
 
