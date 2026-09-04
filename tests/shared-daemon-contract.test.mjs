@@ -13,6 +13,7 @@ const BUILD = {
   sha: '1111111111111111111111111111111111111111', dirty: false,
 };
 const commandStateDir = mkdtempSync(join(tmpdir(), 'messenger-command-api-'));
+const NativeResponse = globalThis.Response;
 const CONFIG = {
   host: '127.0.0.1', port: 8420, publicOrigin: 'https://messenger.example.com',
   identity: 'Messenger', force: false, stateDir: commandStateDir,
@@ -40,6 +41,41 @@ assert.equal(runtime.stateDir, '/shared/ours');
 assert.equal(Object.hasOwn(runtime.described, 'brokerUrl'), false, 'daemon credentials are not messenger state');
 assert.deepEqual(await bindIdentity(runtime, CONFIG), { name: 'Messenger', cid: 'CID-MESSENGER' });
 assert.deepEqual(chosen, [{ name: 'Messenger', force: false }], 'messenger leases only its configured existing identity');
+
+// The public daemon notification route classifies `kinds=inbound` narrowly as
+// message/file arrivals. Delivery/read receipts are deliberately a different
+// event kind. Messenger needs both on the same cursor, otherwise the receipt is
+// persisted in history but never reaches the already-open browser over SSE.
+// Both ordinary peers and Cowork rooms use this exact subscription path.
+const originalFetch = globalThis.fetch;
+const peerReceipt = {
+  event: 'receipt_received', sender_id: 'CID-PEER', kind: 'delivered',
+  wire_ids: ['WIRE-PEER'], date: '2026-09-04T10:00:00.000Z',
+};
+const roomReceipt = {
+  event: 'receipt_received', sender_id: 'CID-ROOM', kind: 'read',
+  wire_ids: ['WIRE-ROOM'], date: '2026-09-04T10:00:01.000Z',
+};
+const unrelatedLifecycleEvent = { event: 'contact_removed', cid: 'CID-UNRELATED', by: 'peer' };
+let notificationUrl;
+try {
+  globalThis.fetch = async (input) => {
+    notificationUrl = new URL(String(input));
+    const events = notificationUrl.searchParams.has('kinds')
+      ? [] : [peerReceipt, unrelatedLifecycleEvent, roomReceipt];
+    return new NativeResponse(JSON.stringify({ cursor: 42, events }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  const notificationPage = await runtime.readNotificationPage('Messenger', 17, new AbortController().signal);
+  assert.equal(notificationUrl.searchParams.get('since'), '17');
+  assert.equal(notificationUrl.searchParams.get('kinds'), null,
+    'messenger must not select the daemon inbound-only event set, which excludes receipts');
+  assert.deepEqual(notificationPage, { cursor: 42, events: [peerReceipt, roomReceipt] },
+    'one shared notification cursor carries ordinary-chat and Cowork-room receipts without cross-chat lifecycle invalidation');
+} finally {
+  globalThis.fetch = originalFetch;
+}
 await assert.rejects(
   bindIdentity({ client: { chooseIdentity: async () => { throw Object.assign(new Error('missing'), { code: 'NO_SUCH_IDENTITY' }); } } }, CONFIG),
   (error) => error instanceof ConfigurationError && error.message.includes('create it with the ours CLI'),

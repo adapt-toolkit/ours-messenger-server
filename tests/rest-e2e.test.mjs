@@ -16,6 +16,7 @@
 // owner notification text; the push service sees ciphertext and delivery metadata.
 
 import { createServer } from 'node:https';
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createECDH, randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -123,6 +124,48 @@ const api = async (method, path, body) => {
   });
   const text = await res.text();
   return { status: res.status, json: text ? JSON.parse(text) : null };
+};
+
+const openEvents = async () => {
+  const response = await fetch(base + '/api/events');
+  t.eq(response.status, 200, 'GET /api/events opens the supported live event stream');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  const pending = [];
+  const readFrame = async (timeoutMs = 60_000) => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      while (buffered.includes('\n\n')) {
+        const boundary = buffered.indexOf('\n\n');
+        const frame = buffered.slice(0, boundary);
+        buffered = buffered.slice(boundary + 2);
+        if (!frame.startsWith('event: ')) continue;
+        const type = frame.split('\n').find((line) => line.startsWith('event: '))?.slice(7);
+        const data = JSON.parse(frame.split('\n').find((line) => line.startsWith('data: '))?.slice(6) ?? '{}');
+        pending.push({ type, data });
+      }
+      if (pending.length) return pending.shift();
+      const remaining = deadline - Date.now();
+      assert.ok(remaining > 0, 'timed out waiting for an SSE frame');
+      let timer;
+      const part = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out waiting for SSE bytes')), remaining); }),
+      ]).finally(() => clearTimeout(timer));
+      assert.equal(part.done, false, 'SSE stream stayed open while waiting for a live event');
+      buffered += decoder.decode(part.value, { stream: true }).replaceAll('\r\n', '\n');
+    }
+  };
+  return {
+    async next(type) {
+      for (;;) {
+        const event = await readFrame();
+        if (event.type === type) return event.data;
+      }
+    },
+    async close() { await reader.cancel(); },
+  };
 };
 
 // ---- the focused same-origin client ----------------------------------------
@@ -270,6 +313,9 @@ for (const path of ['/api/messages', '/api/messages/get', '/api/getMessages', '/
 }
 
 // ---- sending, and error shape -----------------------------------------------
+const eventsStream = await openEvents();
+const connected = await eventsStream.next('sync_required');
+t.eq(connected.reason, 'connected', 'the live stream is subscribed before the outgoing send');
 const sent = await api('POST', '/api/messages/send', {
   contact: peerIdentity.info.cid,
   text: 'reply from the server',
@@ -277,11 +323,23 @@ const sent = await api('POST', '/api/messages/send', {
 });
 t.eq(sent.status, 200, 'POST /api/messages/send sends as the bound identity');
 t.eq(typeof sent.json.wire_id, 'string', 'text send response exposes the canonical wire id to browser reconciliation');
+const deliveredEvent = await eventsStream.next('receipt_received');
+t.eq(deliveredEvent.contact_id, peerIdentity.info.cid,
+  'the authoritative live delivery receipt stays scoped to the ordinary-chat contact');
+t.eq(deliveredEvent.kind, 'delivered', 'the open idle conversation receives the delivered transition');
+t.eq(deliveredEvent.wire_ids, [sent.json.wire_id], 'the receipt names only the outgoing message it updates');
 await until('the reply to reach the peer', async () => {
   const v = await peer.listHistory({ peer_cid: human.info.cid, limit: 20 });
   return v.items.some((m) => m.direction === 'in' && m.text === 'reply from the server') ? v : undefined;
 });
 t.ok(true, 'and it arrives at the peer');
+await peer.getMessages({ wire_ids: [sent.json.wire_id] });
+const readEvent = await eventsStream.next('receipt_received');
+t.eq(readEvent.contact_id, peerIdentity.info.cid,
+  'the authoritative human-read receipt stays scoped to the same ordinary chat');
+t.eq(readEvent.kind, 'read', 'the already-open idle conversation advances from delivered to read');
+t.eq(readEvent.wire_ids, [sent.json.wire_id], 'the read receipt names only the consumed outgoing message');
+await eventsStream.close();
 const replyPage = await api('GET', `/api/conversations/${encodeURIComponent(peerIdentity.info.cid)}/page?limit=10`);
 const replyRow = replyPage.json.messages.find((message) => message.text === 'reply from the server');
 t.eq(replyRow.reply_to, { wire_id: sentId }, 'reply correlation survives the SDK history projection and renders from canonical wire ids');
