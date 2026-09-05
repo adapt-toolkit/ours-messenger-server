@@ -388,12 +388,13 @@ function Field(props: {
 export function CommandPanel(props: {
   catalog: CommandCatalog;
   recipientName: string;
+  initialCommandName?: string;
   busy: boolean;
   onRefresh(): void;
   onClose(): void;
   onSend(command: CommandDefinition, args: JsonValue, invocationId: string, catalogFingerprint: string): Promise<SendCommandResult>;
 }) {
-  const firstCommand = props.catalog.commands[0];
+  const firstCommand = props.catalog.commands.find((entry) => entry.name === props.initialCommandName) ?? props.catalog.commands[0];
   const [selectedName, setSelectedName] = useState(firstCommand?.name ?? '');
   const command = props.catalog.commands.find((entry) => entry.name === selectedName) ?? firstCommand;
   const unsupported = useMemo(() => command ? schemaError(command.input_schema) : null, [command]);
