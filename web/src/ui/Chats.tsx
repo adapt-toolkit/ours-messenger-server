@@ -895,6 +895,24 @@ export function Conversation(props: {
   const [commandCatalog, setCommandCatalog] = useState<CommandCatalog | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [slashSelection, setSlashSelection] = useState<{ key: string; name: string } | null>(null);
+  const [slashPress, setSlashPress] = useState<{ key: string; name: string; pointer: number; x: number; y: number } | null>(null);
+  const [initialCommandName, setInitialCommandName] = useState<string>();
+  const slashOriginRef = useRef(false);
+  const slashListRef = useRef<HTMLDivElement>(null);
+  const scopedCatalog = commandCatalog?.recipient_cid === contact?.id ? commandCatalog : null;
+  const slashToken = /^\/[^\s/]*$/.test(draft);
+  const discoverSlash = slashToken && composerFocused && !commandOpen && !composing && !slashDismissed;
+  const slashCommands = discoverSlash && props.onSendCommand
+    ? scopedCatalog?.commands.filter((entry) => entry.name.toLowerCase().startsWith(draft.slice(1).toLowerCase())) ?? [] : [];
+  // A selection belongs to exactly this draft and catalog revision. An update
+  // never silently changes the command an Enter press would choose.
+  const slashKey = JSON.stringify([contact?.id, scopedCatalog?.fingerprint, draft]);
+  const activeSlash = slashSelection?.key === slashKey
+    ? slashCommands.findIndex((entry) => entry.name === slashSelection.name) : -1;
   const commandLoadRef = useRef<AbortController | null>(null);
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -981,6 +999,11 @@ export function Conversation(props: {
     setCommandCatalog(null);
     setCommandOpen(false);
     setCommandBusy(false);
+    setSlashSelection(null);
+    setSlashDismissed(false);
+    setComposing(false);
+    setInitialCommandName(undefined);
+    slashOriginRef.current = false;
     sentKeysRef.current.clear();
     followTargetRef.current = null;
     followTopRef.current = null;
@@ -992,7 +1015,7 @@ export function Conversation(props: {
     const controller = new AbortController();
     commandLoadRef.current = controller;
     setCommandBusy(true);
-    setError(null);
+    if (reportFailure) setError(null);
     try {
       const catalog = await props.onLoadCommands(contact.id, controller.signal);
       if (!controller.signal.aborted && catalog.recipient_cid === contact.id) {
@@ -1029,7 +1052,36 @@ export function Conversation(props: {
   }, [contact?.id]);
   const closeCommandPanel = () => {
     setCommandOpen(false);
-    commandTriggerRef.current?.focus();
+    if (slashOriginRef.current) composerInputRef.current?.focus({ preventScroll: true });
+    else commandTriggerRef.current?.focus();
+    slashOriginRef.current = false;
+  };
+  const loadCommandsRef = useRef(loadCommands);
+  loadCommandsRef.current = loadCommands;
+  useEffect(() => {
+    if (!discoverSlash || !props.onLoadCommands) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // No catalog-change event exists. Refresh only during active discovery,
+    // including empty catalogs, with one request at a time and no render polling.
+    const refresh = async () => {
+      await loadCommandsRef.current(false, false);
+      if (!stopped) timer = setTimeout(refresh, 2000);
+    };
+    void refresh();
+    return () => { stopped = true; clearTimeout(timer); commandLoadRef.current?.abort(); };
+  }, [discoverSlash, contact?.id]);
+  useEffect(() => {
+    slashListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }, [activeSlash, slashKey]);
+  useEffect(() => { setSlashPress(null); }, [discoverSlash, slashKey]);
+  const chooseSlash = (name: string) => {
+    if (!scopedCatalog?.commands.some((entry) => entry.name === name)) return;
+    slashOriginRef.current = true;
+    setInitialCommandName(name);
+    setSlashSelection(null);
+    setSlashDismissed(true);
+    setCommandOpen(true);
   };
 
   useEffect(() => {
@@ -1519,20 +1571,45 @@ export function Conversation(props: {
         </div>
       )}
       <div className="composer-wrap" ref={composerWrapRef}>
-        {commandOpen && commandCatalog && props.onSendCommand && (
+        {commandOpen && scopedCatalog && props.onSendCommand && (
           <CommandPanel
-            key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
-            catalog={commandCatalog}
+            key={`${scopedCatalog.recipient_cid}:${scopedCatalog.fingerprint}`}
+            catalog={scopedCatalog}
+            initialCommandName={initialCommandName}
             recipientName={contact.name}
             busy={commandBusy}
             onRefresh={() => void loadCommands(true, true)}
             onClose={closeCommandPanel}
             onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
-              if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
+              if (!contact || contact.id !== scopedCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
               return props.onSendCommand!(contact.id, command.name, args, invocationId, catalogFingerprint);
             }}
           />
         )}
+        {slashCommands.length > 0 && <div ref={slashListRef} id="composer-command-suggestions"
+          className="command-suggestions" role="listbox" aria-label="Suggested contact commands" onScroll={() => setSlashPress(null)}>
+          {slashCommands.map((entry, index) => <div key={entry.name}
+            id={`composer-command-option-${index}`} role="option" aria-selected={index === activeSlash}
+            className="command-suggestion" data-pressed={slashPress?.key === slashKey && slashPress.name === entry.name || undefined}
+            onPointerDown={(event) => {
+              if (!event.isPrimary || event.button !== 0) return;
+              // Keep the composer focused while showing immediate touch feedback.
+              // Native pan-y still owns scrolling; click alone commits selection.
+              event.preventDefault();
+              setSlashPress({ key: slashKey, name: entry.name, pointer: event.pointerId, x: event.clientX, y: event.clientY });
+            }}
+            onPointerMove={(event) => {
+              if (slashPress?.pointer === event.pointerId
+                && Math.hypot(event.clientX - slashPress.x, event.clientY - slashPress.y) > 10) setSlashPress(null);
+            }}
+            onPointerUp={() => setSlashPress(null)}
+            onPointerCancel={() => setSlashPress(null)}
+            onPointerLeave={() => setSlashPress(null)}
+            onClick={() => chooseSlash(entry.name)}>
+            <strong>/{entry.name}</strong>
+            {entry.description && <span>{entry.description}</span>}
+          </div>)}
+        </div>}
         {replyTo && (
           <div className="reply-bar">
             <div className="reply-bar-line" />
@@ -1559,10 +1636,13 @@ export function Conversation(props: {
           </div>
         )}
         <div className={'composer' + (voiceActive ? ' recording' : '')}>
-          {props.onLoadCommands && commandCatalog && commandCatalog.commands.length > 0 && (
+          {props.onLoadCommands && scopedCatalog && scopedCatalog.commands.length > 0 && (
             <button ref={commandTriggerRef} type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
               aria-label="Recipient commands" aria-expanded={commandOpen}
-              disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : setCommandOpen(true)}>
+              disabled={commandBusy} onClick={() => {
+                if (commandOpen) closeCommandPanel();
+                else { slashOriginRef.current = false; setInitialCommandName(undefined); setCommandOpen(true); }
+              }}>
               <Icon name="menu" size={19} />
             </button>
           )}
@@ -1595,8 +1675,31 @@ export function Conversation(props: {
             placeholder={(replyTo ? 'Reply to ' + replyTo.author : 'Message ' + contact.name) + '…'}
             value={draft}
             aria-busy={sending}
-            onChange={(e) => setDraft(e.target.value)}
+            aria-autocomplete={slashCommands.length ? 'list' : undefined}
+            aria-controls={slashCommands.length ? 'composer-command-suggestions' : undefined}
+            aria-activedescendant={activeSlash >= 0 ? `composer-command-option-${activeSlash}` : undefined}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => { setComposerFocused(false); setSlashSelection(null); }}
+            onCompositionStart={() => { setComposing(true); setSlashSelection(null); }}
+            onCompositionEnd={() => setComposing(false)}
+            onChange={(e) => { setDraft(e.target.value); setSlashSelection(null); setSlashDismissed(false); }}
             onKeyDown={(e) => {
+              if (composing || e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (slashCommands.length && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const index = activeSlash < 0 ? (e.key === 'ArrowDown' ? 0 : slashCommands.length - 1)
+                    : (activeSlash + (e.key === 'ArrowDown' ? 1 : -1) + slashCommands.length) % slashCommands.length;
+                  setSlashSelection({ key: slashKey, name: slashCommands[index].name });
+                  return;
+                }
+                if ((e.key === 'Enter' || e.key === 'Tab') && activeSlash >= 0) {
+                  e.preventDefault(); chooseSlash(slashCommands[activeSlash].name); return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault(); setSlashDismissed(true); setSlashSelection(null); return;
+                }
+              }
               if (e.key === 'Enter') {
                 const mobileComposer = window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 860;
                 if (!mobileComposer && !e.shiftKey) {

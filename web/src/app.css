@@ -923,3 +923,16 @@
 @media (prefers-reduced-motion:reduce) { .command-panel .linkbtn:active:not(:disabled),.command-trigger:active:not(:disabled) { transform:none; } }
 @media (prefers-contrast:more) { .command-panel,.command-property,.command-object { border-color:currentColor; box-shadow:none; } }
 @media (forced-colors:active) { .command-panel { border:1px solid ButtonText; background:Canvas; color:CanvasText; box-shadow:none; } }
+
+/* Slash discovery shares the canonical command surface and stays in composer flow. */
+.command-suggestions { max-height:min(30vh,240px); overflow-y:auto; overscroll-behavior:contain; background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:4px; }
+.command-suggestion { display:grid; gap:3px; min-height:44px; padding:10px 12px; cursor:pointer; overflow-wrap:anywhere; touch-action:pan-y; }
+.command-suggestion strong { font-size:.9rem; }
+.command-suggestion span { font-size:.8rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.command-suggestion[aria-selected=true] { background:var(--surface-3); outline:2px solid var(--accent); outline-offset:-2px; border-radius:8px; }
+@media (prefers-contrast:more) { .command-suggestions { border-color:currentColor; } }
+@media (forced-colors:active) { .command-suggestions { background:Canvas; color:CanvasText; border-color:CanvasText; } .command-suggestion[aria-selected=true] { outline-color:Highlight; } }
+
+@media (hover:hover) and (pointer:fine) { .command-suggestion:hover { background:var(--surface-3); border-radius:8px; } }
+.command-suggestion[data-pressed=true] { background:var(--accent-soft); outline:2px solid var(--accent); outline-offset:-2px; border-radius:8px; }
+@media (forced-colors:active) { .command-suggestion[data-pressed=true] { background:Highlight; color:HighlightText; outline-color:Highlight; } }
