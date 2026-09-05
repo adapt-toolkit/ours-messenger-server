@@ -899,6 +899,7 @@ export function Conversation(props: {
   const [composing, setComposing] = useState(false);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [slashSelection, setSlashSelection] = useState<{ key: string; name: string } | null>(null);
+  const [slashPress, setSlashPress] = useState<{ key: string; name: string; pointer: number; x: number; y: number } | null>(null);
   const [initialCommandName, setInitialCommandName] = useState<string>();
   const slashOriginRef = useRef(false);
   const slashListRef = useRef<HTMLDivElement>(null);
@@ -1073,6 +1074,7 @@ export function Conversation(props: {
   useEffect(() => {
     slashListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }, [activeSlash, slashKey]);
+  useEffect(() => { setSlashPress(null); }, [discoverSlash, slashKey]);
   const chooseSlash = (name: string) => {
     if (!scopedCatalog?.commands.some((entry) => entry.name === name)) return;
     slashOriginRef.current = true;
@@ -1585,10 +1587,24 @@ export function Conversation(props: {
           />
         )}
         {slashCommands.length > 0 && <div ref={slashListRef} id="composer-command-suggestions"
-          className="command-suggestions" role="listbox" aria-label="Suggested contact commands">
+          className="command-suggestions" role="listbox" aria-label="Suggested contact commands" onScroll={() => setSlashPress(null)}>
           {slashCommands.map((entry, index) => <div key={entry.name}
             id={`composer-command-option-${index}`} role="option" aria-selected={index === activeSlash}
-            className="command-suggestion" onPointerDown={(event) => event.preventDefault()}
+            className="command-suggestion" data-pressed={slashPress?.key === slashKey && slashPress.name === entry.name || undefined}
+            onPointerDown={(event) => {
+              if (!event.isPrimary || event.button !== 0) return;
+              // Keep the composer focused while showing immediate touch feedback.
+              // Native pan-y still owns scrolling; click alone commits selection.
+              event.preventDefault();
+              setSlashPress({ key: slashKey, name: entry.name, pointer: event.pointerId, x: event.clientX, y: event.clientY });
+            }}
+            onPointerMove={(event) => {
+              if (slashPress?.pointer === event.pointerId
+                && Math.hypot(event.clientX - slashPress.x, event.clientY - slashPress.y) > 10) setSlashPress(null);
+            }}
+            onPointerUp={() => setSlashPress(null)}
+            onPointerCancel={() => setSlashPress(null)}
+            onPointerLeave={() => setSlashPress(null)}
             onClick={() => chooseSlash(entry.name)}>
             <strong>/{entry.name}</strong>
             {entry.description && <span>{entry.description}</span>}
