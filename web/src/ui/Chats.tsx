@@ -900,8 +900,8 @@ export function Conversation(props: {
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [slashSelection, setSlashSelection] = useState<{ key: string; name: string } | null>(null);
   const [slashPress, setSlashPress] = useState<{ key: string; name: string; pointer: number; x: number; y: number } | null>(null);
-  const [initialCommandName, setInitialCommandName] = useState<string>();
-  const slashOriginRef = useRef(false);
+  const slashActivationRef = useRef<{ key: string; name: string } | null>(null);
+  const slashCaretRef = useRef<number | null>(null);
   const slashListRef = useRef<HTMLDivElement>(null);
   const scopedCatalog = commandCatalog?.recipient_cid === contact?.id ? commandCatalog : null;
   const slashToken = /^\/[^\s/]*$/.test(draft);
@@ -1002,8 +1002,6 @@ export function Conversation(props: {
     setSlashSelection(null);
     setSlashDismissed(false);
     setComposing(false);
-    setInitialCommandName(undefined);
-    slashOriginRef.current = false;
     sentKeysRef.current.clear();
     followTargetRef.current = null;
     followTopRef.current = null;
@@ -1052,9 +1050,7 @@ export function Conversation(props: {
   }, [contact?.id]);
   const closeCommandPanel = () => {
     setCommandOpen(false);
-    if (slashOriginRef.current) composerInputRef.current?.focus({ preventScroll: true });
-    else commandTriggerRef.current?.focus();
-    slashOriginRef.current = false;
+    commandTriggerRef.current?.focus();
   };
   const loadCommandsRef = useRef(loadCommands);
   loadCommandsRef.current = loadCommands;
@@ -1074,14 +1070,27 @@ export function Conversation(props: {
   useEffect(() => {
     slashListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }, [activeSlash, slashKey]);
-  useEffect(() => { setSlashPress(null); }, [discoverSlash, slashKey]);
+  const cancelSlashPress = () => {
+    slashActivationRef.current = null;
+    setSlashPress(null);
+  };
+  useLayoutEffect(cancelSlashPress, [discoverSlash, slashKey]);
+  useLayoutEffect(() => {
+    if (slashCaretRef.current === null) return;
+    composerInputRef.current?.setSelectionRange(slashCaretRef.current, slashCaretRef.current);
+    slashCaretRef.current = null;
+  }, [draft]);
   const chooseSlash = (name: string) => {
-    if (!scopedCatalog?.commands.some((entry) => entry.name === name)) return;
-    slashOriginRef.current = true;
-    setInitialCommandName(name);
+    if (!discoverSlash || !slashCommands.some((entry) => entry.name === name)) return;
+    // Discovery only edits a standalone leading command token. Keep literal
+    // sends and the separate typed-command form on their existing paths.
+    const completed = `/${name} `;
+    slashCaretRef.current = completed.length;
+    setDraft(completed);
     setSlashSelection(null);
     setSlashDismissed(true);
-    setCommandOpen(true);
+    cancelSlashPress();
+    composerInputRef.current?.focus({ preventScroll: true });
   };
 
   useEffect(() => {
@@ -1575,7 +1584,6 @@ export function Conversation(props: {
           <CommandPanel
             key={`${scopedCatalog.recipient_cid}:${scopedCatalog.fingerprint}`}
             catalog={scopedCatalog}
-            initialCommandName={initialCommandName}
             recipientName={contact.name}
             busy={commandBusy}
             onRefresh={() => void loadCommands(true, true)}
@@ -1587,8 +1595,8 @@ export function Conversation(props: {
           />
         )}
         {slashCommands.length > 0 && <div ref={slashListRef} id="composer-command-suggestions"
-          className="command-suggestions" role="listbox" aria-label="Suggested contact commands" onScroll={() => setSlashPress(null)}>
-          {slashCommands.map((entry, index) => <div key={entry.name}
+          className="command-suggestions" role="listbox" aria-label="Suggested contact commands" onScroll={cancelSlashPress}>
+          {slashCommands.map((entry, index) => <div key={`${slashKey}:${entry.name}`}
             id={`composer-command-option-${index}`} role="option" aria-selected={index === activeSlash}
             className="command-suggestion" data-pressed={slashPress?.key === slashKey && slashPress.name === entry.name || undefined}
             onPointerDown={(event) => {
@@ -1596,16 +1604,27 @@ export function Conversation(props: {
               // Keep the composer focused while showing immediate touch feedback.
               // Native pan-y still owns scrolling; click alone commits selection.
               event.preventDefault();
+              slashActivationRef.current = { key: slashKey, name: entry.name };
               setSlashPress({ key: slashKey, name: entry.name, pointer: event.pointerId, x: event.clientX, y: event.clientY });
             }}
             onPointerMove={(event) => {
               if (slashPress?.pointer === event.pointerId
-                && Math.hypot(event.clientX - slashPress.x, event.clientY - slashPress.y) > 10) setSlashPress(null);
+                && Math.hypot(event.clientX - slashPress.x, event.clientY - slashPress.y) > 10) cancelSlashPress();
             }}
             onPointerUp={() => setSlashPress(null)}
-            onPointerCancel={() => setSlashPress(null)}
-            onPointerLeave={() => setSlashPress(null)}
-            onClick={() => chooseSlash(entry.name)}>
+            onPointerCancel={cancelSlashPress}
+            onPointerLeave={(event) => {
+              // Touch releases implicit capture before its click; that departure
+              // is not a drag cancellation. Only cancel a still-held pointer.
+              if (event.buttons !== 0) cancelSlashPress();
+            }}
+            onClick={(event) => {
+              const activation = slashActivationRef.current;
+              cancelSlashPress();
+              if (event.detail === 0 || (activation?.key === slashKey && activation.name === entry.name)) {
+                chooseSlash(entry.name);
+              }
+            }}>
             <strong>/{entry.name}</strong>
             {entry.description && <span>{entry.description}</span>}
           </div>)}
@@ -1641,7 +1660,7 @@ export function Conversation(props: {
               aria-label="Recipient commands" aria-expanded={commandOpen}
               disabled={commandBusy} onClick={() => {
                 if (commandOpen) closeCommandPanel();
-                else { slashOriginRef.current = false; setInitialCommandName(undefined); setCommandOpen(true); }
+                else setCommandOpen(true);
               }}>
               <Icon name="menu" size={19} />
             </button>
