@@ -126,7 +126,10 @@ try {
   await input.dispatchEvent('compositionend'); await list.waitFor();
   await input.press('ArrowDown');
   await input.dispatchEvent('keydown', { key: 'Enter', keyCode: 229 });
-  assert.equal(await panel.count(), 0, 'IME legacy keycode does not select');
+  assert.equal(await input.inputValue(), '/', 'IME legacy keycode does not complete the command');
+  assert.equal(await options().count(), 2, 'IME legacy keycode leaves discovery open');
+  assert.equal(await options().first().getAttribute('aria-selected'), 'true', 'IME legacy keycode retains selection');
+  assert.equal(await input.evaluate(el => document.activeElement === el), true, 'IME retains composer focus');
   await options().nth(1).click(); await completed('beta');
   await input.fill(''); await input.fill('/'); await list.waitFor();
   await input.press('ArrowDown');
