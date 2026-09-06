@@ -1599,11 +1599,13 @@ export function Conversation(props: {
           {slashCommands.map((entry, index) => <div key={`${slashKey}:${entry.name}`}
             id={`composer-command-option-${index}`} role="option" aria-selected={index === activeSlash}
             className="command-suggestion" data-pressed={slashPress?.key === slashKey && slashPress.name === entry.name || undefined}
+            onMouseDown={(event) => {
+              // Preserve focus without suppressing WebKit's touch-generated click.
+              if (event.button === 0) event.preventDefault();
+            }}
             onPointerDown={(event) => {
               if (!event.isPrimary || event.button !== 0) return;
-              // Keep the composer focused while showing immediate touch feedback.
-              // Native pan-y still owns scrolling; click alone commits selection.
-              event.preventDefault();
+              // Native pan-y owns scrolling; click alone commits selection.
               slashActivationRef.current = { key: slashKey, name: entry.name };
               setSlashPress({ key: slashKey, name: entry.name, pointer: event.pointerId, x: event.clientX, y: event.clientY });
             }}

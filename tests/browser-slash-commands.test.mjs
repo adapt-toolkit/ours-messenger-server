@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
-import { chromium } from '@playwright/test';
+import { chromium, webkit } from '@playwright/test';
 
 const webRoot = resolve(new URL('../dist/web', import.meta.url).pathname);
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the typed-command browser gate');
@@ -19,7 +19,9 @@ await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const address = server.address();
 assert.ok(address && typeof address === 'object');
 const origin = `http://127.0.0.1:${address.port}`;
-const browser = await chromium.launch({ headless: true });
+const engine = process.env.SLASH_BROWSER_ENGINE ?? 'chromium';
+assert.ok(['chromium', 'webkit'].includes(engine), 'supported slash browser engine');
+const browser = await ({ chromium, webkit }[engine]).launch({ headless: true });
 
 const definition = (name, description = 'Hint for ' + name) => ({ name, description, input_schema: { type: 'object', additionalProperties: false, properties: {} } });
 const makeCatalog = (cid, revision, commands) => ({ recipient_cid: cid, fingerprint: revision.repeat(43), commands });
