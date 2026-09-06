@@ -55,6 +55,11 @@ try {
   await page.mouse.move(1, 1); await page.mouse.up();
   assert.equal(await page.getByRole('form', { name: 'Send a typed command' }).count(), 0, 'dragging away cancels selection');
   assert.equal(await input.evaluate(el => document.activeElement === el), true, 'press/cancel retains composer focus');
+  await page.mouse.move(box.x + 20, box.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 40, box.y + 20);
+  await page.mouse.up();
+  assert.equal(await input.inputValue(), '/', 'drag within an option cancels even when release generates click');
   const session = await context.newCDPSession(page);
   const touchX = box.x + 20; const touchY = box.y + 20;
   await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchX, y: touchY }] });
@@ -75,6 +80,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.command-suggestions').scrollTop > 0);
   assert.equal(await page.getByRole('form', { name: 'Send a typed command' }).count(), 0, 'scroll gesture does not choose a command');
   assert.equal(await list.locator('[data-pressed=true]').count(), 0, 'scroll clears pressed feedback');
+  assert.equal(await input.inputValue(), '/', 'canceled touch and scroll leave draft untouched');
   await page.evaluate(() => document.documentElement.style.fontSize = '200%');
   const scaledBox = await list.boundingBox(); assert.ok(scaledBox);
   assert.ok(scaledBox.x >= 0 && scaledBox.x + scaledBox.width <= 390, '200% text remains horizontally contained');
@@ -93,7 +99,8 @@ try {
   await page.emulateMedia({ forcedColors: 'none' });
   await page.evaluate(() => document.documentElement.style.fontSize = '100%');
   await first.tap();
-  await page.getByRole('form', { name: 'Send a typed command' }).waitFor();
+  assert.equal(await input.inputValue(), '/summarize ');
+  assert.equal(await input.evaluate(el => document.activeElement === el && el.selectionStart === 11 && el.selectionEnd === 11), true);
   await context.close();
   console.log('browser-slash-design OK — immediate press, cancel, native touch scrolling, enlarged text, reduced motion and contrast');
 } finally {
