@@ -770,6 +770,13 @@
   width: min(1080px, calc(100vw - 32px));
   height: min(90dvh, 900px);
 }
+/* Resize the existing reader, retaining its review controls and draft state. */
+.modal.modal-wide.markdown-modal.markdown-reader-fullscreen {
+  inset: 0; width: 100%; height: 100vh; height: 100dvh; max-height: none;
+  transform: none; border: 0; border-radius: 0; box-shadow: none; animation: none;
+}
+.markdown-reader-fullscreen .modal-head { padding-top: max(20px, env(safe-area-inset-top)); }
+.markdown-reader-fullscreen .modal-body { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
 .modal.markdown-modal .modal-body { flex: 1; min-height: 0; overflow: hidden; }
 .markdown-preview { display: flex; flex-direction: column; min-height: 0; height: 100%; gap: 10px; }
 .markdown-review-toolbar {
@@ -872,7 +879,13 @@
   position: relative; overflow-x: auto; padding: 16px; margin: 0 0 1em;
   border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface);
 }
-.markdown-mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: auto; }
+.mermaid-block { min-width: 0; max-width: 100%; white-space: normal; }
+.markdown-mermaid-diagram { overflow: auto; max-height: 65vh; }
+.markdown-mermaid-diagram img { display: block; max-width: none; height: auto; margin: auto; }
+.mermaid-source { margin-bottom: 1em; }
+.mermaid-source summary { cursor: pointer; color: var(--text-2); }
+.mermaid-source pre { overflow: auto; max-height: 24rem; white-space: pre; }
+.mermaid-source code { white-space: pre; }
 .markdown-mermaid-expand {
   position: sticky; top: 0; left: calc(100% - 34px); z-index: 1;
   margin: 0 0 -34px; color: var(--text-2); background: color-mix(in srgb, var(--surface) 90%, transparent);
@@ -918,14 +931,14 @@
 .mermaid-fullscreen-canvas {
   width: 100%; height: 100%; transform-origin: center; will-change: transform;
 }
-.mermaid-fullscreen-canvas svg {
-  display: block; width: 100%; height: 100%; max-width: none; margin: 0;
+.mermaid-fullscreen-canvas img {
+  display: block; width: 100%; height: 100%; max-width: none; margin: 0; object-fit: contain;
 }
 .mermaid-fullscreen-help {
   position: absolute; left: 50%; bottom: max(14px, env(safe-area-inset-bottom));
   z-index: 2; transform: translateX(-50%); margin: 0; padding: 7px 11px;
   border-radius: 99px; color: #e5e7eb; background: rgb(15 23 42 / 0.78);
-  font-size: 0.72rem; white-space: nowrap; pointer-events: none;
+  font-size: 0.72rem; width: max-content; max-width: calc(100% - 28px); text-align: center; pointer-events: none;
 }
 
 /* Sandboxed HTML attachment viewer. Shares the markdown modal's reading width

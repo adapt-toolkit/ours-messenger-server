@@ -1,6 +1,7 @@
 import { isValidElement, memo, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MermaidDiagram } from './MermaidDiagram';
 
 /**
  * Parsing cost is bounded per mounted message. Larger peer messages remain
@@ -33,7 +34,7 @@ function languageFromClassName(className?: string) {
 // block, producing a large, misleading inset in the bubble. Remove indentation
 // shared by every non-empty line in each prose block. Explicit fenced blocks
 // remain untouched because their opening fence starts at column zero.
-export function normalizeMessageMarkdown(text: string): string {
+function normalizeProse(text: string): string {
   return text
     .split(/(\n[ \t]*\n)/)
     .map((block) => {
@@ -49,9 +50,38 @@ export function normalizeMessageMarkdown(text: string): string {
     .join('');
 }
 
+// Never normalize inside a fence: indentation and blank lines are part of the
+// original code/diagram source, including while a message is still streaming.
+export function normalizeMessageMarkdown(text: string): string {
+  const chunks: string[] = [];
+  let lines: string[] = [];
+  let fence = '';
+  for (const line of text.split('\n')) {
+    if (!fence) {
+      const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
+        if (lines.length) chunks.push(normalizeProse(lines.join('\n')));
+        lines = [line];
+        fence = opening[1];
+      } else lines.push(line);
+    } else {
+      lines.push(line);
+      const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) {
+        chunks.push(lines.join('\n'));
+        lines = [];
+        fence = '';
+      }
+    }
+  }
+  if (lines.length) chunks.push(fence ? lines.join('\n') : normalizeProse(lines.join('\n')));
+  return chunks.join('\n');
+}
+
 function FencedCodeBlock({ children }: { children?: ReactNode }) {
-  const child = isValidElement(children) ? children as ReactElement<{ className?: string }> : null;
+  const child = isValidElement(children) ? children as ReactElement<{ className?: string; children?: ReactNode }> : null;
   const language = languageFromClassName(child?.props.className);
+  if (language === 'mermaid') return <MermaidDiagram source={String(child?.props.children ?? '').replace(/\n$/, '')} />;
   return (
     <div className="message-code-block" data-language={language || undefined}>
       {language && <div className="message-code-language">{language}</div>}
