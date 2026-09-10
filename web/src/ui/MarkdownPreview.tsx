@@ -1,4 +1,4 @@
-import { memo, RefObject, useEffect, useId, useRef, useState } from 'react';
+import { isValidElement, memo, type ReactElement, type ReactNode, RefObject, useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,236 +12,7 @@ import {
   selectionOccurrence,
 } from './markdownReviewCore.mjs';
 import { Icon } from './icons';
-
-const MERMAID_MIN_SCALE = 0.25;
-const MERMAID_MAX_SCALE = 8;
-
-type MermaidTheme = 'default' | 'dark';
-
-let mermaidRenderQueue: Promise<void> = Promise.resolve();
-
-function readMermaidTheme(): MermaidTheme {
-  return document.documentElement.classList.contains('theme-dark') ? 'dark' : 'default';
-}
-
-function useMermaidTheme(): MermaidTheme {
-  const [theme, setTheme] = useState<MermaidTheme>(readMermaidTheme);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const syncTheme = () => setTheme(readMermaidTheme());
-    const observer = new MutationObserver(syncTheme);
-    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
-    syncTheme();
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
-}
-
-function renderMermaid(id: string, source: string, theme: MermaidTheme) {
-  const render = mermaidRenderQueue.then(async () => {
-    const { default: mermaid } = await import('mermaid');
-    // Mermaid configuration is global. Keep initialize + render in one
-    // serialized critical section so another diagram cannot replace the
-    // palette between those calls.
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: 'strict',
-      theme,
-      fontFamily: 'var(--sans)',
-    });
-    return mermaid.render(id, source);
-  });
-  mermaidRenderQueue = render.then(() => undefined, () => undefined);
-  return render;
-}
-
-function clampMermaidScale(value: number) {
-  return Math.min(MERMAID_MAX_SCALE, Math.max(MERMAID_MIN_SCALE, value));
-}
-
-function MermaidFullscreen(props: { svg: string; theme: MermaidTheme; onClose: () => void }) {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    panX: number;
-    panY: number;
-  } | null>(null);
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [dragging, setDragging] = useState(false);
-
-  const resetView = () => {
-    setScale(1);
-    setPan({ x: 0, y: 0 });
-  };
-
-  const zoomAt = (nextScale: number, clientX?: number, clientY?: number) => {
-    const clamped = clampMermaidScale(nextScale);
-    if (clamped === scale) return;
-    const rect = viewportRef.current?.getBoundingClientRect();
-    if (rect) {
-      const offsetX = (clientX ?? rect.left + rect.width / 2) - rect.left - rect.width / 2;
-      const offsetY = (clientY ?? rect.top + rect.height / 2) - rect.top - rect.height / 2;
-      const ratio = clamped / scale;
-      setPan((current) => ({
-        x: offsetX - ratio * (offsetX - current.x),
-        y: offsetY - ratio * (offsetY - current.y),
-      }));
-    }
-    setScale(clamped);
-  };
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === '+' || event.key === '=') {
-        event.preventDefault();
-        zoomAt(scale * 1.25);
-      } else if (event.key === '-') {
-        event.preventDefault();
-        zoomAt(scale / 1.25);
-      } else if (event.key === '0') {
-        event.preventDefault();
-        resetView();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  });
-
-  return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) props.onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="mermaid-fullscreen-backdrop" />
-        <Dialog.Content
-          className="mermaid-fullscreen"
-          data-mermaid-theme={props.theme}
-          aria-describedby="mermaid-fullscreen-help"
-        >
-          <Dialog.Title className="mermaid-fullscreen-title">Diagram viewer</Dialog.Title>
-          <div className="mermaid-fullscreen-tools">
-            <button className="icon-btn" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomAt(scale / 1.25)}>
-              <Icon name="minus" />
-            </button>
-            <button className="mermaid-zoom-value" onClick={resetView} title="Reset zoom and position">
-              {Math.round(scale * 100)}%
-            </button>
-            <button className="icon-btn" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomAt(scale * 1.25)}>
-              <Icon name="plus" />
-            </button>
-            <Dialog.Close asChild>
-              <button className="icon-btn" aria-label="Close diagram viewer" title="Close (Esc)">
-                <Icon name="close" />
-              </button>
-            </Dialog.Close>
-          </div>
-          <div
-            ref={viewportRef}
-            className={'mermaid-fullscreen-viewport' + (dragging ? ' dragging' : '')}
-            onWheel={(event) => {
-              event.preventDefault();
-              zoomAt(scale * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
-            }}
-            onDoubleClick={(event) => zoomAt(scale * 1.5, event.clientX, event.clientY)}
-            onPointerDown={(event) => {
-              if (event.button !== 0) return;
-              dragRef.current = {
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-                panX: pan.x,
-                panY: pan.y,
-              };
-              event.currentTarget.setPointerCapture(event.pointerId);
-              setDragging(true);
-            }}
-            onPointerMove={(event) => {
-              const drag = dragRef.current;
-              if (!drag || drag.pointerId !== event.pointerId) return;
-              setPan({
-                x: drag.panX + event.clientX - drag.startX,
-                y: drag.panY + event.clientY - drag.startY,
-              });
-            }}
-            onPointerUp={(event) => {
-              if (dragRef.current?.pointerId !== event.pointerId) return;
-              dragRef.current = null;
-              setDragging(false);
-              event.currentTarget.releasePointerCapture(event.pointerId);
-            }}
-            onPointerCancel={() => {
-              dragRef.current = null;
-              setDragging(false);
-            }}
-          >
-            <div
-              className="mermaid-fullscreen-canvas"
-              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
-              dangerouslySetInnerHTML={{ __html: props.svg }}
-            />
-          </div>
-          <Dialog.Description id="mermaid-fullscreen-help" className="mermaid-fullscreen-help">
-            Scroll to zoom · drag to move · double-click to zoom in
-          </Dialog.Description>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-
-function MermaidDiagram({ source }: { source: string }) {
-  const rawId = useId();
-  const [svg, setSvg] = useState('');
-  const [error, setError] = useState('');
-  const [renderedTheme, setRenderedTheme] = useState<MermaidTheme>('default');
-  const [fullscreen, setFullscreen] = useState(false);
-  const theme = useMermaidTheme();
-
-  useEffect(() => {
-    let live = true;
-    const id = `mermaid-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-    setSvg('');
-    setError('');
-    void renderMermaid(id, source, theme)
-      .then((rendered) => {
-        if (live) {
-          setRenderedTheme(theme);
-          setSvg(rendered.svg);
-        }
-      })
-      .catch((err) => {
-        if (live) setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      live = false;
-      document.getElementById(`d${id}`)?.remove();
-    };
-  }, [rawId, source, theme]);
-
-  if (error) return <pre className="markdown-mermaid-error">Mermaid error: {error}</pre>;
-  if (!svg) return <div className="markdown-mermaid-loading">Rendering diagram…</div>;
-  return (
-    <>
-      <div className="markdown-mermaid" data-mermaid-theme={renderedTheme}>
-        <button
-          className="icon-btn markdown-mermaid-expand"
-          aria-label="View diagram fullscreen"
-          title="View diagram fullscreen"
-          onClick={() => setFullscreen(true)}
-        >
-          <Icon name="maximize" />
-        </button>
-        <div className="markdown-mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
-      </div>
-      {fullscreen && (
-        <MermaidFullscreen svg={svg} theme={renderedTheme} onClose={() => setFullscreen(false)} />
-      )}
-    </>
-  );
-}
+import { MermaidDiagram } from './MermaidDiagram';
 
 // Selection changes update the preview toolbar. Keep those state commits out
 // of the rendered document: iOS owns the native selection handles, and a
@@ -259,12 +30,11 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
           a: ({ children, ...anchorProps }) => (
             <a {...anchorProps} target="_blank" rel="noreferrer">{children}</a>
           ),
-          code: ({ className, children, ...codeProps }) => {
-            const language = /language-([\w-]+)/.exec(className ?? '')?.[1];
-            const source = String(children).replace(/\n$/, '');
-            return language === 'mermaid'
-              ? <MermaidDiagram source={source} />
-              : <code className={className} {...codeProps}>{children}</code>;
+          pre: ({ children }) => {
+            const child = isValidElement(children) ? children as ReactElement<{ className?: string; children?: ReactNode }> : null;
+            return child?.props.className === 'language-mermaid'
+              ? <MermaidDiagram source={String(child.props.children).replace(/\n$/, '')} />
+              : <pre>{children}</pre>;
           },
         }}
       >
@@ -283,6 +53,7 @@ export function MarkdownPreview(props: {
   const { rec } = props;
   const contentRef = useRef<HTMLDivElement>(null);
   const [markdown, setMarkdown] = useState('');
+  const [fullscreen, setFullscreen] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
   const [selection, setSelection] = useState('');
@@ -445,10 +216,21 @@ export function MarkdownPreview(props: {
       description="Markdown preview · select text to send precise feedback"
       onClose={props.onClose}
       wide
-      className="markdown-modal"
+      className={'markdown-modal' + (fullscreen ? ' markdown-reader-fullscreen' : '')}
     >
       <div className="markdown-preview">
         <div className="markdown-review-toolbar">
+          <button
+            className="btn sm"
+            type="button"
+            aria-label={fullscreen ? 'Exit reader fullscreen' : 'View reader fullscreen'}
+            aria-pressed={fullscreen}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setFullscreen((value) => !value)}
+          >
+            <Icon name="maximize" size={14} />
+            {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          </button>
           <button
             className="btn sm"
             disabled={!selection}

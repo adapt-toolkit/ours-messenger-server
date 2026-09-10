@@ -87,3 +87,16 @@ assert.equal(normalizeMessageMarkdown(indented), 'Fleet result\n- evidence');
 assert.equal(indented, '    Fleet result\n    - evidence', 'normalization returns a projection and preserves its input');
 
 console.log('markdown OK — safe CommonMark rendering, explicit URLs, inert HTML/images, and lossless long-input fallback');
+
+for (const fence of ['```', '~~~']) {
+  const source = 'flowchart TD\n A[Original] --> B[Source]';
+  const rendered = renderToStaticMarkup(<MessageMarkdown text={`${fence}mermaid\n${source}\n${fence}`} />);
+  assert.match(rendered, /Rendering diagram/);
+  assert.match(rendered, /Mermaid source/);
+  assert.ok(rendered.includes('A[Original] --&gt; B[Source]'), 'source stays available during loading');
+  assert.ok(!rendered.includes('message-code-block'), 'Mermaid bypasses ordinary fenced-code framing');
+}
+
+const fencedIndentation = '```mermaid\nflowchart TD\n\n    A[Original] --> B[Source]\n\n    B --> C[End]\n```';
+assert.equal(normalizeMessageMarkdown(fencedIndentation), fencedIndentation, 'blank lines never expose fenced source to prose normalization');
+assert.equal(normalizeMessageMarkdown(fencedIndentation.slice(0, -3)), fencedIndentation.slice(0, -3), 'streaming open fences preserve their source too');
