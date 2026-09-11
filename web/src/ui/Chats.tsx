@@ -1,6 +1,6 @@
 // Chats section — grouped contact list + conversation. Ported from the design
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
-import { memo, ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, ReactNode, type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
 import { ContactVM, RootMetaVM, fmtTime } from './viewmodel';
 import type { ChatMessage } from './chatTypes';
@@ -589,12 +589,13 @@ const TimelineRows = memo(function TimelineRows(props: {
   contactCid: string;
   contactName: string;
   onStartReply: (reply: ReplyDraft) => void;
+  onRevealMessage: (wireId: string) => void;
   onPreview: (record: FileRecord) => void;
   onFetchFile?: (wireId: string) => Promise<void>;
 }) {
   const {
     messages, optimisticSend, sentKeys, hiddenEarlier, unreadWireId,
-    roomLines, contactCid, contactName, onStartReply, onPreview, onFetchFile,
+    roomLines, contactCid, contactName, onStartReply, onRevealMessage, onPreview, onFetchFile,
   } = props;
   const byWireId = new Map<string, ChatMessage>();
   for (const message of messages) if (message.wireId) byWireId.set(message.wireId, message);
@@ -660,6 +661,14 @@ const TimelineRows = memo(function TimelineRows(props: {
             <Icon name="reply" size={15} />
           </button>
         ) : null;
+        const quote = quoteFor(message);
+        const quotePreview = quote && message.replyTo ? (
+          <button type="button" className="quote" aria-label={`Show original message${quote.author ? ` from ${quote.author}` : ''}`}
+            onClick={() => onRevealMessage(message.replyTo!.wireId)}>
+            {quote.author && <span className="quote-author">{quote.author}</span>}
+            <span className="quote-text">{quote.text}</span>
+          </button>
+        ) : null;
         const unreadDivider = message.wireId === unreadWireId
           ? <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>
           : null;
@@ -678,6 +687,7 @@ const TimelineRows = memo(function TimelineRows(props: {
             >
               {unreadDivider}
               <div className={`room-system room-${presentation}-card`} role="note">
+                {quotePreview}
                 {room.label && <span className="room-system-label">{room.label}</span>}
                 {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
                 <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
@@ -723,6 +733,7 @@ const TimelineRows = memo(function TimelineRows(props: {
                 after={replyButton}
               >
                 <div className={`ours-message ours-message-file ours-message--${message.dir}`}>
+                  {quotePreview}
                   <FileBubble
                     rec={record}
                     receipt={message.receipt}
@@ -782,6 +793,7 @@ const TimelineRows = memo(function TimelineRows(props: {
                 after={replyButton}
               >
                 <div className={`ours-message typed-message ours-message--${message.dir}`}>
+                  {quotePreview}
                   <div className="typed-message-kind">{message.typed.kind === 'command' ? 'Command' : message.typed.kind === 'command_result' ? 'Result' : 'Typed message'}</div>
                   <strong>{title}</strong>
                   <div className="typed-message-state" role="status">{state}</div>
@@ -793,7 +805,6 @@ const TimelineRows = memo(function TimelineRows(props: {
           );
         }
 
-        const quote = quoteFor(message);
         return (
           <motion.div
             className="message-motion"
@@ -813,12 +824,7 @@ const TimelineRows = memo(function TimelineRows(props: {
               after={replyButton}
             >
               <div className={`ours-message ours-message--${message.dir}`}>
-                {quote && (
-                  <div className="quote">
-                    {quote.author && <span className="quote-author">{quote.author}</span>}
-                    <span className="quote-text">{quote.text}</span>
-                  </div>
-                )}
+                {quotePreview}
                 {room && !continuedAbove && (
                   <>
                     {room.roomName && <div className="room-message-room">{room.roomName}</div>}
@@ -850,6 +856,7 @@ export function Conversation(props: {
   unreadOpen?: { wireId: string; count: number } | null;
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
+  onRevealMessage?: (wireId: string, signal: AbortSignal) => Promise<'found' | 'unavailable' | 'limit'>;
   onBack: () => void;
   onOpenContact?: () => void;
   /** Resolves with the canonical wire id of the delivered message when it has one. */
@@ -942,6 +949,99 @@ export function Conversation(props: {
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
   const newestMessageRef = useRef<string | null>(null);
+  const replyNavigationRef = useRef<AbortController | null>(null);
+  const replyHighlightRef = useRef<HTMLElement | null>(null);
+  const replyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [replyTarget, setReplyTarget] = useState<{ wireId: string; controller: AbortController } | null>(null);
+  const [replyNotice, setReplyNotice] = useState('');
+  const cancelReplyNavigation = useCallback(() => {
+    replyNavigationRef.current?.abort();
+    replyNavigationRef.current = null;
+    if (replyTimerRef.current !== null) clearTimeout(replyTimerRef.current);
+    replyTimerRef.current = null;
+    replyHighlightRef.current?.classList.remove('reply-highlight');
+    replyHighlightRef.current = null;
+    setReplyTarget(null);
+    setReplyNotice('');
+  }, []);
+  useLayoutEffect(() => {
+    cancelReplyNavigation();
+    return cancelReplyNavigation;
+  }, [contact?.id, cancelReplyNavigation]);
+  const revealOriginal = useCallback(async (wireId: string) => {
+    cancelReplyNavigation();
+    const controller = new AbortController();
+    replyNavigationRef.current = controller;
+    const scroller = messageScrollRef.current;
+    followTargetRef.current = null;
+    followTopRef.current = null;
+    pinnedToBottomRef.current = false;
+    unreadPlacedRef.current = true;
+    prependScrollRef.current = null;
+    // Stop an in-flight bottom-follow before giving the reply target ownership.
+    if (scroller) scroller.scrollTo({ top: scroller.scrollTop, behavior: 'instant' });
+    if (window.location.hash.startsWith('#chat-message-')) {
+      window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
+    }
+    const timeout = setTimeout(() => {
+      controller.abort();
+      setReplyNotice('Could not load the original message. Please try again.');
+    }, 10000);
+    try {
+      let result: 'found' | 'unavailable' | 'limit' = 'found';
+      const mounted = document.getElementById(timelineMessageId(wireId));
+      if (!mounted || !scroller?.contains(mounted)) {
+        setReplyNotice('Finding original message…');
+        result = await props.onRevealMessage?.(wireId, controller.signal) ?? 'unavailable';
+      }
+      if (controller.signal.aborted) return;
+      if (result !== 'found') {
+        setReplyNotice(result === 'limit'
+          ? 'Original message is beyond the search limit. Load earlier messages and try again.'
+          : 'Original message is unavailable.');
+        return;
+      }
+      setReplyNotice('');
+      setReplyTarget({ wireId, controller });
+    } catch {
+      if (!controller.signal.aborted) setReplyNotice('Could not load the original message. Please try again.');
+    } finally { clearTimeout(timeout); }
+  }, [cancelReplyNavigation, props.onRevealMessage]);
+  useLayoutEffect(() => {
+    if (!replyTarget) return;
+    // Motion mounts newly loaded rows after the parent's layout effects.
+    const frame = requestAnimationFrame(() => {
+      if (replyTarget.controller.signal.aborted) return;
+      const target = document.getElementById(timelineMessageId(replyTarget.wireId));
+      const scroller = messageScrollRef.current;
+      if (!target || !scroller?.contains(target)) {
+        setReplyNotice('Original message is unavailable.');
+        setReplyTarget(null);
+        return;
+      }
+      prependScrollRef.current = null;
+      pinnedToBottomRef.current = false;
+      const rect = target.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      // Keep tall originals readable from their start; center ordinary bubbles.
+      const offset = Math.max(16, (scroller.clientHeight - rect.height) / 2);
+      scroller.scrollTo({ top: scroller.scrollTop + rect.top - viewport.top - offset, behavior: 'instant' });
+      target.classList.remove('reply-highlight');
+      void target.offsetWidth;
+      target.classList.add('reply-highlight');
+      replyHighlightRef.current = target;
+      target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+      replyTimerRef.current = setTimeout(() => {
+        target.classList.remove('reply-highlight');
+        replyHighlightRef.current = null;
+        replyTimerRef.current = null;
+      }, 1500);
+      setReplyTarget(null);
+      measureJumpLatest();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [replyTarget]);
   const measuredDraftRef = useRef('');
   useLayoutEffect(() => {
     const detail = detailRef.current;
@@ -1499,9 +1599,12 @@ export function Conversation(props: {
         }}
         // Any deliberate gesture hands scrolling back to the reader, even
         // mid-animation, so an interrupted follow can never latch.
-        onPointerDown={() => { followTargetRef.current = null; followTopRef.current = null; }}
-        onTouchStart={() => { followTargetRef.current = null; followTopRef.current = null; }}
-        onWheel={() => { followTargetRef.current = null; followTopRef.current = null; }}
+        onPointerDown={() => { cancelReplyNavigation(); followTargetRef.current = null; followTopRef.current = null; }}
+        onTouchStart={() => { cancelReplyNavigation(); followTargetRef.current = null; followTopRef.current = null; }}
+        onWheel={() => { cancelReplyNavigation(); followTargetRef.current = null; followTopRef.current = null; }}
+        onKeyDown={(event) => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Escape'].includes(event.key)) cancelReplyNavigation();
+        }}
         onDragOver={(e) => { if (props.onSendFile) e.preventDefault(); }}
         onDrop={(e) => {
           if (!props.onSendFile) return;
@@ -1545,6 +1648,7 @@ export function Conversation(props: {
             contactCid={contact.id}
             contactName={contact.name}
             onStartReply={setReplyTo}
+            onRevealMessage={revealOriginal}
             onPreview={setPreviewRec}
             onFetchFile={props.onFetchFile}
           />
@@ -1558,6 +1662,7 @@ export function Conversation(props: {
           aria-label={newSinceAway ? `Jump to latest, ${newSinceAway} new messages` : 'Jump to latest'}
           onClick={(event) => {
             const restoreFocus = event.currentTarget === document.activeElement;
+            cancelReplyNavigation();
             setNewSinceAway(0);
             followBottom(true);
             if (restoreFocus) requestAnimationFrame(() => messageScrollRef.current?.focus({ preventScroll: true }));
@@ -1567,6 +1672,7 @@ export function Conversation(props: {
           {!!newSinceAway && <span className="jump-latest-count" aria-live="polite">{newSinceAway}</span>}
         </button>
       )}
+      {replyNotice && <div className="banner" role="status">{replyNotice}</div>}
       {error && (
         <div className="banner error" role="alert">
           {error}

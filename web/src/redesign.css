@@ -1105,3 +1105,25 @@
 @media (prefers-reduced-motion: reduce) {
   /* The final cascade owns the selector-scoped preference policy. */
 }
+
+/* Reply previews share the native button keyboard/touch behavior. */
+button.quote {
+  width: 100%; min-height: 44px; text-align: left; font: inherit; color: inherit;
+  cursor: pointer; border-top: 0; border-right: 0; border-bottom: 0;
+}
+button.quote:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.quote:active { background: color-mix(in srgb, currentColor 16%, transparent); }
+.reply-highlight {
+  border-radius: 10px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: reply-reveal 1.5s ease-out;
+}
+@keyframes reply-reveal {
+  from { background: color-mix(in srgb, var(--accent) 32%, transparent); }
+  to { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reply-highlight { animation: none; }
+}
