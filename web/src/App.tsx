@@ -494,6 +494,34 @@ export function AppShell() {
     finally { historyLoads.current.delete(cid); setHistoryBusy(null); }
   };
 
+  // Reply navigation searches a bounded number of existing history pages. Only
+  // commit when the exact recipient-local wire id is found, so failed lookups
+  // do not expand or reposition the reader's timeline.
+  const revealMessage = useCallback(async (wireId: string, signal: AbortSignal) => {
+    const snapshot = stateRef.current;
+    const cid = selectedContactCid(snapshot);
+    if (!cid) return 'unavailable' as const;
+    const current = pageFor(snapshot, cid);
+    if (!current) return 'unavailable' as const;
+    if (current.messages.some(message => message.wire_id === wireId)) return 'found' as const;
+    let cursor = current.nextBefore;
+    const seen = new Set<string>();
+    let loaded = [...current.messages];
+    for (let count = 0; cursor && !seen.has(cursor) && count < 10; count++) {
+      seen.add(cursor);
+      const page = await api.conversation(cid, cursor, signal);
+      if (signal.aborted || stateRef.current.identity?.cid !== snapshot.identity?.cid
+        || selectedContactCid(stateRef.current) !== cid) return 'unavailable' as const;
+      loaded = [...page.messages, ...loaded];
+      if (page.messages.some(message => message.wire_id === wireId)) {
+        dispatch({ type: 'older_page', contactCid: cid, page, newer: loaded });
+        return 'found' as const;
+      }
+      cursor = page.nextBefore;
+    }
+    return cursor ? 'limit' as const : 'unavailable' as const;
+  }, [dispatch]);
+
   const selectedCid = selectedContactCid(state);
   const selected = state.contacts.contacts.find((item) => item.container_id === selectedCid);
   const viewContacts = useMemo(() => contactViews(state, files), [state, files]);
@@ -601,6 +629,7 @@ export function AppShell() {
           key={selectedCid ?? 'no-conversation'} contact={selectedView} messages={messages} syncing={syncing}
           unreadOpen={unreadOpen?.contactCid === selectedCid ? unreadOpen : null}
           hiddenEarlier={pageFor(state, selectedCid ?? '')?.hasMore ? Math.max(1, (pageFor(state, selectedCid ?? '')?.total ?? messages.length) - messages.length) : 0}
+          onRevealMessage={revealMessage}
           onLoadEarlier={selectedCid && historyBusy !== selectedCid ? () => void loadOlder(selectedCid) : undefined}
           onBack={() => {
             unreadOpenAbort.current?.abort();
