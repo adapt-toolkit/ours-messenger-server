@@ -1,0 +1,116 @@
+{
+  "source": {
+    "repository": "https://github.com/adapt-toolkit/ours-cowork",
+    "commit": "72dd9deb4dbad0551c81908ec59a566f5effe4d6",
+    "producer": "src/packets.ts:SdkRoomPacket.registerRuntimeCommands; src/openapi.ts:ROOM_RPC_METHODS",
+    "capture": "Invoked registerRuntimeCommands with an in-memory registerCommands sink; no daemon or live command execution."
+  },
+  "commands": [
+    {
+      "name": "start_thread",
+      "description": "Create a scoped reply thread for an explicit set of room participant IDs.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "topic",
+          "participant_ids",
+          "idempotency_key"
+        ],
+        "properties": {
+          "topic": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?![\\s\\S]*[\\p{Cc}\\p{Cf}])[\\s\\S]*\\S[\\s\\S]*$"
+          },
+          "participant_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-7][0-9a-hjkmnp-tv-z]{25}$"
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          }
+        }
+      }
+    },
+    {
+      "name": "room.command.grant",
+      "description": "Idempotently grants one command name or dynamic pattern to one exact active participant CID. Display names and caller-supplied roles are never authority. * and room.* include permission administration and room lifecycle commands; * also covers future or replaced consumer commands. Requires an explicit grant; applies only to this room.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "caller_cid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f]{64}$",
+            "description": "Authenticated caller CID."
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "start_thread",
+                  "list-members",
+                  "remove-member",
+                  "room.settings",
+                  "room.briefing.role.set",
+                  "room.briefing.role.delete",
+                  "room.invite",
+                  "room.accept",
+                  "room.rebind",
+                  "room.close",
+                  "room.delete",
+                  "room.participant.remove",
+                  "room.revoke",
+                  "room.recover",
+                  "room.recover.confirm",
+                  "room.show",
+                  "room.participants",
+                  "room.command.grants",
+                  "room.command.role.grants",
+                  "room.command.role.set",
+                  "room.command.grant",
+                  "room.command.revoke",
+                  "room.history",
+                  "room.message",
+                  "room.say",
+                  "room.role.rest.add",
+                  "room.role.rest.remove"
+                ]
+              },
+              {
+                "type": "string",
+                "maxLength": 128,
+                "pattern": "^consumer\\.[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "*"
+                ]
+              },
+              {
+                "type": "string",
+                "maxLength": 128,
+                "pattern": "^(?:[a-z0-9][a-z0-9-]*\\.)+\\*$"
+              }
+            ],
+            "description": "Exact command, * for all runtime commands, or terminal namespace.*. Patterns also cover future matching commands."
+          }
+        },
+        "required": [
+          "caller_cid",
+          "command"
+        ]
+      }
+    }
+  ]
+}

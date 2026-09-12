@@ -1,62 +1,19 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { safePatternError, matchesPattern, patternBudget, PatternBudgetError, type PatternBudget } from './command-pattern.js';
 import type { CommandCatalog, CommandDefinition, JsonValue, SendCommandResult } from '../types.js';
 
 const SUPPORTED = new Set([
   'type', 'title', 'description', 'default', 'enum', 'const', 'minimum', 'maximum',
   'minLength', 'maxLength', 'pattern', 'properties', 'required', 'items', 'minItems', 'maxItems',
-  'additionalProperties',
+  'additionalProperties', 'anyOf', 'uniqueItems',
 ]);
 const MAX_DEPTH = 6;
 const MAX_CONTROLS = 64;
-const MAX_PATTERN_LENGTH = 256;
-const MAX_PATTERN_REPETITION = 256;
 const MAX_VALUE_DEPTH = 12;
 const MAX_VALUE_NODES = 2_048;
 const MAX_VALUE_BYTES = 64 * 1024;
 
 type Schema = { [key: string]: JsonValue };
-
-function safePatternError(value: JsonValue): string | null {
-  if (typeof value !== 'string') return 'pattern must be a string';
-  if (value.length > MAX_PATTERN_LENGTH) return `pattern exceeds ${MAX_PATTERN_LENGTH} characters`;
-  if (!value.startsWith('^') || !value.endsWith('$')) return 'pattern must be anchored with ^ and $';
-  let inClass = false;
-  let variableRepetitionSeen = false;
-  for (let index = 0; index < value.length; index++) {
-    const character = value[index];
-    if (character === '\\') {
-      if (++index >= value.length) return 'pattern has invalid syntax';
-      if (/\d/.test(value[index]) || value[index] === 'k') return 'pattern backreferences are not supported';
-      continue;
-    }
-    if (inClass) {
-      if (character === ']') inClass = false;
-      continue;
-    }
-    if (character === '[') { inClass = true; continue; }
-    if ('()?*+|'.includes(character)) return 'pattern must use only bounded, non-grouped expressions';
-    if (character === '{') {
-      const quantifier = /^\{(\d+)(?:,(\d+))?\}/.exec(value.slice(index));
-      if (!quantifier) return 'pattern has an invalid or unbounded repetition';
-      const minimum = Number(quantifier[1]);
-      const maximum = Number(quantifier[2] ?? quantifier[1]);
-      if (minimum > maximum || maximum > MAX_PATTERN_REPETITION) {
-        return `pattern repetition must not exceed ${MAX_PATTERN_REPETITION}`;
-      }
-      if (minimum !== maximum) {
-        const remainder = value.slice(index + quantifier[0].length);
-        if (variableRepetitionSeen || (remainder !== '' && remainder !== '$')) {
-          return 'a variable pattern repetition is supported only once, at the end';
-        }
-        variableRepetitionSeen = true;
-      }
-      index += quantifier[0].length - 1;
-    }
-  }
-  if (inClass) return 'pattern has invalid syntax';
-  try { new RegExp(value); } catch { return 'pattern has invalid syntax'; }
-  return null;
-}
 
 function schemaError(schema: Schema, depth = 0, count = { value: 0 }): string | null {
   if (depth > MAX_DEPTH) return `Schema depth exceeds ${MAX_DEPTH}`;
@@ -68,10 +25,23 @@ function schemaError(schema: Schema, depth = 0, count = { value: 0 }): string | 
   if (schema.description !== undefined && typeof schema.description !== 'string') return 'description must be a string';
   if (schema.enum !== undefined && (!Array.isArray(schema.enum) || schema.enum.length === 0)) return 'enum must be a non-empty array';
   const type = schema.type;
-  if (type === undefined && schema.enum === undefined && !Object.hasOwn(schema, 'const')) {
+  if (type === undefined && schema.enum === undefined && !Object.hasOwn(schema, 'const') && schema.anyOf === undefined) {
     return 'An explicit type, enum, or const is required';
   }
-  if (type !== undefined && !['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'].includes(String(type))) {
+  if (schema.anyOf !== undefined) {
+    if (!Array.isArray(schema.anyOf) || schema.anyOf.length === 0) return 'anyOf must be a non-empty array of schemas';
+    for (let index = 0; index < schema.anyOf.length; index++) {
+      const branch = schema.anyOf[index];
+      if (!branch || typeof branch !== 'object' || Array.isArray(branch)) return `anyOf[${index}] must be a schema object`;
+      const error = schemaError(branch as Schema, depth + 1, count);
+      if (error) return `anyOf[${index}]: ${error}`;
+    }
+  }
+  if (schema.uniqueItems !== undefined) {
+    if (typeof schema.uniqueItems !== 'boolean') return 'uniqueItems must be boolean';
+    if (type !== 'array') return 'uniqueItems requires array type';
+  }
+  if (type !== undefined && (typeof type !== 'string' || !['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'].includes(type))) {
     return `Unsupported JSON Schema type: ${String(type)}`;
   }
   for (const keyword of ['minimum', 'maximum'] as const) {
@@ -107,6 +77,8 @@ function schemaError(schema: Schema, depth = 0, count = { value: 0 }): string | 
         : 'additionalProperties must be false';
     }
   }
+  if ((schema.properties !== undefined || schema.required !== undefined) && type !== 'object') return 'properties/required require object type';
+  if (schema.items !== undefined && type !== 'array') return 'items requires array type';
   if (type === 'object') {
     const properties = schema.properties;
     if (properties !== undefined && (!properties || typeof properties !== 'object' || Array.isArray(properties))) {
@@ -161,19 +133,21 @@ function boundedValueError(value: JsonValue, path: string): string | null {
   return null;
 }
 
-function validateCommandValueInner(schema: Schema, value: JsonValue, path: string): string | null {
+function validateCommandValueInner(schema: Schema, value: JsonValue, path: string, budget: PatternBudget): string | null {
+  if (Array.isArray(schema.anyOf) && !schema.anyOf.some((branch) =>
+    validateCommandValueInner(branch as Schema, value, path, budget) === null)) {
+    return `${path} must match at least one anyOf alternative`;
+  }
   if (Object.hasOwn(schema, 'const') && !sameJson(schema.const, value)) return `${path} must use the fixed value`;
   if (Array.isArray(schema.enum) && !schema.enum.some((option) => sameJson(option, value))) return `${path} is not an allowed value`;
   if (schema.type === 'null') return value === null ? null : `${path} must be null`;
   if (schema.type === 'boolean') return typeof value === 'boolean' ? null : `${path} must be boolean`;
   if (schema.type === 'string') {
     if (typeof value !== 'string') return `${path} must be text`;
-    if (typeof schema.minLength === 'number' && value.length < schema.minLength) return `${path} is too short`;
-    if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) return `${path} is too long`;
+    if (typeof schema.minLength === 'number' && Array.from(value).length < schema.minLength) return `${path} is too short`;
+    if (typeof schema.maxLength === 'number' && Array.from(value).length > schema.maxLength) return `${path} is too long`;
     if (schema.pattern !== undefined) {
-      const unsafe = safePatternError(schema.pattern);
-      if (unsafe) return `${path} cannot be validated safely: ${unsafe}`;
-      if (!new RegExp(schema.pattern as string).test(value)) return `${path} does not match the required format`;
+      if (!matchesPattern(schema.pattern as string, value, budget)) return `${path} does not match the required format`;
     }
     return null;
   }
@@ -188,9 +162,17 @@ function validateCommandValueInner(schema: Schema, value: JsonValue, path: strin
     if (!Array.isArray(value)) return `${path} must be an array`;
     if (typeof schema.minItems === 'number' && value.length < schema.minItems) return `${path} has too few items`;
     if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) return `${path} has too many items`;
+    if (schema.uniqueItems === true) {
+      const seen = new Set<string>();
+      for (const item of value) {
+        const key = canonicalJson(item);
+        if (seen.has(key)) return `${path} must contain unique items`;
+        seen.add(key);
+      }
+    }
     if (schema.items && typeof schema.items === 'object' && !Array.isArray(schema.items)) {
       for (let index = 0; index < value.length; index++) {
-        const error = validateCommandValueInner(schema.items as Schema, value[index], `${path}[${index}]`);
+        const error = validateCommandValueInner(schema.items as Schema, value[index], `${path}[${index}]`, budget);
         if (error) return error;
       }
     }
@@ -208,7 +190,7 @@ function validateCommandValueInner(schema: Schema, value: JsonValue, path: strin
     for (const key of required) if (!Object.hasOwn(value, key)) return `${path}.${key || '(empty key)'} is required`;
     for (const [key, child] of Object.entries(properties)) {
       if (!Object.hasOwn(value, key)) continue;
-      const error = validateCommandValueInner(child as Schema, value[key], `${path}.${key || '(empty key)'}`);
+      const error = validateCommandValueInner(child as Schema, value[key], `${path}.${key || '(empty key)'}`, budget);
       if (error) return error;
     }
   }
@@ -216,13 +198,36 @@ function validateCommandValueInner(schema: Schema, value: JsonValue, path: strin
 }
 
 export function validateCommandValue(schema: Schema, value: JsonValue, path = 'Arguments'): string | null {
-  return boundedValueError(value, path) ?? validateCommandValueInner(schema, value, path);
+  const unsupported = schemaError(schema);
+  if (unsupported) return `${path} cannot be validated safely: ${unsupported}`;
+  try {
+    return boundedValueError(value, path) ?? validateCommandValueInner(schema, value, path, patternBudget());
+  } catch (error) {
+    if (error instanceof PatternBudgetError) return `${path} cannot be validated safely: ${error.message}`;
+    throw error;
+  }
+}
+
+function canonicalJson(value: JsonValue): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
+
+function fieldType(schema: Schema): JsonValue | undefined {
+  if (schema.type !== undefined) return schema.type;
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length) {
+    const types = schema.anyOf.map(branch => fieldType(branch as Schema));
+    if (types.every(type => type === types[0]) && ['string', 'number', 'integer', 'boolean', 'null'].includes(String(types[0]))) return types[0];
+  }
+  return undefined;
 }
 
 function initialValue(schema: Schema): JsonValue {
   if (Object.hasOwn(schema, 'const')) return schema.const;
   if (schema.default !== undefined) return schema.default;
   if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length && !schema.type) return initialValue(schema.anyOf[0] as Schema);
   if (schema.type === 'object') {
     const result: Record<string, JsonValue> = Object.create(null);
     const required = new Set(Array.isArray(schema.required)
@@ -260,14 +265,14 @@ function withoutProperty(record: Record<string, JsonValue>, key: string): Record
   return next;
 }
 
-function ArrayField(props: {
+function JsonField(props: {
   schema: Schema; label: string; path: string; value: JsonValue; required?: boolean;
-  description?: string; onChange(value: JsonValue): void; onValidityChange(path: string, error: string | null): void;
+  description?: string; arrayOnly?: boolean; onChange(value: JsonValue): void; onValidityChange(path: string, error: string | null): void;
 }) {
-  const { schema, label, path, value, required, description, onChange, onValidityChange } = props;
+  const { schema, label, path, value, required, description, arrayOnly, onChange, onValidityChange } = props;
   const generatedId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const pathId = path.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'root';
-  const helpId = `command-array-${pathId}-${generatedId}-help`;
+  const helpId = `command-json-${pathId}-${generatedId}-help`;
   const [raw, setRaw] = useState(() => JSON.stringify(value, null, 2));
   const [error, setError] = useState<string | null>(null);
   const lastEmitted = useRef(JSON.stringify(value));
@@ -288,20 +293,20 @@ function ArrayField(props: {
     let parsed: unknown;
     try { parsed = JSON.parse(nextRaw); }
     catch { const nextError = `${label} must contain valid JSON`; setError(nextError); onValidityChange(path, nextError); return; }
-    if (!Array.isArray(parsed)) {
+    if (arrayOnly && !Array.isArray(parsed)) {
       const nextError = `${label} must be a JSON array`;
       setError(nextError); onValidityChange(path, nextError); return;
     }
-    const nextError = validateCommandValue(schema, parsed, label);
+    const nextError = validateCommandValue(schema, parsed as JsonValue, label);
     setError(nextError); onValidityChange(path, nextError);
     lastEmitted.current = JSON.stringify(parsed);
-    onChange(parsed);
+    onChange(parsed as JsonValue);
   };
 
   return <label className="command-field"><span>{label}{required ? ' *' : ''}</span>
     <textarea value={raw} rows={3} aria-describedby={helpId} aria-invalid={error ? 'true' : undefined}
       onChange={(event) => update(event.target.value)} />
-    <small id={helpId}>{description ?? 'JSON array'}</small>
+    <small id={helpId}>{description ?? (arrayOnly ? 'JSON array' : 'JSON value matching any allowed alternative')}</small>
     {error && <span className="command-field-error" role="alert">{error}</span>}
   </label>;
 }
@@ -321,9 +326,7 @@ function ScalarField(props: {
     <input type={numeric ? 'number' : 'text'} value={String(value ?? '')}
       min={typeof schema.minimum === 'number' ? schema.minimum : undefined}
       max={typeof schema.maximum === 'number' ? schema.maximum : undefined}
-      minLength={typeof schema.minLength === 'number' ? schema.minLength : undefined}
-      maxLength={typeof schema.maxLength === 'number' ? schema.maxLength : undefined}
-      step={schema.type === 'integer' ? 1 : numeric ? 'any' : undefined}
+      step={fieldType(schema) === 'integer' ? 1 : numeric ? 'any' : undefined}
       required={required} aria-invalid={error ? 'true' : undefined}
       onChange={(event) => onChange(numeric ? Number(event.target.value) : event.target.value)} />
     {description && <small>{description}</small>}
@@ -348,7 +351,12 @@ function Field(props: {
         {schema.enum.map((option, index) => <option key={index} value={JSON.stringify(option)}>{String(option)}</option>)}
       </select>{description && <small>{description}</small>}</label>;
   }
-  if (schema.type === 'object') {
+  const type = fieldType(schema);
+  if (schema.anyOf && (type === undefined || type === 'object' || type === 'array')) {
+    return <JsonField schema={schema} label={label} path={path} value={value} required={required}
+      description={description} onChange={onChange} onValidityChange={onValidityChange} />;
+  }
+  if (type === 'object') {
     const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const requiredKeys = new Set(Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === 'string') : []);
     return <fieldset className="command-object"><legend>{label}</legend>{description && <p>{description}</p>}
@@ -372,15 +380,15 @@ function Field(props: {
       })}
     </fieldset>;
   }
-  if (schema.type === 'array') {
-    return <ArrayField schema={schema} label={label} path={path} value={value} required={required}
+  if (type === 'array') {
+    return <JsonField arrayOnly schema={schema} label={label} path={path} value={value} required={required}
       description={description} onChange={onChange} onValidityChange={onValidityChange} />;
   }
-  if (schema.type === 'boolean') {
+  if (type === 'boolean') {
     return <label className="command-check"><input type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} /> {label}</label>;
   }
-  if (schema.type === 'null') return <div className="command-field"><span>{label}</span><small>Null value</small></div>;
-  const numeric = schema.type === 'number' || schema.type === 'integer';
+  if (type === 'null') return <div className="command-field"><span>{label}</span><small>Null value</small></div>;
+  const numeric = type === 'number' || type === 'integer';
   return <ScalarField schema={schema} label={label} path={path} value={value} required={required}
     description={description} numeric={numeric} onChange={onChange} onValidityChange={onValidityChange} />;
 }
@@ -398,7 +406,7 @@ export function CommandPanel(props: {
   const [selectedName, setSelectedName] = useState(firstCommand?.name ?? '');
   const command = props.catalog.commands.find((entry) => entry.name === selectedName) ?? firstCommand;
   const unsupported = useMemo(() => command ? schemaError(command.input_schema) : null, [command]);
-  const [value, setValue] = useState<JsonValue>(() => firstCommand ? initialValue(firstCommand.input_schema) : null);
+  const [value, setValue] = useState<JsonValue>(() => firstCommand && !unsupported ? initialValue(firstCommand.input_schema) : null);
   const [status, setStatus] = useState('');
   const [statusTone, setStatusTone] = useState<'idle' | 'pending' | 'warning' | 'error' | 'success' | 'indeterminate'>('idle');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -414,7 +422,7 @@ export function CommandPanel(props: {
   }, []);
   const choose = (name: string) => {
     const next = props.catalog.commands.find((entry) => entry.name === name);
-    setSelectedName(name); setValue(next ? initialValue(next.input_schema) : null); setStatus(''); setStatusTone('idle'); setFieldErrors({});
+    setSelectedName(name); setValue(next && !schemaError(next.input_schema) ? initialValue(next.input_schema) : null); setStatus(''); setStatusTone('idle'); setFieldErrors({});
   };
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -439,7 +447,7 @@ export function CommandPanel(props: {
     });
   };
   const validationError = command && !unsupported ? validateCommandValue(command.input_schema, value) : null;
-  return <form className="command-panel" aria-label="Send a typed command" onSubmit={submit}
+  return <form noValidate className="command-panel" aria-label="Send a typed command" onSubmit={submit}
     onKeyDown={(event) => { if (event.key === 'Escape') props.onClose(); }}>
     <div className="command-panel-head"><div className="command-panel-recipient"><strong>Commands for {props.recipientName}</strong>
       <span className="mono" title={props.catalog.recipient_cid}>{props.catalog.recipient_cid.slice(0, 12)}…</span></div>
@@ -451,8 +459,11 @@ export function CommandPanel(props: {
       </select></label>
       {command?.description && <p>{command.description}</p>}
       {unsupported ? <div className="banner error" role="alert">Cannot render this command safely: {unsupported}</div>
-        : command && <Field schema={command.input_schema} name="Arguments" path="Arguments" value={value}
+        : command && <Field key={command.name} schema={command.input_schema} name="Arguments" path="Arguments" value={value}
           onChange={setValue} onValidityChange={noteFieldError} />}
+      {validationError?.includes('cannot be validated safely')
+        && !Object.values(fieldErrors).some(error => error.includes('cannot be validated safely'))
+        && <div className="banner error" role="alert">{validationError}</div>}
       {command && <button className="btn primary" disabled={!!unsupported || props.busy || !!validationError || Object.keys(fieldErrors).length > 0}>Send command</button>}
       <div className={`command-status ${statusTone}`} data-state={statusTone} role="status" aria-live="polite">{status}</div>
     </>}

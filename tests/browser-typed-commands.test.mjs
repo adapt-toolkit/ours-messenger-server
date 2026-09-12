@@ -367,6 +367,7 @@ try {
   const refreshedEmpty = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
   await availabilityPage.getByRole('button', { name: 'Refresh' }).click();
   await refreshedEmpty;
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor({ state: 'hidden' });
   assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
     'refreshing an open panel hides its trigger when the canonical catalog becomes empty');
   const composerInput = availabilityPage.locator('.composer textarea');
@@ -405,7 +406,109 @@ try {
   await silentPage.getByRole('button', { name: 'Recipient commands' }).waitFor();
   await silentContext.close();
 
-  console.log(`browser-typed-commands OK — outgoing metadata contrast ${JSON.stringify(outgoingContrast)}, silent discovery, conditional open-time menu, repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility`);
+  // Exact producer schemas are captured from Cowork registration, not UI-specific substitutes.
+  const coworkFixture = JSON.parse(readFileSync(new URL('../web/tests/fixtures/cowork-command-schemas.json', import.meta.url), 'utf8'));
+  advertisedCatalog = { ...catalog, commands: [ ...coworkFixture.commands,
+    {name:'mixed.union',input_schema:{anyOf:[{type:'string'},{type:'integer'}]}},
+    {name:'mixed.other',input_schema:{anyOf:[{type:'string'},{type:'boolean'}]}},
+    {name:'object.union',input_schema:{anyOf:[{type:'object',required:['a'],properties:{a:{type:'integer'}},additionalProperties:false},{type:'object',required:['b'],properties:{b:{type:'string'}},additionalProperties:false}]}},
+    {name:'bounded.pattern',input_schema:{type:'string',pattern:'^(a+)+$'}},
+    {name:'unsupported.union',input_schema:{anyOf:[{type:'string'},{type:'object',oneOf:[]}]}}
+  ] };
+  const schemaContext = await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+  await installRoutes(schemaContext);
+  const schemaPage = await schemaContext.newPage();
+  await schemaPage.goto(`${origin}/chats/PEER`, {waitUntil:'domcontentloaded'});
+  await schemaPage.getByRole('button',{name:'Recipient commands'}).click();
+  const schemaPanel = schemaPage.getByRole('form',{name:'Send a typed command'});
+  const schemaSelect = schemaPanel.getByRole('combobox').first();
+  const schemaSend = schemaPanel.getByRole('button',{name:'Send command'});
+  await schemaSelect.selectOption('room.command.grant');
+  assert.equal(await schemaPanel.getByText(/Cannot render this command safely/).count(),0);
+  const caller = schemaPanel.getByRole('textbox',{name:/^caller_cid/});
+  const grantCommand = schemaPanel.getByRole('textbox',{name:/^command/});
+  for (const command of ['list-members','consumer.example','*','room.*']) {
+    await caller.fill('A'.repeat(64));
+    await grantCommand.fill(command);
+    assert.equal(await schemaSend.isDisabled(),false, `valid grant alternative ${command}`);
+    const before = sends.length;
+    await schemaSend.click();
+    await schemaPanel.getByText(/room.command.grant sent/).waitFor();
+    assert.equal(sends.length,before+1);
+    assert.deepEqual(sends.at(-1).arguments,{caller_cid:'A'.repeat(64),command});
+  }
+  await caller.fill('A'.repeat(64));
+  await grantCommand.fill('room.*.bad');
+  assert.equal(await schemaSend.isDisabled(),true,'invalid grant alternative blocks send');
+  const beforeInvalid = sends.length;
+  await schemaPanel.evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  assert.equal(sends.length,beforeInvalid,'submit handler independently rejects invalid union');
+
+  await schemaSelect.selectOption('start_thread');
+  const topic = schemaPanel.getByRole('textbox',{name:/^topic/});
+  const participants = schemaPanel.getByRole('textbox',{name:/^participant_ids/});
+  const idempotency = schemaPanel.getByRole('textbox',{name:/^idempotency_key/});
+  const participant = '01jd7q4h9m2v8xk3znbc5regty';
+  await participants.fill(JSON.stringify([participant]));
+  await idempotency.fill('review:1');
+  for (const invalid of [' ', '\u00a0', 'text\u200b']) {
+    await topic.fill(invalid);
+    assert.equal(await schemaSend.isDisabled(),true,'blank/format-character topic is invalid');
+  }
+  await topic.fill('😀'.repeat(120));
+  assert.equal(await topic.inputValue(),'😀'.repeat(120),'native UTF-16 maxlength does not truncate code-point-valid topic');
+  assert.equal(await schemaSend.isDisabled(),false);
+  await participants.fill(JSON.stringify([participant,participant]));
+  assert.equal(await schemaSend.isDisabled(),true,'duplicate participants are denied');
+  await participants.fill('[');
+  assert.equal(await participants.inputValue(),'[');
+  assert.equal(await schemaSend.isDisabled(),true,'malformed raw JSON blocks stale valid arguments');
+  await participants.fill(JSON.stringify([participant]));
+  await schemaSend.click();
+  await schemaPanel.getByText(/start_thread sent/).waitFor();
+  assert.deepEqual(sends.at(-1).arguments,{topic:'😀'.repeat(120),participant_ids:[participant],idempotency_key:'review:1'});
+
+  await schemaSelect.selectOption('mixed.union');
+  const union = schemaPanel.getByRole('textbox',{name:/^Arguments/});
+  for (const value of ['"hello"','42']) {
+    await union.fill(value);
+    assert.equal(await schemaSend.isDisabled(),false);
+    await schemaSend.click();
+    await schemaPanel.getByText(/mixed.union sent/).waitFor();
+    assert.equal(sends.at(-1).arguments,JSON.parse(value));
+  }
+  await union.fill('true');
+  assert.equal(await schemaSend.isDisabled(),true);
+  await union.fill('42');
+  await union.fill('[');
+  assert.equal(await schemaSend.isDisabled(),true);
+  const beforeMalformed = sends.length;
+  await schemaPanel.evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  assert.equal(sends.length,beforeMalformed,'raw parse error also blocks direct submission');
+  await union.fill('""');
+  await union.fill('[');
+  await schemaSelect.selectOption('mixed.other');
+  assert.equal(await union.inputValue(),'""','changing commands discards malformed raw source even when parsed initial values coincide');
+  assert.equal(await schemaSend.isDisabled(),false);
+  await schemaSelect.selectOption('object.union');
+  await union.fill('{"b":"second branch"}');
+  await schemaSend.click();
+  await schemaPanel.getByText(/object.union sent/).waitFor();
+  assert.deepEqual(sends.at(-1).arguments,{b:'second branch'});
+  await union.fill('{"a":"invalid"}');
+  assert.equal(await schemaSend.isDisabled(),true);
+  await union.fill('{"a":5}');
+  assert.equal(await schemaSend.isDisabled(),false,'object union recovers after invalid input');
+  await schemaSelect.selectOption('bounded.pattern');
+  await schemaPanel.getByRole('textbox',{name:/^Arguments/}).fill('a'.repeat(400)+'!');
+  await schemaPanel.getByRole('alert').getByText(/work limit exceeded/).waitFor();
+  assert.equal(await schemaSend.isDisabled(),true);
+  await schemaSelect.selectOption('unsupported.union');
+  await schemaPanel.getByRole('alert').getByText(/anyOf\[1\]: Unsupported JSON Schema keyword: oneOf/).waitFor();
+  assert.equal(await schemaSend.isDisabled(),true);
+  await schemaContext.close();
+
+  console.log(`browser-typed-commands OK — outgoing metadata contrast ${JSON.stringify(outgoingContrast)}, silent discovery, conditional open-time menu, repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility, actual Cowork grant/thread schemas, mixed/object unions and bounded hostile patterns`);
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

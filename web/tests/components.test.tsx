@@ -187,10 +187,9 @@ const unsupportedPanel = renderToStaticMarkup(<CommandPanel
 assert.match(unsupportedPanel, /role="alert"/, 'unsupported schema constructs are visibly refused');
 assert.match(unsupportedPanel, /Unsupported JSON Schema keyword: oneOf/);
 for (const [pattern, message] of [
-  ['^a+$', 'pattern must use only bounded, non-grouped expressions'],
-  ['^' + 'a?'.repeat(80) + 'a'.repeat(80) + 'b$', 'pattern must use only bounded, non-grouped expressions'],
+  ['^(?<=a)b$', 'pattern lookbehind is not supported'],
+  ['^(a)\\1$', 'pattern Backreference is not supported'],
   ['a{256}'.repeat(40) + 'b', 'pattern must be anchored with ^ and $'],
-  ['^a{1,2}a{1,2}$', 'a variable pattern repetition is supported only once, at the end'],
   ['^a{257}$', 'pattern repetition must not exceed 256'],
   ['a'.repeat(257), 'pattern exceeds 256 characters'],
 ] as const) {
@@ -212,8 +211,8 @@ assert.equal(validateCommandValue({ type: 'string', pattern: '^[A-Za-z0-9._:-]{1
 assert.equal(validateCommandValue({ type: 'string', pattern: '^[0-7][0-9a-hjkmnp-tv-z]{25}$' },
   'not-a-room-id'), 'Arguments does not match the required format', 'pattern mismatch is a clear validation error');
 assert.equal(validateCommandValue({ type: 'string', pattern: '^' + 'a?'.repeat(80) + 'a'.repeat(80) + 'b$' },
-  'a'.repeat(160)), 'Arguments cannot be validated safely: pattern must use only bounded, non-grouped expressions',
-  'hostile repeated optionals are rejected before regular-expression evaluation');
+  'a'.repeat(160)), 'Arguments does not match the required format',
+  'repeated optionals resolve safely without exponential duplicate paths');
 assert.equal(validateCommandValue({ type: 'string', pattern: 'a{256}'.repeat(40) + 'b' },
   'a'.repeat(65534)), 'Arguments cannot be validated safely: pattern must be anchored with ^ and $',
   'expensive unanchored fixed repeats are rejected before regular-expression evaluation');
