@@ -367,6 +367,7 @@ try {
   const refreshedEmpty = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
   await availabilityPage.getByRole('button', { name: 'Refresh' }).click();
   await refreshedEmpty;
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor({ state: 'hidden' });
   assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
     'refreshing an open panel hides its trigger when the canonical catalog becomes empty');
   const composerInput = availabilityPage.locator('.composer textarea');

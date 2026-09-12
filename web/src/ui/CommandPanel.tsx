@@ -461,6 +461,9 @@ export function CommandPanel(props: {
       {unsupported ? <div className="banner error" role="alert">Cannot render this command safely: {unsupported}</div>
         : command && <Field key={command.name} schema={command.input_schema} name="Arguments" path="Arguments" value={value}
           onChange={setValue} onValidityChange={noteFieldError} />}
+      {validationError?.includes('cannot be validated safely')
+        && !Object.values(fieldErrors).some(error => error.includes('cannot be validated safely'))
+        && <div className="banner error" role="alert">{validationError}</div>}
       {command && <button className="btn primary" disabled={!!unsupported || props.busy || !!validationError || Object.keys(fieldErrors).length > 0}>Send command</button>}
       <div className={`command-status ${statusTone}`} data-state={statusTone} role="status" aria-live="polite">{status}</div>
     </>}

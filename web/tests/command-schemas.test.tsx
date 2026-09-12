@@ -94,3 +94,12 @@ test('pattern work budget is shared across anyOf alternatives', () => {
   assert.match(validateCommandValue(branch,value)!,/does not match/);
   assert.match(validateCommandValue({anyOf:Array.from({length:60},()=>branch)},value)!,/work limit exceeded/);
 });
+test('aggregate object pattern budget failure is visible even when each field is valid', () => {
+  const child = {type:'string',default:'a'.repeat(100),pattern:'^a{0,100}a{0,100}$'};
+  assert.equal(validateCommandValue(child, child.default),null);
+  const schema = {type:'object',properties:{a:child,b:child,c:child,d:child}};
+  const roots: CommandDefinition['input_schema'][] = [schema, {anyOf:[schema]}, {type:'array',items:child,default:Array(4).fill(child.default)}];
+  for (const root of roots) {
+    assert.match(panel(root), /Arguments cannot be validated safely: pattern validation work limit exceeded/);
+  }
+});
