@@ -136,14 +136,33 @@ before calling the SDK. Every command requires an explicit confirmation. The
 Messenger server never registers handlers or executes recipient code locally.
 
 The generated form deliberately supports a bounded JSON Schema subset:
-`type`, `title`, `description`, `default`, `enum`, `minimum`, `maximum`,
-`minLength`, `maxLength`, `properties`, `required`, `items`, `minItems`, and
-`maxItems`; supported values are object, array, string, number, integer,
-boolean, and null. Catalogs are capped at 64 commands, schemas/arguments at 64
-KiB, JSON nesting at 12 levels, and rendered controls at 64. Unsupported
-keywords or ambiguous schemas are refused visibly rather than guessed. Names,
-documentation, values, errors, and results render only as escaped React text or
-JSON.
+`type`, `title`, `description`, `default`, `enum`, `const`, `minimum`, `maximum`,
+`minLength`, `maxLength`, `pattern`, `properties`, `required`, `items`,
+`minItems`, `maxItems`, `uniqueItems`, `additionalProperties: false`, and `anyOf`.
+Supported types are object, array, string, number, integer, boolean, and null.
+Every `anyOf` branch must be supported; validation requires at least one matching
+branch **and** all sibling constraints. Homogeneous scalar unions use ordinary
+controls; mixed or object unions use a JSON editor that preserves invalid source
+and blocks submission until corrected. `uniqueItems` compares JSON values
+structurally, and string length counts Unicode code points.
+
+Patterns use a bounded interpreter over Unicode ECMAScript syntax parsed by
+`@eslint-community/regexpp`, never native execution of the advertised expression.
+Character atoms are tested against one code point; sequences, alternatives,
+groups, forward lookahead, and repetitions share a 100,000-operation budget
+across one complete argument validation, including all `anyOf` branches and
+array items. Patterns require textual `^`/`$` anchors, at most 256 characters,
+at most 256 for explicit repetition bounds, and an AST depth of at most 24.
+Backreferences and lookbehind are unsupported. Exhausting the work budget is an
+explicit validation-safety error, distinct from a format mismatch; even a valid
+input can exceed this limit. No schema constraints are removed or weakened.
+
+Catalogs are capped at 64 commands, schemas/arguments at 64 KiB, argument JSON
+nesting at 12 levels and 2,048 values, and schema traversal at depth 6 and 64 nodes
+(including union branches). Type-specific constraints require an explicit type;
+boolean schemas and type arrays remain unsupported. Unsupported keywords or
+shapes are refused visibly. Names, documentation, values, errors, and results
+render only as escaped React text or JSON.
 
 Invocation reservations are written atomically under
 `OURS_MESSENGER_STATE_DIR` before network transmission. Repeating an identical
