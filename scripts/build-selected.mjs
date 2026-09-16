@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Build a portable consumer package from the caller's actual SDK/CLI archives.
+import { buildTimestamp } from './build-epoch.mjs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { dirname, relative, resolve, sep } from 'node:path';
@@ -37,12 +38,19 @@ try {
   const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   const sha = git(['rev-parse', 'HEAD']);
   if (buildEnv.OURS_MESSENGER_BUILD_SHA && buildEnv.OURS_MESSENGER_BUILD_SHA !== sha) throw new Error('provided build SHA does not match git HEAD');
+  const epoch = git(['show', '-s', '--format=%ct', sha]);
+  if (buildEnv.SOURCE_DATE_EPOCH !== undefined && buildTimestamp(buildEnv.SOURCE_DATE_EPOCH) !== buildTimestamp(epoch)) {
+    throw new Error('SOURCE_DATE_EPOCH must match the selected Messenger revision');
+  }
+  buildEnv.SOURCE_DATE_EPOCH = epoch;
   buildEnv.OURS_MESSENGER_BUILD_SHA = sha;
   buildEnv.OURS_MESSENGER_BUILD_CLEAN = git(['status', '--porcelain']) === '' ? '1' : '0';
 } catch (error) {
   if (!String(error.message).startsWith('Command failed: git')) throw error;
-  // Without Git, the caller must provide the existing SHA/CLEAN inputs.
+  // Without Git, the caller must provide SHA/CLEAN and the selected Messenger revision epoch.
 }
+if (buildEnv.SOURCE_DATE_EPOCH === undefined) throw new Error('Source-only selected builds require explicit SOURCE_DATE_EPOCH for the Messenger revision');
+buildTimestamp(buildEnv.SOURCE_DATE_EPOCH); // Reject invalid input before staging or dependency installation.
 const stage = await mkdtemp(resolve(tmpdir(), 'ours-selected-'));
 function npm(args, capture = false) {
   return execFileSync('npm', args, {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Focused integration check; run in the build container with actual archives.
+import { buildTimestamp } from './build-epoch.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -13,17 +14,24 @@ assert.equal(args.length, 4, 'Usage: node scripts/check-build-selected.mjs --sdk
 assert.equal(args[0], '--sdk');
 assert.equal(args[2], '--cli');
 // Capture provenance before the disposable copy removes .git, just as the
-// recipe does. Source-only callers retain the existing explicit SHA/CLEAN inputs.
+// recipe does. Source-only callers retain the explicit SHA/CLEAN and Messenger epoch inputs.
 const buildEnv = { ...process.env };
 try {
   const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   const sha = git(['rev-parse', 'HEAD']);
   if (buildEnv.OURS_MESSENGER_BUILD_SHA && buildEnv.OURS_MESSENGER_BUILD_SHA !== sha) throw new Error('provided build SHA does not match git HEAD');
+  const epoch = git(['show', '-s', '--format=%ct', sha]);
+  if (buildEnv.SOURCE_DATE_EPOCH !== undefined && buildTimestamp(buildEnv.SOURCE_DATE_EPOCH) !== buildTimestamp(epoch)) {
+    throw new Error('SOURCE_DATE_EPOCH must match the selected Messenger revision');
+  }
+  buildEnv.SOURCE_DATE_EPOCH = epoch;
   buildEnv.OURS_MESSENGER_BUILD_SHA = sha;
   buildEnv.OURS_MESSENGER_BUILD_CLEAN = git(['status', '--porcelain']) === '' ? '1' : '0';
 } catch (error) {
   if (!String(error.message).startsWith('Command failed: git')) throw error;
 }
+if (buildEnv.SOURCE_DATE_EPOCH === undefined) throw new Error('Source-only selected builds require explicit SOURCE_DATE_EPOCH for the Messenger revision');
+buildTimestamp(buildEnv.SOURCE_DATE_EPOCH); // Reject invalid input before staging or dependency installation.
 const temp = await mkdtemp(resolve(tmpdir(), 'ours-selected-check-'));
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, env: buildEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 2], maxBuffer: 16 * 1024 * 1024 });
 async function snapshot(dir) {

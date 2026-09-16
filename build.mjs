@@ -10,6 +10,7 @@
 // contains the SDK HTTP client, but never the daemon engine, MUFL packets,
 // evaluator WASM, or native ADAPT bindings.
 
+import { buildTimestamp } from './scripts/build-epoch.mjs';
 import { build } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -22,6 +23,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, 'dist');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const releaseBuild = process.env.OURS_MESSENGER_RELEASE_BUILD === '1';
+const versionTime = buildTimestamp(process.env.SOURCE_DATE_EPOCH);
 
 function command(args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -83,5 +85,5 @@ if (serviceWorker.split(serviceWorkerPlaceholder).length !== 2) {
 await writeFile(serviceWorkerPath, serviceWorker.replace(serviceWorkerPlaceholder, sha));
 await writeFile(
   resolve(dist, 'web', 'version.json'),
-  JSON.stringify({ sha, time: new Date().toISOString() }) + '\n',
+  JSON.stringify({ sha, time: versionTime }) + '\n',
 );
