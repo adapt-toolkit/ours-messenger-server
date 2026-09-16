@@ -57,6 +57,9 @@ await build({
   target: 'node20',
   format: 'esm',
   splitting: true,
+  // Bundled CommonJS dependencies still require Node builtins in every split
+  // ESM chunk. Keep this import alias distinct from bundled SDK identifiers.
+  banner: { js: 'import { createRequire as __messengerCreateRequire } from "node:module"; const require = __messengerCreateRequire(import.meta.url);' },
   define: {
     __MESSENGER_BUILD_INFO__: JSON.stringify(buildInfo),
   },

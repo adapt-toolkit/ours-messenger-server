@@ -346,26 +346,28 @@ export async function start(
   let http: Server | undefined;
   let startupProbe: StartupProbe | undefined;
   let presenceServer: { close(): Promise<void> } | undefined;
-  let closed = false;
+  const pendingHandlers = new Set<Promise<void>>();
+  let closePromise: Promise<void> | undefined;
 
-  const cleanup = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
+  const cleanup = (): Promise<void> => {
+    closePromise ??= (async () => {
+      // Stop accepting public work or startup probes first, while the runtime
+      // still exists to finish any request already inside the full API handler.
+      await presenceServer?.close().catch((error) => reportFailure(log.warn, 'presence close', error));
+      presenceServer = undefined;
+      await closeHttp(http).catch((error) => reportFailure(log.warn, 'HTTP close', error));
+      await Promise.all(pendingHandlers);
+      await startupProbe?.close().catch((error) => reportFailure(log.warn, 'startup probe close', error));
+      startupProbe = undefined;
+      await watcher?.stop().catch((error) => reportFailure(log.warn, 'watcher stop', error));
+      watcher = undefined;
+      await delivery?.stop().catch((error) => reportFailure(log.warn, 'push delivery stop', error));
+      delivery = undefined;
+      events?.close();
 
-    // Stop accepting public work or startup probes first, while the runtime
-    // still exists to finish any request already inside the full API handler.
-    await presenceServer?.close().catch((error) => reportFailure(log.warn, 'presence close', error));
-    presenceServer = undefined;
-    await closeHttp(http).catch((error) => reportFailure(log.warn, 'HTTP close', error));
-    await startupProbe?.close().catch((error) => reportFailure(log.warn, 'startup probe close', error));
-    startupProbe = undefined;
-    await watcher?.stop().catch((error) => reportFailure(log.warn, 'watcher stop', error));
-    watcher = undefined;
-    await delivery?.stop().catch((error) => reportFailure(log.warn, 'push delivery stop', error));
-    delivery = undefined;
-    events?.close();
-
-    if (runtime) await runtime.close().catch((error) => reportFailure(log.warn, 'lease release', error));
+      if (runtime) await runtime.close();
+    })();
+    return closePromise;
   };
 
   try {
@@ -438,7 +440,7 @@ export async function start(
       serving = pathname === '/api' || pathname.startsWith('/api/')
         ? serveApi(req, res, readyDeps)
         : serveApp(req, res, appDir);
-      void serving.catch((error: Error) => {
+      const settled = serving.catch((error: Error) => {
         const publicError = publicInternalError(error, 'unhandled request', log.warn);
         if (!res.headersSent) {
           res.writeHead(500, { 'content-type': 'application/json' });
@@ -447,6 +449,8 @@ export async function start(
           res.end();
         }
       });
+      pendingHandlers.add(settled);
+      void settled.finally(() => pendingHandlers.delete(settled)).catch(() => {});
     });
     presenceServer = attachPresenceServer(http, presence, {
       allowedOrigin: cfg.publicOrigin,

@@ -28,7 +28,11 @@ HTTP:
                                    WebPush/application state only
 
 Shared daemon selection:
-  Standard OURS_STATE_DIR / OURS_PORT / OURS_CONFIG / OURS_API_TOKEN variables
+  OURS_DAEMON_URL                 V1 daemon HTTP endpoint
+  OURS_DAEMON_ID                  expected daemon instance ID
+  OURS_DAEMON_CREDENTIAL_PATH     protected current API-token file
+  Set all three together. Reconnect preserves the same logical owner.
+  With none set, temporary legacy selection uses standard OURS_STATE_DIR / OURS_PORT / OURS_CONFIG / OURS_API_TOKEN variables
   select the same daemon used by other SDK applications. Start it separately
   with the ours CLI before starting messenger.
 
