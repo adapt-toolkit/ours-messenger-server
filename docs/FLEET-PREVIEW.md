@@ -2,11 +2,11 @@
 
 Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Messenger remains at `/chats`. The preview is also included in the normal production build and supports direct URL reloads through the existing SPA fallback.
 
-This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. Work, Messenger and Tasks use a desktop navigation rail. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
+This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Sessions, Messenger and Task manager, with a current-section marker. Its top button is available on desktop and mobile, including inside the conversation header. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
 
 ## Shareable first-run walkthrough
 
-Start at `/fleet/account/signup`: mock registration → preview email confirmation → five visual introduction slides → Coordinator chat. Example fields are prefilled; the test name personalizes the greeting. The greeting explains Work, Messenger, Tasks and Settings. Skip also opens Coordinator. Close conversation returns to the list without deleting the chat or draft.
+Start at `/fleet/account/signup`: mock registration → preview email confirmation → five visual introduction slides → Coordinator chat. Example fields are prefilled; the test name personalizes the greeting. The greeting explains Sessions, Messenger, Task manager and Settings. Skip also opens Coordinator. Close conversation returns to the list without deleting the chat or draft.
 
 Every full entry URL visit/reload starts a fresh, independent in-memory mock session. Separate tabs and people do not share account, messages or mutations. Only theme preference persists. Returning to a chat inside the same visit preserves messages and drafts and does not duplicate the greeting. No real registration, email or agent backend is involved.
 
@@ -24,14 +24,14 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 | --- | --- |
 | 01–04 Account | Account profile → Account; `/fleet/account/login`, Create account → confirmation → welcome |
 | 05 Empty Work | Account profile → Getting started |
-| 06 Navigation | Phone ☰ → Work / Messenger / Tasks / My profile / Settings |
+| 06 Navigation | Navigate → Sessions / Messenger / Task manager / My profile / Settings |
 | 07–11 Work and direct agents | Work → Persistent / Temporary → agent; Developer → tool output, Allow/Deny, Agent actions |
 | 12 Add | Global + → invitation, new agent, new task, task-local agent |
-| 13–20 Agent creation | + → New agent → Temporary/Persistent → template or direct role/brain/permissions → folder picker → New folder → create → agent chat |
+| 13–20 Agent creation | New chat → editable name/role/brain → More options/folder → first Send creates and locks temporary agent; + → New persistent agent for durable agents |
 | 21–22 Agent lifecycle | Agent actions → Delete temporary session / Stop persistent agent |
 | 23 Task board | Tasks; search and list filter; all seven columns |
 | 24–26 Task creation | + New task → single/pair/team/custom → provisioning or empty room → task / agent |
-| 27–31 Task detail and actions | Task card → status menu → Move / Block / Finish; Back returns to board |
+| 27–31 Task detail and actions | Task card → status menu → Move / Block / Finish; Back restores the source screen |
 | 32–33 Nested Work | Temporary → task → Room, then direct agent rows; agent context retains room unread badge |
 | 34–37 Membership and closure | Task or nested Work → + Agent; task detail → Remove; Task actions → Close / Delete with repeated task ID |
 | 38–39 Lists | Tasks → Manage lists → New list / Delete, with destination list |
@@ -50,14 +50,15 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 - `FleetApp.tsx`: preview state, section routing and Work/Tasks composition. Production entry is a lazy `/fleet` gate in `main.tsx`.
 - `components.tsx`: reusable identity rows, fields, search, buttons and page headings.
 - `pages.tsx`: profile hierarchy, configuration and account journeys.
+- `ChatSetup.tsx`, `FolderPicker.tsx`, `Navigation.tsx`: reusable draft setup, folder selection and descriptive navigation.
 - `Onboarding.tsx`: five capability slides with accessible focus, Back/Skip, and Coordinator handoff.
 - `scripts/fleet-preview-server.mjs`: isolated static origin for public mock testing.
-- `FleetDialogs.tsx`: one persistent shared modal shell whose content changes; nested folder dialog retains the host picker beneath it.
+- `FleetDialogs.tsx`: one persistent shared modal shell whose content changes; folder selection and creation stay inside the same shell.
 - `fleet.css`: selectors scoped to `.fleet-*`, with a small scoped layout seam around reused chat components. Loaded only with the preview chunk.
 
 `Conversation` adds optional `headerActions` and `timelineFooter` slots for its peer header and scrollable timeline. Fleet supplies compact contextual controls and agent activity; live Messenger omits the slot. Reply, message, voice, command, composer, and modal behavior remain unchanged. Profile browsing and its invitation steps share one dismissible shell; outside click, Escape, and Close return to the original screen and preserve its chat draft.
 
-The subsequent pen.dev refinements (simpler menus, conventional folder picker, Temporary task/chat separation, quick New chat, and More options labeling) are design-only proposals, intentionally separate from this application candidate.
+The approved pen.dev refinements are implemented: compact invitation menus, a hierarchical folder picker, separate Temporary tasks/chats, and draft-first New chat. ChatSetup keeps editable configuration local until first Send creates exactly one mock agent and locks its settings; closing/reopening retains the draft. Folder selection commits only on Select folder. Navigation dismissals, task Back and Settings Back preserve the source conversation.
 
 ## Verification
 

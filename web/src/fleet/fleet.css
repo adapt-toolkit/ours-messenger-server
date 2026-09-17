@@ -212,3 +212,51 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-account form p { margin: 0; font-size: .82rem; color: var(--text-2); }
 .fleet-account .fleet-field { margin-bottom: 0; }
 @media (max-width: 480px) { .fleet-account { padding: 20px; } .fleet-account form { padding: 20px; } }
+.fleet-menu-action { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 12px 16px; border: 1px solid var(--line-soft); border-radius: 16px; background: var(--inset); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.fleet-menu-action > span { flex: 1; font-size: .9rem; font-weight: 600; }
+.fleet-menu-action > svg:first-child { color: var(--accent); }
+.fleet-menu-action > svg:last-child { color: var(--text-2); }
+.fleet-menu-action.danger, .fleet-menu-action.danger > svg:first-child { color: var(--danger); }
+.fleet-menu-divider { height: 1px; background: var(--line-soft); margin: 4px 0; }
+.fleet-form-page > .fleet-menu-action { margin-bottom: 10px; }
+.fleet-list-group { color: var(--text-2); font-size: .75rem !important; }
+.fleet-chat-setup { width: min(100%, 480px); padding: 20px; border: 1px solid var(--line-soft); border-radius: 20px; background: var(--surface); display: grid; gap: 12px; margin: 12px 0; }
+.fleet-chat-setup h2, .fleet-chat-setup p { margin: 0; }
+.fleet-chat-setup p, .fleet-chat-setup > small { color: var(--text-2); font-size: .8rem; }
+.fleet-setup-fields { border-radius: 16px; background: var(--inset); padding: 4px; }
+.fleet-setup-fields label { display: flex; align-items: center; gap: 12px; padding: 8px 12px; }
+.fleet-setup-fields label > svg { color: var(--accent); flex-shrink: 0; }
+.fleet-setup-fields label > span { display: grid; width: 100%; font-size: .72rem; color: var(--text-2); }
+.fleet-setup-fields input, .fleet-setup-fields select { width: 100%; min-height: 36px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: .9rem; }
+.fleet-setup-fields select option { background: var(--surface); }
+.fleet-locked-setup { margin: 12px 0; color: var(--text-2); font-size: .75rem; }
+.fleet-locked-setup summary { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 44px; }
+.fleet-locked-setup dl > div { display: flex; gap: 16px; margin: 8px 0; }
+.fleet-locked-setup dd { margin: 0; overflow-wrap: anywhere; }
+.fleet-folder-picker { display: grid; gap: 16px; }
+.fleet-folder-tree, .fleet-folder-tree ul { list-style: none; margin: 0; padding: 0; }
+.fleet-folder-tree { padding: 8px; background: var(--inset); border-radius: 16px; }
+.fleet-folder-tree ul { margin-left: 20px; padding-left: 12px; border-left: 1px solid var(--line); }
+.fleet-folder-row { display: flex; min-height: 44px; align-items: center; border-radius: 10px; }
+.fleet-folder-row.selected { background: var(--surface); color: var(--accent); }
+.fleet-folder-row > button:not(.icon-btn) { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 44px; border: 0; color: inherit; background: transparent; cursor: pointer; font: inherit; text-align: left; }
+.fleet-folder-row > button span { flex: 1; overflow-wrap: anywhere; }
+.fleet-folder-row > button svg { flex-shrink: 0; }
+.fleet-folder-row small { font-size: .65rem; }
+.fleet-folder-spacer { width: 32px; flex-shrink: 0; }
+.fleet-folder-row .icon-btn { min-width: 32px; width: 32px; }
+.fleet-folder-selection { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.fleet-folder-selection small { color: var(--text-2); }
+.fleet-nav-trigger { display: grid; }
+.fleet-chat-navigation { display: none !important; }
+.fleet-navigation { display: grid; gap: 12px; }
+.fleet-navigation > p { margin: 0 0 4px; color: var(--text-2); }
+.fleet-destination { display: flex; align-items: center; gap: 14px; padding: 20px 16px; background: var(--inset); border: 1px solid var(--line-soft); border-radius: 20px; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
+.fleet-destination[aria-current=page] { border-color: var(--accent); }
+.fleet-destination-icon { display: grid; place-items: center; width: 44px; height: 44px; background: var(--surface); border-radius: 14px; color: var(--accent); flex-shrink: 0; }
+.fleet-destination > span:nth-child(2) { display: grid; gap: 6px; flex: 1; }
+.fleet-destination strong { display: flex; gap: 12px; align-items: center; font-size: 1rem; }
+.fleet-destination strong small { font-size: .6rem; color: var(--accent); font-weight: 500; }
+.fleet-destination > span > span { color: var(--text-2); font-size: .8rem; line-height: 1.5; }
+.fleet-destination > svg { flex-shrink: 0; color: var(--text-2); }
+@media (max-width: 860px) { .fleet-chat-navigation { display: grid !important; } }
