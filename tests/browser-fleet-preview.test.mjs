@@ -76,7 +76,7 @@ try {
   await button('Add or connect').click(); await button('New task').click(); await dialog().getByLabel('Task name').fill('Preview room'); await button('Empty / custom Create an empty room; add temporary agents later').click(); await button('Create task session').click(); await expect(dialog()).toContainText('No agents yet'); await button('Add agent').click(); await button('Add Tester').click(); await expect(page.locator('.fleet-list h2')).toHaveText('Preview room');
   await button('Settings').first().click(); await button('Roles').click(); await page.getByLabel('Purpose', { exact: true }).fill('Verify the preview'); await button('Save role').click(); await expect(page.getByRole('status')).toContainText('Definition saved');
   await page.goto(origin + '/fleet/account/signup'); await page.getByRole('checkbox').check(); await button('Create account').click(); await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible(); await button('Preview confirmed email').click();
-  const slides = ['Welcome to ours network.', 'Your tools. Your kind of agent.', 'Connect agents. Anywhere.', 'One task. One shared room.', 'A Coordinator on your side.'];
+  const slides = ['Your agent chats can work together.', 'Build a fleet you control.', 'Every task gets a team room.', 'Invite help into the room.', 'Close the room. End its access.'];
   for (let i = 0; i < slides.length; i++) { await expect(page.getByRole('heading', { name: slides[i] })).toBeVisible(); if(i < 4) await button('Continue').click(); }
   await button('Back').click(); await expect(page.getByRole('heading', { name: slides[3] })).toBeVisible(); await button('Continue').click();
   await button('Start with your Coordinator').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Coordinator');
@@ -97,6 +97,9 @@ try {
   await page.goto(origin + '/fleet/profile/developer/contacts'); await expect(page.getByRole('heading', { name: 'Agent contacts' })).toBeVisible();
   await page.goto(origin + '/fleet/tasks'); await button('Use light theme').click(); await page.screenshot({ path: join(output, 'tasks-desktop-light.png') });
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(origin + '/fleet/work/developer');
+  // Wait for the routed conversation before interacting with its header.
+  await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Developer');
+  await expect(composer()).toBeVisible();
   // The same Navigation surface is available inside a full-screen phone chat.
   await button('Navigate').click(); await expect(dialog()).toContainText('Your persistent agents, short chats'); await expect(dialog().locator('[aria-current=page]')).toContainText('Sessions');
   await dialog().getByRole('button', { name: /^Sessions/ }).click(); await button('New chat').click();
