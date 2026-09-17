@@ -1,6 +1,8 @@
 import { createRoot } from 'react-dom/client';
 import { MotionConfig } from 'framer-motion';
 import { App } from './App.js';
+import { lazy, Suspense } from 'react';
+const FleetApp = lazy(() => import('./fleet/FleetApp'));
 import '@fontsource-variable/jetbrains-mono';
 import './theme.css';
 import './motion.css';
@@ -16,4 +18,4 @@ stripRecoveryParam();
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');
 
-createRoot(root).render(<MotionConfig reducedMotion="user"><App /></MotionConfig>);
+createRoot(root).render(<MotionConfig reducedMotion="user">{window.location.pathname === '/fleet' || window.location.pathname.startsWith('/fleet/') ? <Suspense fallback={<div className="centered-screen">Loading preview…</div>}><FleetApp /></Suspense> : <App />}</MotionConfig>);

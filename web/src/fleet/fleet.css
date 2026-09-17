@@ -1,0 +1,140 @@
+/* Preview-only styles. Production Messenger remains on its existing cascade. */
+.fleet-app { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
+.fleet-app [hidden], .fleet-modal [hidden] { display: none !important; }
+.fleet-app button, .fleet-modal button { touch-action: manipulation; }
+.fleet-app button:active, .fleet-modal button:active { transform: scale(.98); }
+.fleet-app h1 { font-size: 1.45rem; line-height: 1.2; letter-spacing: -.025em; font-weight: 650; margin: 0 0 14px; }
+.fleet-app h2, .fleet-modal h2 { font-size: 1rem; font-weight: 600; margin: 18px 0 12px; }
+.fleet-app p, .fleet-modal p { line-height: 1.6; }
+.fleet-nav { display: flex; align-items: center; gap: 22px; min-height: 76px; padding: 12px 22px; background: var(--material-chrome); backdrop-filter: blur(var(--material-blur)); flex-shrink: 0; }
+.fleet-brand { color: var(--accent); font-size: 1.4rem; font-weight: 750; background: transparent; border: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.fleet-preview { font-size: .62rem; font-weight: 500; color: var(--text-2); padding: 3px 5px; border: 1px solid var(--line); border-radius: 5px; }
+.fleet-nav nav, .fleet-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fleet-host { color: var(--text-2); font-size: .75rem; flex: 1; }
+.fleet-nav .btn, .fleet-app .icon-btn, .fleet-modal .icon-btn { min-height: 44px; min-width: 44px; }
+.fleet-app .btn, .fleet-modal .btn { min-height: 44px; white-space: normal; }
+.fleet-mobile-menu { display: none !important; }
+.fleet-body { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+.fleet-workspace { display: grid; grid-template-columns: minmax(260px, 31%) minmax(0, 1fr); gap: 16px; height: 100%; padding: 16px; }
+.fleet-list, .fleet-conversation, .fleet-messenger-list { background: var(--surface); border-radius: 28px; min-width: 0; min-height: 0; }
+.fleet-list { padding: 20px; overflow-y: auto; }
+.fleet-list > .btn { margin: 6px 0; }
+.fleet-list h1 { font-size: 1.2rem; }
+.fleet-segment { display: flex; padding: 3px; border-radius: 12px; background: var(--inset); margin-bottom: 16px; }
+.fleet-segment button { flex: 1; min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--text-2); cursor: pointer; }
+.fleet-segment button[aria-pressed=true] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+.fleet-row { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-bottom: 1px solid var(--line-soft); padding: 14px 4px; color: var(--text); text-align: left; background: transparent; font: inherit; min-height: 64px; }
+button.fleet-row { cursor: pointer; border-radius: 8px; }
+button.fleet-row:hover { background: var(--accent-soft); }
+.fleet-avatar { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; font-size: .7rem; background: var(--inset); color: var(--text-2); }
+.fleet-row-copy { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.fleet-row strong { font-size: .85rem; font-weight: 550; overflow-wrap: anywhere; }
+.fleet-row small { color: var(--text-2); font-size: .73rem; line-height: 1.4; }
+.fleet-selected { background: var(--accent-soft); border-left: 2px solid var(--accent); }
+.fleet-selected .fleet-row { padding-left: 8px; }
+.fleet-list-note { font-size: .72rem; color: var(--text-2); margin-top: 22px; }
+.fleet-search { display: flex; align-items: center; gap: 8px; background: var(--inset); border: 1px solid var(--line-soft); padding: 0 12px; border-radius: 10px; margin: 10px 0; color: var(--text-2); }
+.fleet-search input { background: transparent; width: 100%; min-width: 0; min-height: 44px; border: 0; color: var(--text); outline-offset: 1px; }
+.fleet-conversation { display: flex; flex-direction: column; overflow: hidden; }
+.fleet-context { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 20px 0; }
+.fleet-context > div:first-child { display: grid; gap: 7px; }
+.fleet-context small { font-size: .61rem; letter-spacing: .045em; color: var(--accent); }
+.fleet-context span { color: var(--text-2); font-size: .72rem; }
+.fleet-chat-slot.signal-stage { display: flex; flex: 1; min-height: 180px; padding: 0; position: relative; overflow: hidden; }
+.fleet-chat-slot.signal-stage > .detail { position: relative; inset: auto; display: flex; flex-direction: column; width: 100%; height: 100%; flex: 1; min-width: 0; min-height: 0; border: 0; border-radius: 0; }
+.fleet-chat-slot .detail-head { flex-shrink: 0; }
+.fleet-chat-slot .messages { flex: 1; min-height: 0; }
+.fleet-chat-slot .composer-wrap { flex-shrink: 0; }
+.fleet-chat-slot .detail-back { display: none; }
+.fleet-chat-context { padding: 0 22px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fleet-chat-context .fleet-row { flex: 1; min-width: 160px; }
+.fleet-tool { background: var(--inset); border-radius: 12px; margin: 0 20px 16px; padding: 12px; font-size: .78rem; max-height: 35%; overflow: auto; }
+.fleet-tool summary { cursor: pointer; min-height: 32px; }
+.fleet-tool summary span { color: var(--text-2); margin-left: 8px; }
+.fleet-permission { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fleet-permission > span { flex: 1; }
+.fleet-permission small { display: block; color: var(--text-2); margin-top: 5px; }
+.fleet-badge { display: inline-grid; place-items: center; border-radius: 50%; min-width: 20px; height: 20px; color: var(--accent) !important; background: var(--accent-soft); font-size: .7rem; }
+.fleet-messenger-list { overflow: hidden; position: relative; }
+.fleet-messenger-list > .listcol { height: 100%; width: 100%; display: flex; border: 0; border-radius: 0; }
+.fleet-page { height: 100%; overflow: auto; padding: 24px; }
+.fleet-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+.fleet-page-heading h1 { margin: 12px 0; }
+.fleet-page-heading p { color: var(--text-2); font-size: .83rem; margin: 8px 0; }
+.fleet-board { display: grid; grid-template-columns: repeat(7, minmax(145px, 1fr)); gap: 12px; margin-top: 22px; align-items: start; }
+.fleet-column h2 { font-size: .78rem; margin-top: 0; font-weight: 550; }
+.fleet-column h2 span { color: var(--text-2); margin-left: 8px; }
+.fleet-task-card { display: flex; flex-direction: column; text-align: left; gap: 12px; width: 100%; margin: 0 0 10px; padding: 16px 12px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); color: var(--text); cursor: pointer; }
+.fleet-task-card:hover { border-color: var(--accent); }
+.fleet-task-card strong { font-size: .8rem; line-height: 1.5; font-weight: 550; }
+.fleet-task-card span, .fleet-task-card small { color: var(--text-2); font-size: .69rem; line-height: 1.5; }
+.fleet-warning { color: var(--danger) !important; }
+.fleet-task-detail { display: grid; grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); max-width: 1060px; gap: 48px; margin: 30px auto; }
+.fleet-task-detail > section, .fleet-task-detail > aside { padding: 24px; background: var(--surface); border-radius: 20px; }
+.fleet-member { display: flex; gap: 12px; align-items: center; }
+.fleet-member .fleet-row { flex: 1; }
+.fleet-form-page { max-width: 650px; margin: 0 auto; padding: 28px; height: 100%; overflow: auto; }
+.fleet-form-page form { display: grid; gap: 16px; }
+.fleet-field { display: grid; gap: 9px; width: 100%; margin: 0 0 16px; font-size: .8rem; color: var(--text-2); }
+.fleet-field input, .fleet-field textarea, .fleet-field select, .fleet-page select { width: 100%; padding: 12px; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--inset); font: inherit; }
+.fleet-page-heading select { width: auto; max-width: 200px; }
+.fleet-field textarea { min-height: 90px; resize: vertical; }
+.fleet-profile { width: min(100%, 640px); padding: 32px; margin: 40px auto; border-radius: 24px; background: var(--surface); text-align: center; }
+.fleet-profile > p { font-size: .84rem; color: var(--text-2); }
+.fleet-profile .btn { margin: 10px 4px; }
+.fleet-profile-avatar { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.fleet-profile-links { margin-top: 22px; }
+.fleet-account { padding-top: 50px; max-width: 470px; }
+.fleet-account .fleet-brand { justify-content: center; }
+.fleet-check { font-size: .8rem; display: flex; gap: 10px; align-items: center; }
+.fleet-modal { max-width: min(560px, calc(100vw - 28px)); }
+.fleet-dialog-content { display: grid; gap: 14px; }
+.fleet-dialog-content p { margin: 0; }
+.fleet-dialog-content h2 { margin: 0; }
+.fleet-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 12px; }
+.fleet-template-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fleet-template-options button { display: grid; gap: 10px; padding: 14px; color: var(--text); background: var(--inset); border: 1px solid var(--line); border-radius: 12px; text-align: left; cursor: pointer; }
+.fleet-template-options .selected { border-color: var(--accent); background: var(--accent-soft); }
+.fleet-template-options small { color: var(--text-2); line-height: 1.5; }
+.fleet-output { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--inset); border-radius: 12px; padding: 18px; font: .75rem/1.8 var(--mono); }
+.fleet-toast { position: fixed; z-index: 1000; top: 16px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); background: var(--surface); color: var(--text); border: 1px solid var(--line); box-shadow: var(--shadow-lg); padding: 14px 18px; border-radius: 14px; display: flex; align-items: center; gap: 14px; font-size: .85rem; }
+.fleet-toast button { background: transparent; color: inherit; border: 0; min-height: 32px; min-width: 32px; cursor: pointer; }
+@media (max-width: 1099px) { .fleet-workspace { grid-template-columns: 290px minmax(0, 1fr); } .fleet-board { grid-template-columns: repeat(7, 160px); } .fleet-board-page { overflow-x: auto; } .fleet-host { display: none; } .fleet-nav { justify-content: space-between; } .fleet-context { flex-wrap: wrap; } }
+@media (max-width: 860px) {
+  .fleet-nav { min-height: 64px; padding: 8px 12px; gap: 8px; }
+  .fleet-nav nav, .fleet-desktop-control { display: none !important; }
+  .fleet-mobile-menu { display: grid !important; }
+  .fleet-nav .fleet-brand { flex: 1; font-size: 1.2rem; }
+  .fleet-workspace { display: block; padding: 0; }
+  .fleet-list, .fleet-messenger-list { height: 100%; border-radius: 0; padding-bottom: env(safe-area-inset-bottom); }
+  .fleet-list { padding: 20px; }
+  .fleet-conversation { display: none; height: 100%; border-radius: 0; }
+  .fleet-show-detail .fleet-list, .fleet-show-detail .fleet-messenger-list { display: none !important; }
+  .fleet-show-detail .fleet-conversation { display: flex; }
+  .fleet-chat-slot.signal-stage > .detail { position: relative; display: flex; inset: auto; }
+  .fleet-chat-slot .detail-back { display: grid; }
+  .fleet-context { padding: 8px 12px; gap: 6px; flex-wrap: wrap; }
+  .fleet-context .btn { font-size: .7rem; padding: 6px 10px; }
+  .fleet-context small { font-size: .55rem; }
+  .fleet-tool { margin: 0 10px 10px; max-height: 28%; }
+  .fleet-permission .btn { font-size: .7rem; padding: 6px 10px; }
+  .fleet-chat-context { padding: 0 12px 8px; max-height: 150px; overflow: auto; }
+  .fleet-chat-context .fleet-row { padding: 6px; min-height: 44px; }
+  .fleet-chat-context .btn { font-size: .7rem; }
+  .fleet-page { padding: 18px; }
+  .fleet-page-heading { align-items: start; flex-direction: column; gap: 6px; }
+  .fleet-board { display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 20px; }
+  .fleet-column { min-width: 75vw; scroll-snap-align: start; }
+  .fleet-board-page { overflow-x: hidden; }
+  .fleet-task-detail { display: block; margin: 14px 0; }
+  .fleet-task-detail > aside, .fleet-task-detail > section { padding: 18px; margin-bottom: 16px; }
+  .fleet-form-page { padding: 20px; }
+  .fleet-profile { margin: 20px auto; padding: 22px; }
+  .fleet-modal { width: calc(100vw - 28px); max-height: calc(100dvh - 32px); }
+}
+@media (prefers-reduced-motion: reduce) { .fleet-app *, .fleet-modal * { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; } .fleet-app button:active, .fleet-modal button:active { transform: none; } }
+@media (prefers-reduced-transparency: reduce) { .fleet-nav, .fleet-modal { background: var(--surface); backdrop-filter: none; } }
+@media (prefers-contrast: more) { .fleet-nav, .fleet-modal, .fleet-task-card { border: 1px solid var(--text); background: var(--surface); } }
+
+.fleet-messenger-list.signal-stage { display: flex; padding: 0; }
+.fleet-messenger-list.signal-stage > .listcol { width: 100%; height: 100%; min-width: 0; }

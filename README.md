@@ -282,3 +282,10 @@ Messenger imports only the public client surface of `@ours.network/sdk`.
 Bundle-contract tests reject daemon/native/MUFL artifacts and embedded-runtime
 imports. Process signals stop the messenger HTTP application and release its
 identity lease; daemon lifecycle remains exclusively under the ours CLI.
+
+### Fleet mock product
+
+A fully local Fleet click-through preview is available at `/fleet` (for example,
+`http://127.0.0.1:5173/fleet` with `npm run dev`). Live Messenger remains at `/chats`.
+See [Fleet preview flows and verification](docs/FLEET-PREVIEW.md) for the wireframe
+coverage, mock-data boundaries, and `npm run test:fleet` browser gate.
