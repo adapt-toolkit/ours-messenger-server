@@ -30,6 +30,6 @@ export const initialMessages: Record<string, ChatMessage[]> = {
   'room-0mu1gv4ndd96af6f4': messages('room', ['Please share your findings here when your individual reviews are ready.', 'Developer: I’m checking the page structure.', 'Critic: I’ll review contrast and keyboard navigation.']),
 };
 export type Section = 'work' | 'messenger' | 'tasks';
-export type Page = { kind: 'home' } | { kind: 'task'; id: string } | { kind: 'profile'; id: string } | { kind: 'contacts'; id: string } | { kind: 'settings'; editor?: string } | { kind: 'account'; step: string } | { kind: 'empty' };
+export type Page = { kind: 'home' } | { kind: 'task'; id: string } | { kind: 'profile'; id: string } | { kind: 'contacts'; id: string; peer?: string } | { kind: 'settings'; editor?: string } | { kind: 'account'; step: string } | { kind: 'empty' };
 export type Modal = { kind: string; id?: string; actor?: string; locked?: boolean } | null;
 export const previewRoot = '/fleet';

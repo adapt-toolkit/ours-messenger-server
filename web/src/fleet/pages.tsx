@@ -1,11 +1,11 @@
+import { AgentConversations } from './AgentConversations';
 import { ConfigurationEditor } from './Configuration';
 import { useState } from 'react';
 import { Layers, UserRound, Brain, ShieldCheck, Folder, ListTodo } from 'lucide-react';
 import { Onboarding } from './Onboarding';
-import { Button, Field, PageHeader, Row, SearchField, MenuAction } from './components';
-import type { Agent, Modal, Page, Section } from './model';
-export function ProfilePage({ page, agents, go, back, openChat, openRoom, modal }: { page: Extract<Page, {kind: 'profile' | 'contacts'}>; agents: Agent[]; go: (p: Page) => void; back: () => void; openChat: (id: string, section?: Section) => void; openRoom: (id: string) => void; modal: (m: Modal) => void }) {
-  const [search, setSearch] = useState('');
+import { Button, Field, PageHeader, Row, MenuAction } from './components';
+import type { Agent, Modal, Page, Section, Task } from './model';
+export function ProfilePage({ page, agents, tasks, go, back, openChat, modal }: { page: Extract<Page, {kind: 'profile' | 'contacts'}>; agents: Agent[]; tasks: Task[]; go: (p: Page) => void; back: () => void; openChat: (id: string, section?: Section) => void; modal: (m: Modal) => void }) {
   const a = agents.find(a => a.id === page.id || `messenger-${a.id}` === page.id);
   // Messenger history IDs are presentation routes, never invitation actors.
   const id = a?.id ?? page.id;
@@ -15,14 +15,14 @@ export function ProfilePage({ page, agents, go, back, openChat, openRoom, modal 
   const person = id === 'maya' || id === 'noor';
   const name = a?.name ?? ({ human: 'Vitalii Shakhmatov', workspace: 'Vitalii · Work', personal: 'Vitalii · Personal', mira: 'Mira Chen', 'mira-workspace': 'Mira · Work', alex: 'Alex', 'alex-workspace': 'Alex · Work', 'external-developer': 'Developer', 'alex-reviewer': 'Alex’s reviewer', 'messenger-developer': 'Developer', maya: 'Maya', noor: 'Noor' }[id] ?? 'Agent');
   const visit = (id: string) => go({ kind: 'profile', id });
-  return <main className="fleet-page"><Button onClick={back}>‹ Back</Button><section className={'fleet-profile' + (page.kind === 'contacts' ? ' fleet-contacts' : '')}>
-    {page.kind === 'contacts' ? <><PageHeader title="Agent contacts" subtitle={`Contacts for ${name}`} /><SearchField value={search} onChange={setSearch} placeholder="Search contacts" />{agents.filter(x => x.id !== id && x.name.toLowerCase().includes(search.toLowerCase())).map(x => <Row key={x.id} title={x.name} subtitle="Agent" onClick={() => visit(x.id)} />)}<Row title="Launch website · Room" subtitle="Shared room" onClick={() => openRoom('0mu1gv4ndd96af6f4')} /><div className="fleet-actions"><Button primary onClick={() => modal({ kind: 'generate', actor: id, locked: true })}>Generate invite</Button><Button onClick={() => modal({ kind: 'accept', actor: id, locked: true })}>Accept invite</Button></div></> : <><div className="fleet-profile-avatar">{name.split(' ').map(x => x[0]).join('').slice(0, 2)}</div><h1>{name}</h1><p>{human || person ? 'Human identity' : workspace ? 'Workspace identity' : a ? `Your agent · ${a.state}` : 'Agent · Contact'}</p><p>{human ? 'Building tools for people and their agents.' : !workspace && !person ? 'Builds and reviews the website with your task team.' : ''}</p>{!human && !person && <small className="muted">{workspace ? 'Workspace' : 'Identity'} · {foreign ? 'C6B9…204E' : '8A42…71C9'}</small>}
+  if (page.kind === 'contacts') return <AgentConversations key={id} agent={a} agents={agents} tasks={tasks} peer={page.peer} go={go} modal={modal} />;
+  return <main className="fleet-page"><Button onClick={back}>‹ Back</Button><section className="fleet-profile">
+    <div className="fleet-profile-avatar">{name.split(' ').map(x => x[0]).join('').slice(0, 2)}</div><h1>{name}</h1><p>{human || person ? 'Human identity' : workspace ? 'Workspace identity' : a ? `Your agent · ${a.state}` : 'Agent · Contact'}</p><p>{human ? 'Building tools for people and their agents.' : !workspace && !person ? 'Builds and reviews the website with your task team.' : ''}</p>{!human && !person && <small className="muted">{workspace ? 'Workspace' : 'Identity'} · {foreign ? 'C6B9…204E' : '8A42…71C9'}</small>}
     {human && <><h2>Workspace identities</h2><Row title={owner.workspaceName} subtitle="Workspace identity" onClick={() => visit(owner.workspaceId)} />{!foreign && <Row title="Vitalii · Personal" subtitle="Workspace identity" onClick={() => visit('personal')} />}</>}
     {workspace && <><Row title={owner.name} subtitle="Human identity" onClick={() => visit(owner.id)} /><h2>Known agents</h2>{(foreign ? [{ id: owner.agentId, name: owner.agentName }] : agents).map(x => <Row key={x.id} title={x.name} subtitle="Agent" onClick={() => visit(x.id)} />)}{!foreign && <Row title="Alex’s reviewer" subtitle="Agent · Contact" onClick={() => visit('alex-reviewer')} />}</>}
-    {!human && !workspace && !person && <><section className="fleet-ownership"><h2>Who this agent belongs to</h2><ol aria-label="Agent ownership"><li><Row title={owner.name} subtitle="Owner" onClick={() => visit(owner.id)} /></li><li><Row title={owner.workspaceName} subtitle="Workspace" onClick={() => visit(owner.workspaceId)} /></li><li><Row title={name} subtitle="Agent in this workspace" /></li></ol></section><Button primary onClick={() => openChat(a?.id ?? id, a ? 'work' : 'messenger')}>{a ? 'Open agent chat' : 'Message agent'}</Button>{a && <Button onClick={() => go({ kind: 'contacts', id })}>Contacts & invitations</Button>}</>}
+    {!human && !workspace && !person && <><section className="fleet-ownership"><h2>Who this agent belongs to</h2><ol aria-label="Agent ownership"><li><Row title={owner.name} subtitle="Owner" onClick={() => visit(owner.id)} /></li><li><Row title={owner.workspaceName} subtitle="Workspace" onClick={() => visit(owner.workspaceId)} /></li><li><Row title={name} subtitle="Agent in this workspace" /></li></ol></section><Button primary onClick={() => openChat(a?.id ?? id, a ? 'work' : 'messenger')}>{a ? 'Open agent chat' : 'Message agent'}</Button>{a && <Button onClick={() => go({ kind: 'contacts', id })}>Contacts & conversations</Button>}</>}
     {person && <Button primary onClick={() => openChat(id, 'messenger')}>Message {name}</Button>}
     {id === 'human' && <div className="fleet-profile-links"><Button onClick={() => go({ kind: 'account', step: 'login' })}>Account</Button><Button onClick={() => go({ kind: 'empty' })}>Getting started</Button></div>}
-    </>}
   </section></main>;
 }
 const definitions: Record<string, { title: string; intro: string; fields: [string, string][] }> = {

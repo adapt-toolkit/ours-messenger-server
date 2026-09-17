@@ -289,3 +289,5 @@ A fully local Fleet click-through preview is available at `/fleet` (for example,
 `http://127.0.0.1:5173/fleet` with `npm run dev`). Live Messenger remains at `/chats`.
 See [Fleet preview flows and verification](docs/FLEET-PREVIEW.md) for the wireframe
 coverage, mock-data boundaries, and `npm run test:fleet` browser gate.
+
+The [Fleet backend API gap inventory](docs/FLEET-BACKEND-API-GAPS.md) maps the mock flows to Fleet, Messenger Server and Cowork APIs, including proposed agent-scoped Fleet invitation endpoints.

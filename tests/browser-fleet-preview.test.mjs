@@ -59,7 +59,7 @@ try {
   await button('Allow once').click(); await expect(page.getByText('Test command · Allowed once · Complete')).toBeVisible();
   await page.locator('.fleet-tool summary').click(); await button('Open full output').click(); await expect(dialog()).toContainText('3 files inspected'); await close();
   await button('Agent actions').click(); await button('Profile').click(); await expect(page.getByRole('heading', { name: 'Developer', exact: true })).toBeVisible();
-  await button('Contacts & invitations').click(); await expect(button('‹ Back')).toHaveCount(1); await button('‹ Back').click(); await expect(page.getByRole('heading', { name: 'Developer', exact: true })).toBeVisible(); await button('Contacts & invitations').click(); await button('Generate invite').click(); await expect(dialog().getByLabel('Invitation code')).toHaveCount(0);
+  await button('Contacts & conversations').click(); await expect(button('‹ Developer profile')).toHaveCount(1); await button('‹ Developer profile').click(); await expect(page.getByRole('heading', { name: 'Developer', exact: true })).toBeVisible(); await button('Contacts & conversations').click(); await button('Invite contact to Developer').click(); await expect(dialog().getByLabel('Invitation code')).toHaveCount(0);
   await dialog().getByLabel('Invitation type').selectOption('Public'); await expect(dialog().getByLabel('Invitation code')).toHaveCount(0);
   await dialog().getByRole('button', { name: 'Generate an invite', exact: true }).click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/developer/); await close();
   await button('Accept invite').click(); await expect(dialog()).toContainText('Developer'); await expect(button('Accept on behalf of an agent')).toHaveCount(0); await close();
@@ -93,10 +93,10 @@ try {
   await page.goto(origin + '/fleet/work/room-0mu1gv4ndd96af6f4'); await expect(page.locator('.fleet-list h2')).toHaveText('Launch website'); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Room');
   await page.goto(origin + '/fleet/messenger/messenger-critic'); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Critic'); await button('Open contact details for Critic').click(); await expect(page.getByRole('heading', { name: 'Critic', exact: true })).toBeVisible(); await expect(button('Open agent chat')).toBeVisible();
   // A Messenger history ID must never replace the canonical invitation actor.
-  await button('Contacts & invitations').click(); await button('Accept invite').click(); await expect(dialog().getByRole('button', { name: 'Accept as Critic', exact: true })).toBeVisible(); await expect(button('Accept on behalf of an agent')).toHaveCount(0); await close();
-  await button('Generate invite').click(); await expect(dialog()).toContainText('Critic'); await dialog().getByRole('button', { name: 'Generate an invite', exact: true }).click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/critic\//); await close();
+  await button('Contacts & conversations').click(); await button('Accept invite').click(); await expect(dialog().getByRole('button', { name: 'Accept as Critic', exact: true })).toBeVisible(); await expect(button('Accept on behalf of an agent')).toHaveCount(0); await close();
+  await button('Invite contact to Critic').click(); await expect(dialog()).toContainText('Critic'); await dialog().getByRole('button', { name: 'Generate an invite', exact: true }).click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/critic\//); await close();
   await page.goto(origin + '/fleet/profile/messenger-critic/contacts'); await button('Accept invite').click(); await expect(dialog().getByRole('button', { name: 'Accept as Critic', exact: true })).toBeVisible(); await close();
-  await page.goto(origin + '/fleet/profile/developer/contacts'); await expect(page.getByRole('heading', { name: 'Agent contacts' })).toBeVisible();
+  await page.goto(origin + '/fleet/profile/developer/contacts'); await expect(page.getByRole('heading', { name: 'Contacts & conversations' })).toBeVisible();
   await page.goto(origin + '/fleet/profile/alex-reviewer'); await expect(page.getByRole('list', { name: 'Agent ownership' })).toContainText('Alex · Work'); await expect(page.getByRole('list', { name: 'Agent ownership' })).not.toContainText('Vitalii'); await button('Alex · Work Workspace').click(); await button('Alex Human identity').click(); await expect(page.getByRole('heading', { name: 'Alex', exact: true })).toBeVisible(); await close();
   await page.goto(origin + '/fleet/tasks'); await button('Use light theme').click(); await page.screenshot({ path: join(output, 'tasks-desktop-light.png') });
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(origin + '/fleet/work/developer');
@@ -142,7 +142,7 @@ try {
     else await button('Close Profile').click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(composer()).toHaveValue('Mobile draft'); await expect(trigger).toBeFocused();
-    await trigger.click(); await button('Contacts & invitations').click(); await button('Accept invite').click();
+    await trigger.click(); await button('Contacts & conversations').click(); await button('Accept invite').click();
     await expect(button('Accept as Developer')).toBeVisible();
     if (dismissal === 'outside') await page.locator('.modal-backdrop').click({ position: { x: 2, y: 2 } });
     else if (dismissal === 'Escape') await page.keyboard.press('Escape');
