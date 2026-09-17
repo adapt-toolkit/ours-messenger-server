@@ -148,3 +148,46 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-profile-modal .fleet-profile { margin: 0; padding: 12px; width: 100%; background: transparent; }
 .fleet-profile-modal .fleet-profile h1 { font-size: 1.45rem; letter-spacing: -.025em; line-height: 1.25; }
 .fleet-profile-modal .fleet-profile h2 { font-size: 1rem; margin: 18px 0 12px; }
+
+.fleet-no-conversation { margin: auto; padding: 32px; max-width: 440px; text-align: center; color: var(--text-2); }
+.fleet-intro { height: 100%; overflow: auto; padding: clamp(20px, 4vw, 44px); display: flex; flex-direction: column; gap: 28px; }
+.fleet-intro-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.fleet-intro-header > .btn { background: transparent; border-color: transparent; color: var(--text-2); }
+.fleet-intro-main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: clamp(24px, 5vw, 64px); align-items: center; max-width: 1060px; width: 100%; margin: auto; }
+.fleet-intro-scene { min-height: 390px; padding: clamp(20px, 3vw, 32px); border-radius: 28px; background: var(--inset); display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+.fleet-intro-scene small { color: var(--text-2); font-size: .75rem; line-height: 1.5; }
+.fleet-intro-scene svg { color: var(--accent); flex-shrink: 0; }
+.fleet-intro-person { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--surface); border-radius: 14px; }
+.fleet-intro-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--inset); flex-shrink: 0; }
+.fleet-intro-person > div { display: grid; gap: 4px; }
+.fleet-intro-person strong { font-size: .94rem; }
+.fleet-intro-pair { display: flex; gap: 8px; }
+.fleet-intro-pair > * { flex: 1; min-width: 0; }
+.fleet-intro-card { display: grid; gap: 10px; padding: 16px; background: var(--surface); border-radius: 16px; font-size: .94rem; line-height: 1.5; }
+.fleet-intro-chip { background: var(--surface); border-radius: 10px; padding: 10px; font-size: .8rem; text-align: center; }
+.fleet-intro-link { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: .85rem; }
+.fleet-intro-mission { justify-content: space-between; font-size: 1.1rem; }
+.fleet-intro-outcome { display: flex; align-items: center; gap: 8px; font-size: .75rem; color: var(--text-2); }
+.fleet-intro-scene .fleet-intro-accent { color: var(--accent); }
+.fleet-intro-copy h1 { font-size: clamp(2rem, 3.8vw, 3rem); line-height: 1.08; letter-spacing: -.035em; text-wrap: balance; margin: 18px 0; }
+.fleet-intro-copy h1:focus { outline: none; }
+.fleet-intro-copy > p { color: var(--text-2); font-size: 1.05rem; line-height: 1.6; margin: 0; }
+.fleet-intro-copy .fleet-intro-eyebrow { color: var(--accent); text-transform: uppercase; font-size: .64rem; letter-spacing: .06em; font-weight: 650; }
+.fleet-intro-footer { flex-shrink: 0; display: grid; gap: 18px; width: min(100%, 440px); margin: 0 auto; }
+.fleet-intro-progress { display: flex; justify-content: center; gap: 6px; }
+.fleet-intro-progress span { width: 6px; height: 6px; border-radius: 6px; background: var(--line); }
+.fleet-intro-progress .current { width: 24px; background: var(--accent); }
+.fleet-intro-buttons { display: flex; gap: 12px; }
+.fleet-intro-buttons .btn { min-height: 48px; }
+.fleet-intro-buttons .primary { flex: 1; }
+@media (max-width: 700px) {
+  .fleet-intro { gap: 20px; padding: 20px 24px max(20px, env(safe-area-inset-bottom)); }
+  .fleet-intro-main { display: flex; flex-direction: column; justify-content: flex-start; gap: 24px; }
+  .fleet-intro-scene { width: 100%; min-height: 280px; padding: 20px; gap: 12px; }
+  .fleet-intro-copy { width: 100%; }
+  .fleet-intro-copy h1 { font-size: 2rem; margin: 12px 0; }
+  .fleet-intro-copy > p { font-size: .94rem; }
+  .fleet-intro-person strong { font-size: .85rem; }
+  .fleet-intro-card { padding: 12px; font-size: .85rem; }
+  .fleet-intro-link { gap: 8px; font-size: .8rem; }
+}

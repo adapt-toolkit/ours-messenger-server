@@ -4,6 +4,14 @@ Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Me
 
 This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. Work, Messenger and Tasks have desktop navigation; phones use the navigation button and list → detail navigation. Light/dark themes and reduced motion/transparency are supported.
 
+## Shareable first-run walkthrough
+
+Start at `/fleet/account/signup`: mock registration → preview email confirmation → five visual introduction slides → Coordinator chat. Example fields are prefilled; the test name personalizes the greeting. The greeting explains Work, Messenger, Tasks and Settings. Skip also opens Coordinator. Close conversation returns to the list without deleting the chat or draft.
+
+Every full entry URL visit/reload starts a fresh, independent in-memory mock session. Separate tabs and people do not share account, messages or mutations. Only theme preference persists. Returning to a chat inside the same visit preserves messages and drafts and does not duplicate the greeting. No real registration, email or agent backend is involved.
+
+For public testing, build then run `node scripts/fleet-preview-server.mjs` (loopback port 5180; override with `FLEET_PREVIEW_PORT`). Run `cloudflared tunnel --url http://127.0.0.1:5180 --no-autoupdate` and share its HTTPS URL with `/fleet/account/signup`. The static origin permits only `/fleet` routes and built assets; `/api`, `/chats`, service workers and non-read methods return 404. The temporary tunnel lasts while its process and this host stay running.
+
 ## Data and boundaries
 
 The `Preview` badge identifies the local demonstration. Seed data includes Coordinator, Research assistant, Developer, Critic, Writer, tasks in all seven board columns, people, external agents and a shared room. No preview flow calls live REST APIs, creates Fleet identities, executes commands, or generates real invitations. Invite codes use `ours://preview-invite/`. Account confirmation and room admission have explicit preview continuation buttons.
@@ -15,7 +23,7 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 | Wireframe steps | Reachable path |
 | --- | --- |
 | 01–04 Account | Account profile → Account; `/fleet/account/login`, Create account → confirmation → welcome |
-| 05 Empty Work | Account profile → Getting started, or welcome → Continue to app |
+| 05 Empty Work | Account profile → Getting started |
 | 06 Navigation | Phone ☰ → Work / Messenger / Tasks / My profile / Settings |
 | 07–11 Work and direct agents | Work → Persistent / Temporary → agent; Developer → tool output, Allow/Deny, Agent actions |
 | 12 Add | Global + → invitation, new agent, new task, task-local agent |
@@ -42,6 +50,8 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 - `FleetApp.tsx`: preview state, section routing and Work/Tasks composition. Production entry is a lazy `/fleet` gate in `main.tsx`.
 - `components.tsx`: reusable identity rows, fields, search, buttons and page headings.
 - `pages.tsx`: profile hierarchy, configuration and account journeys.
+- `Onboarding.tsx`: five capability slides with accessible focus, Back/Skip, and Coordinator handoff.
+- `scripts/fleet-preview-server.mjs`: isolated static origin for public mock testing.
 - `FleetDialogs.tsx`: one persistent shared modal shell whose content changes; nested folder dialog retains the host picker beneath it.
 - `fleet.css`: selectors scoped to `.fleet-*`, with a small scoped layout seam around reused chat components. Loaded only with the preview chunk.
 
@@ -51,6 +61,6 @@ The subsequent pen.dev refinements (simpler menus, conventional folder picker, T
 
 ## Verification
 
-Run `npm run build && npm run test:fleet`. The browser gate verifies independent drafts, section navigation, explicit invite generation, locked actors, invite text retention, modal focus return, task moves, deletion confirmation, agent/task/folder creation, account/configuration, room and identity deep links, mobile composer bounds and zero live API requests. Screenshots are written to `/tmp/ours-fleet-evidence`.
+Run `npm run build && npm run test:fleet`. The browser gate verifies independent drafts, section navigation, explicit invite generation, locked actors, invite text retention, modal focus return, task moves, deletion confirmation, agent/task/folder creation, account/configuration, room and identity deep links, mobile composer bounds, first-run onboarding, personalized single greeting, close/reopen retention, fresh entry visits, tab isolation, static-origin rejection checks and zero live API requests. Screenshots are written to `/tmp/ours-fleet-evidence`.
 
 Additional production preservation gates: `npm run test:mobile`, `npm run test:swipe`, `node tests/browser-composer-focus.test.mjs`, `node tests/browser-pointer-touch.test.mjs`, `node tests/browser-accessibility-controls.test.mjs`, and `node tests/browser-room-envelope-matrix.test.mjs`.

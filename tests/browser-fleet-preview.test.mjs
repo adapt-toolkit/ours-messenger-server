@@ -1,18 +1,17 @@
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
-import { existsSync, readFileSync, statSync, mkdirSync } from 'node:fs';
-import { extname, join, resolve } from 'node:path';
+import { createFleetPreviewServer } from '../scripts/fleet-preview-server.mjs';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { chromium, expect } from '@playwright/test';
-const root = resolve('dist/web');
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
-const server = createServer((req, res) => { const candidate = resolve(root, '.' + new URL(req.url, 'http://localhost').pathname); const file = candidate.startsWith(root + '/') && existsSync(candidate) && statSync(candidate).isFile() ? candidate : join(root, 'index.html'); res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' }); res.end(readFileSync(file)); });
+const server = createFleetPreviewServer();
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const origin = process.env.FLEET_PREVIEW_ORIGIN ?? `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
 const errors = []; const apiCalls = [];
 const output = '/tmp/ours-fleet-evidence'; mkdirSync(output, { recursive: true });
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
   page.on('pageerror', e => errors.push(e.message)); page.on('request', req => { if(new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url()); });
   const button = name => page.getByRole('button', { name, exact: true });
   const dialog = () => page.getByRole('dialog').last();
@@ -51,7 +50,19 @@ try {
   await button('Use assets folder').click(); await expect(dialog().getByLabel('Agent name')).toHaveValue('Preview Tester'); await button('Create temporary agent').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Preview Tester');
   await button('Add or connect').click(); await button('New task single · pair · team · custom').click(); await dialog().getByLabel('Task name').fill('Preview room'); await button('Empty / custom Create an empty room; add temporary agents later').click(); await button('Create task session').click(); await expect(dialog()).toContainText('No agents yet'); await button('Add agent').click(); await button('Add Tester').click(); await expect(page.locator('.fleet-list h2')).toHaveText('Preview room');
   await button('Settings').first().click(); await button('Roles Purpose, instructions and responsibilities').click(); await page.getByLabel('Purpose', { exact: true }).fill('Verify the preview'); await button('Save role').click(); await expect(page.getByRole('status')).toContainText('Definition saved');
-  await page.goto(origin + '/fleet/account/signup'); await page.getByRole('checkbox').check(); await button('Create account').click(); await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible(); await button('Preview confirmed email').click(); await button('Continue to app').click(); await expect(page.getByRole('heading', { name: 'Your first agent session' })).toBeVisible();
+  await page.goto(origin + '/fleet/account/signup'); await page.getByRole('checkbox').check(); await button('Create account').click(); await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible(); await button('Preview confirmed email').click();
+  const slides = ['Welcome to ours network.', 'Your tools. Your kind of agent.', 'Connect agents. Anywhere.', 'One task. One shared room.', 'A Coordinator on your side.'];
+  for (let i = 0; i < slides.length; i++) { await expect(page.getByRole('heading', { name: slides[i] })).toBeVisible(); if(i < 4) await button('Continue').click(); }
+  await button('Back').click(); await expect(page.getByRole('heading', { name: slides[3] })).toBeVisible(); await button('Continue').click();
+  await button('Start with your Coordinator').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Coordinator');
+  const greeting = page.locator('.fleet-chat-slot:not([hidden]) .messages'); await expect(greeting).toContainText('Hi Vitalii');
+  for(const area of ['Work', 'Messenger', 'Tasks', 'Settings']) await expect(greeting).toContainText(area);
+  await composer().fill('My first draft'); await button('Close conversation').click(); await expect(button('Coordinator Persistent · Ready')).toBeVisible();
+  await button('Coordinator Persistent · Ready').click(); await expect(composer()).toHaveValue('My first draft');
+  await expect(greeting.getByText(/Hi Vitalii/)).toHaveCount(1);
+  await button('My profile').click(); await button('Account').click(); await button('Log in').click(); await button('Skip').click();
+  await expect(greeting.getByText(/Hi Vitalii/)).toHaveCount(1); await expect(composer()).toHaveValue('My first draft');
+
   await page.goto(origin + '/fleet/work/room-0mu1gv4ndd96af6f4'); await expect(page.locator('.fleet-list h2')).toHaveText('Launch website'); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Room');
   await page.goto(origin + '/fleet/messenger/messenger-critic'); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Critic'); await button('Open contact details for Critic').click(); await expect(page.getByRole('heading', { name: 'Critic', exact: true })).toBeVisible(); await expect(button('Open agent chat')).toBeVisible();
   // A Messenger history ID must never replace the canonical invitation actor.
@@ -90,6 +101,32 @@ try {
   await button('Use dark theme').click(); await page.screenshot({ path: join(output, 'agent-mobile-dark.png') });
   await button('Navigate').click(); await button('Messenger People and connected identities').click(); await expect(page.locator('.fleet-messenger-list')).toBeVisible(); await page.getByRole('button', { name: /Maya/ }).first().click(); await expect(composer()).toBeVisible(); await composer().fill('Hello Maya'); await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hello Maya');
   await page.screenshot({ path: join(output, 'messenger-mobile-dark.png') });
+  // Each full entry URL visit starts a fresh mock, even in the same browser.
+  await page.goto(origin + '/fleet/account/signup'); await page.getByLabel('Your name', { exact: true }).fill('Alex');
+  await page.getByRole('checkbox').check(); await button('Create account').click(); await button('Preview confirmed email').click();
+  for(let i = 0; i < 5; i++) {
+    await expect(page.getByRole('heading', { name: slides[i] })).toBeVisible();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no mobile horizontal overflow');
+    await page.screenshot({ path: join(output, `onboarding-mobile-${i + 1}.png`) });
+    if(i < 4) await button('Continue').click();
+  }
+  await button('Start with your Coordinator').click(); await expect(greeting).toContainText('Hi Alex!');
+  await composer().fill('A private test message'); await button('Send').click(); await composer().fill('Keep this draft');
+  await button('Close conversation').click(); await expect(button('Coordinator Persistent · Ready')).toBeVisible();
+  await button('Coordinator Persistent · Ready').click(); await expect(greeting).toContainText('A private test message'); await expect(composer()).toHaveValue('Keep this draft');
+  const secondTab = await page.context().newPage();
+  await secondTab.goto(origin + '/fleet/account/signup'); await secondTab.getByRole('checkbox').check();
+  await secondTab.getByRole('button', { name: 'Create account', exact: true }).click(); await secondTab.getByRole('button', { name: 'Preview confirmed email', exact: true }).click(); await secondTab.getByRole('button', { name: 'Skip', exact: true }).click();
+  await expect(secondTab.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hi Vitalii!');
+  await expect(secondTab.locator('.fleet-chat-slot:not([hidden]) .messages')).not.toContainText('A private test message');
+  await expect(composer()).toHaveValue('Keep this draft'); await secondTab.close();
+  await page.goto(origin + '/fleet/account/signup'); await expect(page.getByLabel('Your name', { exact: true })).toHaveValue('Vitalii');
+  await page.getByRole('checkbox').check(); await button('Create account').click(); await button('Preview confirmed email').click(); await button('Skip').click();
+  await expect(greeting).toContainText('Hi Vitalii!'); await expect(greeting).not.toContainText('A private test message'); await expect(composer()).toHaveValue('');
+  if(!process.env.FLEET_PREVIEW_ORIGIN || process.env.FLEET_VERIFY_ISOLATION) {
+    for(const route of ['/api/health', '/api/contacts', '/chats', '/sw.js', '/assets/../package.json']) assert.equal((await page.request.get(origin + route)).status(), 404, `isolated preview rejects ${route}`);
+    assert.equal((await page.request.post(origin + '/fleet/account/signup', { data: {} })).status(), 404);
+  }
   assert.deepEqual(errors, [], 'no browser runtime errors'); assert.deepEqual(apiCalls, [], 'mock flows never call live APIs');
   console.log('browser-fleet-preview OK — drafts, navigation, profiles, invite actors, explicit generation, local mutations, mobile layouts, deep links, account/settings and API isolation');
 } finally { await browser.close(); await new Promise(r => server.close(r)); }
