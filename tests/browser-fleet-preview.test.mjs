@@ -21,27 +21,29 @@ try {
   await page.goto(origin + '/fleet');
   await expect(button('Coordinator Persistent · Ready')).toBeVisible();
   await expect(page.locator('.fleet-context')).toHaveCount(0);
+  await expect(page.locator('.fleet-list').getByRole('heading', { name: 'Sessions', exact: true })).toHaveCount(0);
+  await expect(page.locator('.fleet-list').getByRole('button', { name: /New chat/ })).toHaveCount(0);
   // A new chat is only a draft until its first message, with one immutable session thereafter.
-  await button('New chat').click(); await page.getByLabel('Agent name', { exact: true }).fill('Draft Researcher');
+  await button('Add or connect').click(); await button('New chat').click(); await page.getByLabel('Agent name', { exact: true }).fill('Draft Researcher');
   await page.getByLabel('Role', { exact: true }).selectOption('Researcher'); await page.getByLabel('Brain', { exact: true }).selectOption('Claude Code');
   await expect(button('Agent actions')).toHaveCount(0);
   await composer().fill('Find useful research'); await button('More options').click(); await button('Folder · website').click();
   await dialog().getByRole('button', { name: 'research Read only', exact: true }).click(); await button('Cancel').click();
   await expect(button('Folder · website')).toBeVisible(); await button('Done').click();
   await button('Close conversation').click(); await expect(page.locator('.fleet-list').getByRole('button', { name: /Draft Researcher/ })).toHaveCount(0);
-  await button('New chat').click(); await expect(composer()).toHaveValue('Find useful research'); await expect(page.getByLabel('Agent name', { exact: true })).toHaveValue('Draft Researcher');
+  await button('Add or connect').click(); await button('New chat').click(); await expect(composer()).toHaveValue('Find useful research'); await expect(page.getByLabel('Agent name', { exact: true })).toHaveValue('Draft Researcher');
   await button('Send').evaluate(button => { button.click(); button.click(); }); await expect(button('Draft Researcher Temporary · Ready')).toHaveCount(1);
   await expect(page.getByLabel('Agent name', { exact: true })).toHaveCount(0); await expect(button('More options')).toHaveCount(0);
   await page.locator('.fleet-chat-slot:not([hidden]) .fleet-locked-setup summary').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .fleet-locked-setup')).toContainText('Claude Code');
   await composer().fill('Continue'); await button('Send').click(); await expect(button('Draft Researcher Temporary · Ready')).toHaveCount(1);
   await button('Agent actions').click(); await button('Generate invite').click(); await button('Generate an invite').click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/agent-/); await close();
-  await button('Persistent').click(); await button('Coordinator Persistent · Ready').click();
+  await page.getByRole('tab', { name: 'Persistent', exact: true }).click(); await button('Coordinator Persistent · Ready').click();
   await composer().fill('Coordinator draft');
   await button('Research assistant Persistent · Idle').click(); await composer().fill('Research draft');
   await button('Coordinator Persistent · Ready').click(); await expect(composer()).toHaveValue('Coordinator draft');
   await navigate('Messenger'); await composer().fill('Maya draft'); await navigate('Sessions'); await expect(composer()).toHaveValue('Coordinator draft');
-  await button('Temporary').click(); await button('Launch website Task · 2 agents · Active').click();
-  await expect(button('Room Shared chat · 2 unread 2')).toBeVisible();
+  await page.getByRole('tab', { name: 'Temporary', exact: true }).click(); await button('Launch website Task · 2 agents · Active').click();
+  await expect(button('Room Shared chat 2')).toBeVisible();
   await button('Developer Direct agent chat · Working').click();
   const chatSpace = async () => {
     const head = await page.locator('.fleet-chat-slot:not([hidden]) .detail-head').boundingBox();
@@ -106,11 +108,11 @@ try {
   await button('Back to conversations').click();
   await expect(button('Navigate').locator('svg.fleet-launcher-icon rect')).toHaveCount(9);
   await button('Navigate').click(); await expect(dialog()).toContainText('Your persistent agents, short chats'); await expect(dialog().locator('[aria-current=page]')).toContainText('Sessions');
-  await dialog().getByRole('button', { name: /^Sessions/ }).click(); await button('New chat').click();
+  await dialog().getByRole('button', { name: /^Sessions/ }).click(); await button('Add or connect').click(); await button('New chat').click();
   assert.ok((await page.locator('.fleet-chat-slot:not([hidden]) .fleet-chat-setup').boundingBox()).height <= 240, 'phone setup stays compact beside the composer');
 
   await page.getByLabel('Agent name', { exact: true }).fill('Mobile Guide'); await composer().fill('Keep this mobile draft');
-  await button('Back to conversations').click(); await button('Navigate').click(); await close(); await button('New chat').click(); await expect(composer()).toHaveValue('Keep this mobile draft');
+  await button('Back to conversations').click(); await button('Navigate').click(); await close(); await button('Add or connect').click(); await button('New chat').click(); await expect(composer()).toHaveValue('Keep this mobile draft');
   await button('More options').click(); await button('Folder · website').click(); await button('shared').click(); await button('Cancel').click(); await expect(button('Folder · website')).toBeVisible(); await button('Done').click();
   await page.screenshot({ path: join(output, 'new-chat-mobile.png') });
   await page.setViewportSize({ width: 320, height: 568 });
@@ -153,7 +155,7 @@ try {
   await button('Open full output').click(); await close(); await expect(composer()).toHaveValue('Mobile draft');
   const expandedBox = await composer().boundingBox(); assert.ok(expandedBox.y + expandedBox.height <= 844, 'expanded activity does not move the mobile composer out of view');
   await button('Back to conversations').click(); await button('Use dark theme').click(); await button('Developer Direct agent chat · Working').click(); await expect(page.locator('.fleet-nav')).toBeHidden(); await page.screenshot({ path: join(output, 'agent-mobile-dark.png') });
-  await button('Back to conversations').click(); await navigate('Messenger'); await expect(page.locator('.fleet-messenger-list')).toBeVisible(); await page.getByRole('button', { name: /Maya/ }).first().click(); await expect(composer()).toBeVisible(); await composer().fill('Hello Maya'); await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hello Maya');
+  await button('Back to conversations').click(); await navigate('Messenger'); await expect(page.locator('div.fleet-messenger-list')).toBeVisible(); await page.getByRole('button', { name: /Maya/ }).first().click(); await expect(composer()).toBeVisible(); await composer().fill('Hello Maya'); await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hello Maya');
   await page.screenshot({ path: join(output, 'messenger-mobile-dark.png') });
   // Each full entry URL visit starts a fresh mock, even in the same browser.
   await page.goto(origin + '/fleet/account/signup'); await page.getByLabel('Your name', { exact: true }).fill('Alex');

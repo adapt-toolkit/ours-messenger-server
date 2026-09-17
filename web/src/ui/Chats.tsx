@@ -2,6 +2,8 @@
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
 import { memo, ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
+import { Button, IconButton } from './Button';
+import { SearchInput } from './SearchInput';
 import { ContactVM, RootMetaVM, fmtTime } from './viewmodel';
 import type { ChatMessage } from './chatTypes';
 import { FileRecord, MAX_FILE_BYTES, fileRecord, fmtSize, isVoiceNote } from './fileStore';
@@ -35,7 +37,7 @@ import {
 
 const TEXT_SEND_TIMEOUT_MS = 15_000;
 
-function ContactRow(props: {
+export function ContactRow(props: {
   c: ContactVM;
   active: boolean;
   grouped?: boolean;
@@ -205,12 +207,12 @@ export function ChatList(props: {
             <span className="messenger-brand-product">messenger</span>
           </h2>
           <div className="listcol-actions">
-            <button className="btn icon-btn desktop-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
+            <Button className="icon-btn desktop-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
               <Icon name="invite" size={18} />
-            </button>
-            <button className="icon-btn" aria-label="Settings" title="Settings" onClick={props.onSettings}>
+            </Button>
+            <IconButton aria-label="Settings" title="Settings" onClick={props.onSettings}>
               <Icon name="settings" size={18} />
-            </button>
+            </IconButton>
           </div>
         </div>
         <div
@@ -308,20 +310,7 @@ export function ChatList(props: {
         )}
       </div>
       <div className="list-bottom-chrome" ref={bottomChromeRef}>
-        <div className="search adaptive-search" role="search">
-          <span className="adaptive-search-icon" aria-hidden><Icon name="search" /></span>
-          <input
-            className="field"
-            placeholder="Search people, agents, apps…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== 'Escape') return;
-              event.preventDefault();
-              setQ('');
-            }}
-          />
-        </div>
+        <SearchInput value={q} onChange={setQ} placeholder="Search people, agents, apps…" />
         <button type="button" className="icon-btn list-bottom-invite" aria-label="Invite" title="Invite" onClick={props.onInvite}>
           <Icon name="invite" size={20} />
         </button>

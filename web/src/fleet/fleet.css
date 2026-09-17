@@ -2,7 +2,6 @@
 .fleet-app { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
 .fleet-app [hidden], .fleet-modal [hidden] { display: none !important; }
 .fleet-app button, .fleet-modal button { touch-action: manipulation; }
-.fleet-app button:active, .fleet-modal button:active { transform: scale(.98); }
 .fleet-app h1 { font-size: 1.45rem; line-height: 1.2; letter-spacing: -.025em; font-weight: 650; margin: 0 0 14px; }
 .fleet-app h2, .fleet-modal h2 { font-size: 1rem; font-weight: 600; margin: 18px 0 12px; }
 .fleet-app p, .fleet-modal p { line-height: 1.6; }
@@ -18,21 +17,13 @@
 .fleet-workspace { display: grid; grid-template-columns: minmax(260px, 31%) minmax(0, 1fr); gap: 16px; height: 100%; padding: 16px; }
 .fleet-list, .fleet-conversation, .fleet-messenger-list { background: var(--surface); border-radius: 28px; min-width: 0; min-height: 0; }
 .fleet-list { padding: 20px; overflow-y: auto; }
-.fleet-list > .btn { margin: 6px 0; }
-.fleet-list h1 { font-size: 1.2rem; }
-.fleet-segment { display: flex; padding: 3px; border-radius: 12px; background: var(--inset); margin-bottom: 16px; }
-.fleet-segment button { flex: 1; min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--text-2); cursor: pointer; }
-.fleet-segment button[aria-pressed=true] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
-.fleet-row { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-bottom: 1px solid var(--line-soft); padding: 14px 4px; color: var(--text); text-align: left; background: transparent; font: inherit; min-height: 64px; }
-button.fleet-row { cursor: pointer; border-radius: 8px; }
-button.fleet-row:hover { background: var(--accent-soft); }
-.fleet-avatar { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; font-size: .7rem; background: var(--inset); color: var(--text-2); }
+.fleet-row { gap: 12px; }
+
+
+
 .fleet-row-copy { display: grid; gap: 5px; flex: 1; min-width: 0; }
-.fleet-row strong { font-size: .85rem; font-weight: 550; overflow-wrap: anywhere; }
-.fleet-row small { color: var(--text-2); font-size: .73rem; line-height: 1.4; }
-.fleet-list-note { font-size: .72rem; color: var(--text-2); margin-top: 22px; }
-.fleet-search { display: flex; align-items: center; gap: 8px; background: var(--inset); border: 1px solid var(--line-soft); padding: 0 12px; border-radius: 10px; margin: 10px 0; color: var(--text-2); }
-.fleet-search input { background: transparent; width: 100%; min-width: 0; min-height: 44px; border: 0; color: var(--text); outline-offset: 1px; }
+
+
 .fleet-conversation { display: flex; flex-direction: column; overflow: hidden; }
 .fleet-chat-slot.signal-stage { display: flex; flex: 1; min-height: 180px; padding: 0; position: relative; overflow: hidden; }
 .fleet-chat-slot.signal-stage > .detail { position: relative; inset: auto; display: flex; flex-direction: column; width: 100%; height: 100%; flex: 1; min-width: 0; min-height: 0; border: 0; border-radius: 0; }
@@ -62,7 +53,7 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-form-page { max-width: 650px; margin: 0 auto; padding: 28px; height: 100%; overflow: auto; }
 .fleet-form-page form { display: grid; gap: 16px; }
 .fleet-field { display: grid; gap: 9px; width: 100%; margin: 0 0 16px; font-size: .8rem; color: var(--text-2); }
-.fleet-field input, .fleet-field textarea, .fleet-field select, .fleet-page select { width: 100%; padding: 12px; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--inset); font: inherit; }
+.fleet-field .field { width: 100%; }
 .fleet-page-heading select { width: auto; max-width: 200px; }
 .fleet-field textarea { min-height: 90px; resize: vertical; }
 .fleet-profile { width: min(100%, 640px); padding: 32px; margin: 40px auto; border-radius: 24px; background: var(--surface); text-align: center; }
@@ -79,8 +70,8 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-dialog-content h2 { margin: 0; }
 .fleet-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 12px; }
 .fleet-template-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.fleet-template-options button { display: grid; gap: 10px; padding: 14px; color: var(--text); background: var(--inset); border: 1px solid var(--line); border-radius: 12px; text-align: left; cursor: pointer; }
-.fleet-template-options .selected { border-color: var(--accent); background: var(--accent-soft); }
+.fleet-template-options .btn { display: grid; gap: 10px; text-align: left; }
+
 .fleet-template-options small { color: var(--text-2); line-height: 1.5; }
 .fleet-output { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--inset); border-radius: 12px; padding: 18px; font: .75rem/1.8 var(--mono); }
 .fleet-toast { position: fixed; z-index: 1000; top: 16px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); background: var(--surface); color: var(--text); border: 1px solid var(--line); box-shadow: var(--shadow-lg); padding: 14px 18px; border-radius: 14px; display: flex; align-items: center; gap: 14px; font-size: .85rem; }
@@ -99,7 +90,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
   .fleet-show-detail .fleet-conversation { display: flex; }
   .fleet-chat-slot.signal-stage > .detail { position: relative; display: flex; inset: auto; }
   .fleet-chat-slot .detail-back { display: grid; }
-  .fleet-permission .btn { font-size: .7rem; padding: 6px 10px; }
   .fleet-page { padding: 18px; }
   .fleet-page-heading { align-items: start; flex-direction: column; gap: 6px; }
   .fleet-board { display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 20px; }
@@ -119,7 +109,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-messenger-list.signal-stage > .listcol { width: 100%; height: 100%; min-width: 0; }
 
 /* Work rows use the same contact-row shape and active material as Messenger. */
-.fleet-list .fleet-row.contact-row { margin: 4px 0; }
 .fleet-chat-context { display: grid; gap: 8px; width: min(100%, 500px); margin: 12px 0; padding: 12px 16px; border: 1px solid var(--line-soft); border-radius: var(--r-lg); background: var(--surface); }
 .fleet-chat-context .fleet-row { padding: 4px 0; }
 .fleet-tool { display: grid; gap: 8px; width: min(100%, 500px); margin: 10px 0; color: var(--text-2); font-size: .76rem; }
@@ -133,7 +122,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-permission { display: grid; gap: 10px; }
 .fleet-activity-label { display: flex; align-items: center; gap: 8px; }
 .fleet-permission > small { font-size: .68rem; padding-left: 22px; overflow-wrap: anywhere; }
-.fleet-tool .btn, .fleet-chat-context .btn { font-size: .72rem; padding: 6px 12px; min-height: 36px; }
 @media (pointer: coarse) { .fleet-tool .btn, .fleet-tool summary, .fleet-chat-context .btn { min-height: 44px; } }
 
 .fleet-profile-modal { width: min(640px, calc(100vw - 28px)); max-width: min(640px, calc(100vw - 28px)); }
@@ -145,7 +133,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-no-conversation { margin: auto; padding: 32px; max-width: 440px; text-align: center; color: var(--text-2); }
 .fleet-intro { height: 100%; overflow: auto; padding: clamp(20px, 4vw, 44px); display: flex; flex-direction: column; gap: 28px; }
 .fleet-intro-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-.fleet-intro-header > .btn { background: transparent; border-color: transparent; color: var(--text-2); }
 .fleet-intro-main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: clamp(24px, 5vw, 64px); align-items: center; max-width: 1060px; width: 100%; margin: auto; }
 .fleet-intro-scene { min-height: 390px; padding: clamp(20px, 3vw, 32px); border-radius: 28px; background: var(--inset); display: flex; flex-direction: column; justify-content: center; gap: 14px; }
 .fleet-intro-scene small { color: var(--text-2); font-size: .75rem; line-height: 1.5; }
@@ -171,7 +158,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-intro-progress span { width: 6px; height: 6px; border-radius: 6px; background: var(--line); }
 .fleet-intro-progress .current { width: 24px; background: var(--accent); }
 .fleet-intro-buttons { display: flex; gap: 12px; }
-.fleet-intro-buttons .btn { min-height: 48px; }
 .fleet-intro-buttons .primary { flex: 1; }
 @media (max-width: 700px) {
   .fleet-intro { gap: 20px; padding: 20px 24px max(20px, env(safe-area-inset-bottom)); }
@@ -212,14 +198,13 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-account form p { margin: 0; font-size: .82rem; color: var(--text-2); }
 .fleet-account .fleet-field { margin-bottom: 0; }
 @media (max-width: 480px) { .fleet-account { padding: 20px; } .fleet-account form { padding: 20px; } }
-.fleet-menu-action { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 12px 16px; border: 1px solid var(--line-soft); border-radius: 16px; background: var(--inset); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
-.fleet-menu-action > span { flex: 1; font-size: .9rem; font-weight: 600; }
+.fleet-menu-action { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; text-align: left; }
+.fleet-menu-action > span { flex: 1; }
 .fleet-menu-action > svg:first-child { color: var(--accent); }
 .fleet-menu-action > svg:last-child { color: var(--text-2); }
 .fleet-menu-action.danger, .fleet-menu-action.danger > svg:first-child { color: var(--danger); }
 .fleet-menu-divider { height: 1px; background: var(--line-soft); margin: 4px 0; }
 .fleet-form-page > .fleet-menu-action { margin-bottom: 10px; }
-.fleet-list-group { color: var(--text-2); font-size: .75rem !important; }
 .fleet-chat-setup { width: min(100%, 480px); padding: 20px; border: 1px solid var(--line-soft); border-radius: 20px; background: var(--surface); display: grid; gap: 12px; margin: 12px 0; }
 .fleet-chat-setup h2, .fleet-chat-setup p { margin: 0; }
 .fleet-chat-setup p, .fleet-chat-setup > small { color: var(--text-2); font-size: .8rem; }
@@ -250,7 +235,7 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-nav-trigger { display: grid; }
 .fleet-navigation { display: grid; gap: 12px; }
 .fleet-navigation > p { margin: 0 0 4px; color: var(--text-2); }
-.fleet-destination { display: flex; align-items: center; gap: 14px; padding: 20px 16px; background: var(--inset); border: 1px solid var(--line-soft); border-radius: 20px; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
+.fleet-destination { display: flex; align-items: center; gap: 14px; padding-block: 20px; text-align: left; }
 .fleet-destination[aria-current=page] { border-color: var(--accent); }
 .fleet-destination-icon { display: grid; place-items: center; width: 44px; height: 44px; background: var(--surface); border-radius: 14px; color: var(--accent); flex-shrink: 0; }
 .fleet-destination > span:nth-child(2) { display: grid; gap: 6px; flex: 1; }
@@ -293,7 +278,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
   .fleet-chat-setup > .fleet-setup-fields label:first-child > span { grid-template-columns: 48px 1fr; align-items: center; }
   .fleet-chat-setup > .fleet-setup-fields label > svg { display: none; }
   .fleet-chat-setup > .fleet-setup-fields input, .fleet-chat-setup > .fleet-setup-fields select { min-height: 36px; font-size: 1rem; padding: 0; }
-  .fleet-chat-setup > .btn { justify-self: start; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--text-2); font-size: .8rem; }
   .fleet-chat-setup > small { font-size: .7rem; }
 }
 
@@ -301,3 +285,26 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-chat-slot .conv-peer-status { grid-template-rows: auto auto; }
 .fleet-chat-slot .conv-contact-status { max-width: 100%; overflow: hidden; white-space: nowrap; }
 .fleet-chat-slot .conv-contact-status svg { flex-shrink: 0; }
+
+/* Both Fleet lists reuse Messenger materials and row components. */
+.fleet-messenger-list .listcol-titlebar,
+.fleet-messenger-list .list-bottom-invite { display: none; }
+.fleet-list.fleet-messenger-list { padding: 0; overflow: hidden; }
+.fleet-messenger-list .list-bottom-chrome { display: flex; flex-shrink: 0; }
+.fleet-messenger-list .list-bottom-chrome .search { flex: 1; }
+.fleet-session-context { padding: 8px 10px 16px; }
+.fleet-session-context h2 { margin: 12px 0; }
+@media (min-width: 861px) {
+  .fleet-messenger-list .list-bottom-chrome { padding: 10px; }
+}
+
+.fleet-section-trigger { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; min-height: 44px; color: var(--text-2); font-weight: 500; }
+.fleet-section-trigger svg { flex-shrink: 0; opacity: .6; }
+@media (max-width: 860px) {
+  .fleet-nav { gap: 4px; padding-inline: 8px; }
+  .fleet-nav .fleet-brand { flex: 0 0 auto; font-size: 1rem; padding: 0; }
+  .fleet-nav .fleet-preview { display: none; }
+  .fleet-section-trigger { flex: 1; padding-inline: 6px; font-size: .8rem; line-height: 1.2; }
+  .fleet-nav .fleet-actions { gap: 4px; flex-wrap: nowrap; }
+  .fleet-nav .fleet-actions > .btn { width: 44px; padding-inline: 0; }
+}

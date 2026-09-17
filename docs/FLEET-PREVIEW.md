@@ -65,3 +65,10 @@ The approved pen.dev refinements are implemented: compact invitation menus, a hi
 Run `npm run build && npm run test:fleet`. The browser gate verifies independent drafts, section navigation, explicit invite generation, locked actors, invite text retention, modal focus return, task moves, deletion confirmation, agent/task/folder creation, account/configuration, room and identity deep links, mobile composer bounds, first-run onboarding, personalized single greeting, close/reopen retention, fresh entry visits, tab isolation, static-origin rejection checks and zero live API requests. Screenshots are written to `/tmp/ours-fleet-evidence`.
 
 Additional production preservation gates: `npm run test:mobile`, `npm run test:swipe`, `node tests/browser-composer-focus.test.mjs`, `node tests/browser-pointer-touch.test.mjs`, `node tests/browser-accessibility-controls.test.mjs`, and `node tests/browser-room-envelope-matrix.test.mjs`.
+
+
+Fleet lists share Messenger’s `ContactRow`, `SearchInput` and list/tab material styles. The shared `Button` / `IconButton` primitives preserve Messenger’s existing class cascade; Fleet menus, navigation and task-template choices use those controls, and `Field` applies the existing `.field` style. Fleet-specific control colors, shadows and radii were removed. `DialogShell` remains the shared modal shell. The compact inline chat setup remains intentionally distinct from full forms.
+
+Only the outer header provides list creation: New chat, persistent agent, task, invitations, and context-sensitive “Add to this task” all live under +. Fleet hides the embedded Messenger titlebar and invite shortcut with scoped CSS; the standalone Messenger retains them. Current section + chevron and the nine-square launcher open the same navigation dialog. Phone conversations show neither control until Back returns to the list.
+
+Validation: `node tests/browser-fleet-consistency.test.mjs` checks shared computed styles, section controls, search retention and task-context creation at 320/390/1280px in both themes (uses `FLEET_PREVIEW_ORIGIN`, otherwise starts an isolated local preview server).
