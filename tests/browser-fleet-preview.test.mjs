@@ -57,7 +57,7 @@ try {
   await button('Allow once').click(); await expect(page.getByText('Test command · Allowed once · Complete')).toBeVisible();
   await page.locator('.fleet-tool summary').click(); await button('Open full output').click(); await expect(dialog()).toContainText('3 files inspected'); await close();
   await button('Agent actions').click(); await button('Profile').click(); await expect(page.getByRole('heading', { name: 'Developer', exact: true })).toBeVisible();
-  await button('Contacts & invitations').click(); await button('Generate invite').click(); await expect(dialog().getByLabel('Invitation code')).toHaveCount(0);
+  await button('Contacts & invitations').click(); await expect(button('‹ Back')).toHaveCount(1); await button('‹ Back').click(); await expect(page.getByRole('heading', { name: 'Developer', exact: true })).toBeVisible(); await button('Contacts & invitations').click(); await button('Generate invite').click(); await expect(dialog().getByLabel('Invitation code')).toHaveCount(0);
   await dialog().getByLabel('Invitation type').selectOption('Public'); await expect(dialog().getByLabel('Invitation code')).toHaveCount(0);
   await dialog().getByRole('button', { name: 'Generate an invite', exact: true }).click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/developer/); await close();
   await button('Accept invite').click(); await expect(dialog()).toContainText('Developer'); await expect(button('Accept on behalf of an agent')).toHaveCount(0); await close();
@@ -95,6 +95,7 @@ try {
   await button('Generate invite').click(); await expect(dialog()).toContainText('Critic'); await dialog().getByRole('button', { name: 'Generate an invite', exact: true }).click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/critic\//); await close();
   await page.goto(origin + '/fleet/profile/messenger-critic/contacts'); await button('Accept invite').click(); await expect(dialog().getByRole('button', { name: 'Accept as Critic', exact: true })).toBeVisible(); await close();
   await page.goto(origin + '/fleet/profile/developer/contacts'); await expect(page.getByRole('heading', { name: 'Agent contacts' })).toBeVisible();
+  await page.goto(origin + '/fleet/profile/alex-reviewer'); await expect(page.getByRole('list', { name: 'Agent ownership' })).toContainText('Alex · Work'); await expect(page.getByRole('list', { name: 'Agent ownership' })).not.toContainText('Vitalii'); await button('Alex · Work Workspace').click(); await button('Alex Human identity').click(); await expect(page.getByRole('heading', { name: 'Alex', exact: true })).toBeVisible(); await close();
   await page.goto(origin + '/fleet/tasks'); await button('Use light theme').click(); await page.screenshot({ path: join(output, 'tasks-desktop-light.png') });
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(origin + '/fleet/work/developer');
   // Wait for the routed conversation before interacting with its header.
@@ -103,6 +104,8 @@ try {
   // The same Navigation surface is available inside a full-screen phone chat.
   await button('Navigate').click(); await expect(dialog()).toContainText('Your persistent agents, short chats'); await expect(dialog().locator('[aria-current=page]')).toContainText('Sessions');
   await dialog().getByRole('button', { name: /^Sessions/ }).click(); await button('New chat').click();
+  assert.ok((await page.locator('.fleet-chat-slot:not([hidden]) .fleet-chat-setup').boundingBox()).height <= 240, 'phone setup stays compact beside the composer');
+  await expect(button('Navigate').locator('svg.lucide-compass')).toBeVisible();
   await page.getByLabel('Agent name', { exact: true }).fill('Mobile Guide'); await composer().fill('Keep this mobile draft');
   await button('Navigate').click(); await close(); await expect(composer()).toHaveValue('Keep this mobile draft');
   await button('More options').click(); await button('Folder · website').click(); await button('shared').click(); await button('Cancel').click(); await expect(button('Folder · website')).toBeVisible(); await button('Done').click();
@@ -117,7 +120,8 @@ try {
   for (const dismissal of ['outside', 'Escape', 'Close']) {
     const trigger = button('Open contact details for Developer');
     await trigger.click();
-    await button('Vitalii · Work Workspace identity').click();
+    await expect(page.getByRole('list', { name: 'Agent ownership' })).toContainText('Vitalii Shakhmatov');
+    await button('Vitalii · Work Workspace').click();
     await button('Vitalii Shakhmatov Human identity').click();
     await button('Vitalii · Personal Workspace identity').click();
     if (dismissal === 'outside') await page.locator('.modal-backdrop').click({ position: { x: 2, y: 2 } });

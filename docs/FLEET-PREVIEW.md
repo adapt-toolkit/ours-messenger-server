@@ -2,7 +2,7 @@
 
 Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Messenger remains at `/chats`. The preview is also included in the normal production build and supports direct URL reloads through the existing SPA fallback.
 
-This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Sessions, Messenger and Task manager, with a current-section marker. Its top button is available on desktop and mobile, including inside the conversation header. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
+This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Sessions, Messenger and Task manager, with a current-section marker. Its top compass button is available on desktop and mobile, including inside the conversation header. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
 
 ## Shareable first-run walkthrough
 
@@ -58,7 +58,7 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 
 `Conversation` adds optional `headerActions` and `timelineFooter` slots for its peer header and scrollable timeline. Fleet supplies compact contextual controls and agent activity; live Messenger omits the slot. Reply, message, voice, command, composer, and modal behavior remain unchanged. Profile browsing and its invitation steps share one dismissible shell; outside click, Escape, and Close return to the original screen and preserve its chat draft.
 
-The approved pen.dev refinements are implemented: compact invitation menus, a hierarchical folder picker, separate Temporary tasks/chats, and draft-first New chat. ChatSetup keeps editable configuration local until first Send creates exactly one mock agent and locks its settings; closing/reopening retains the draft. Folder selection commits only on Select folder. Navigation dismissals, task Back and Settings Back preserve the source conversation.
+The approved pen.dev refinements are implemented: compact invitation menus, a hierarchical folder picker, separate Temporary tasks/chats, and draft-first New chat. ChatSetup keeps editable configuration local until first Send creates exactly one mock agent and locks its settings; closing/reopening retains the draft. Phone chat setup is a compact, subdued form beside the composer; desktop setup retains its full layout. Agent profiles show a linked owner → workspace → agent hierarchy, including the correct external owner. Contacts have one Back returning to the source profile. Folder selection commits only on Select folder. Navigation dismissals, task Back and Settings Back preserve the source conversation.
 
 ## Verification
 

@@ -268,3 +268,33 @@ button.fleet-row:hover { background: var(--accent-soft); }
 
 .fleet-intro-copy > .fleet-intro-security { display: flex; align-items: flex-start; gap: 8px; margin-top: 18px; padding: 12px 14px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); font-size: .8rem; line-height: 1.5; color: var(--accent); }
 .fleet-intro-security svg { flex-shrink: 0; margin-top: 2px; }
+
+.fleet-profile-modal .fleet-contacts { padding: 0; text-align: left; }
+.fleet-contacts .fleet-page-heading { margin: 12px 0 16px; }
+.fleet-contacts .fleet-page-heading h1 { margin: 0 0 6px; }
+.fleet-contacts .fleet-page-heading p { margin: 0; }
+.fleet-contacts .fleet-actions { padding-top: 12px; }
+.fleet-contacts .fleet-row { min-height: 56px; padding: 8px 4px; }
+.fleet-contacts .fleet-avatar { width: 32px; height: 32px; }
+.fleet-contacts .fleet-actions .btn { margin: 0; flex: 1; }
+.fleet-ownership { text-align: left; margin: 20px 0; }
+.fleet-ownership ol { list-style: none; padding: 0; margin: 0; }
+.fleet-ownership li + li { margin-left: 18px; padding-left: 14px; border-left: 1px solid var(--line); }
+.fleet-ownership li:nth-child(3) { margin-left: 50px; }
+.fleet-ownership .fleet-row { min-height: 60px; padding: 8px 0; }
+.fleet-ownership .fleet-avatar { width: 30px; height: 30px; font-size: .7rem; }
+@media (max-width: 860px) {
+  .fleet-profile-modal .modal-body { padding: 8px 18px max(20px, env(safe-area-inset-bottom)); }
+  .fleet-profile-modal .fleet-profile { padding: 0; }
+  .fleet-chat-setup { padding: 4px 8px; gap: 6px; border: 0; background: transparent; margin: 8px 0; }
+  .fleet-chat-setup > h2 { display: none; }
+  .fleet-chat-setup > p { font-size: .8rem; }
+  .fleet-chat-setup > .fleet-setup-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; padding: 0; border-radius: 0; background: transparent; }
+  .fleet-chat-setup > .fleet-setup-fields label { padding: 0; min-width: 0; border-bottom: 1px solid var(--line-soft); }
+  .fleet-chat-setup > .fleet-setup-fields label:first-child { grid-column: 1 / -1; }
+  .fleet-chat-setup > .fleet-setup-fields label:first-child > span { grid-template-columns: 48px 1fr; align-items: center; }
+  .fleet-chat-setup > .fleet-setup-fields label > svg { display: none; }
+  .fleet-chat-setup > .fleet-setup-fields input, .fleet-chat-setup > .fleet-setup-fields select { min-height: 36px; font-size: 1rem; padding: 0; }
+  .fleet-chat-setup > .btn { justify-self: start; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--text-2); font-size: .8rem; }
+  .fleet-chat-setup > small { font-size: .7rem; }
+}
