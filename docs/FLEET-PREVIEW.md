@@ -2,7 +2,7 @@
 
 Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Messenger remains at `/chats`. The preview is also included in the normal production build and supports direct URL reloads through the existing SPA fallback.
 
-This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Sessions, Messenger and Task manager, with a current-section marker. Its top compass button is available on desktop and mobile, including inside the conversation header. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
+This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Sessions, Messenger and Task manager, with a current-section marker. Its 3×3 launcher is available in the outer desktop and mobile navigation. On phones, leave a conversation with Back before opening the launcher. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
 
 ## Shareable first-run walkthrough
 

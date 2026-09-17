@@ -248,7 +248,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-folder-selection { display: grid; gap: 8px; overflow-wrap: anywhere; }
 .fleet-folder-selection small { color: var(--text-2); }
 .fleet-nav-trigger { display: grid; }
-.fleet-chat-navigation { display: none !important; }
 .fleet-navigation { display: grid; gap: 12px; }
 .fleet-navigation > p { margin: 0 0 4px; color: var(--text-2); }
 .fleet-destination { display: flex; align-items: center; gap: 14px; padding: 20px 16px; background: var(--inset); border: 1px solid var(--line-soft); border-radius: 20px; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
@@ -259,7 +258,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-destination strong small { font-size: .6rem; color: var(--accent); font-weight: 500; }
 .fleet-destination > span > span { color: var(--text-2); font-size: .8rem; line-height: 1.5; }
 .fleet-destination > svg { flex-shrink: 0; color: var(--text-2); }
-@media (max-width: 860px) { .fleet-chat-navigation { display: grid !important; } }
 
 .fleet-intro-permission { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; font-size: .85rem; }
 .fleet-intro-permission > span { flex: 1; display: grid; gap: 4px; }
@@ -298,3 +296,8 @@ button.fleet-row:hover { background: var(--accent-soft); }
   .fleet-chat-setup > .btn { justify-self: start; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--text-2); font-size: .8rem; }
   .fleet-chat-setup > small { font-size: .7rem; }
 }
+
+/* Keep both header rows readable when agent actions narrow the phone title. */
+.fleet-chat-slot .conv-peer-status { grid-template-rows: auto auto; }
+.fleet-chat-slot .conv-contact-status { max-width: 100%; overflow: hidden; white-space: nowrap; }
+.fleet-chat-slot .conv-contact-status svg { flex-shrink: 0; }

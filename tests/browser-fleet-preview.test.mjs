@@ -101,16 +101,27 @@ try {
   // Wait for the routed conversation before interacting with its header.
   await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Developer');
   await expect(composer()).toBeVisible();
-  // The same Navigation surface is available inside a full-screen phone chat.
+  // Global navigation stays outside the phone conversation.
+  await expect(page.locator('.fleet-chat-slot:not([hidden])').getByRole('button', { name: 'Navigate', exact: true })).toHaveCount(0);
+  await button('Back to conversations').click();
+  await expect(button('Navigate').locator('svg.fleet-launcher-icon rect')).toHaveCount(9);
   await button('Navigate').click(); await expect(dialog()).toContainText('Your persistent agents, short chats'); await expect(dialog().locator('[aria-current=page]')).toContainText('Sessions');
   await dialog().getByRole('button', { name: /^Sessions/ }).click(); await button('New chat').click();
   assert.ok((await page.locator('.fleet-chat-slot:not([hidden]) .fleet-chat-setup').boundingBox()).height <= 240, 'phone setup stays compact beside the composer');
-  await expect(button('Navigate').locator('svg.lucide-compass')).toBeVisible();
+
   await page.getByLabel('Agent name', { exact: true }).fill('Mobile Guide'); await composer().fill('Keep this mobile draft');
-  await button('Navigate').click(); await close(); await expect(composer()).toHaveValue('Keep this mobile draft');
+  await button('Back to conversations').click(); await button('Navigate').click(); await close(); await button('New chat').click(); await expect(composer()).toHaveValue('Keep this mobile draft');
   await button('More options').click(); await button('Folder · website').click(); await button('shared').click(); await button('Cancel').click(); await expect(button('Folder · website')).toBeVisible(); await button('Done').click();
   await page.screenshot({ path: join(output, 'new-chat-mobile.png') });
+  await page.setViewportSize({ width: 320, height: 568 });
+  const title = () => page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name');
+  assert.ok((await title().boundingBox()).height >= 15, 'new chat title remains readable at 320px');
+  await page.screenshot({ path: join(output, 'launcher-new-chat-320.png') });
   await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .fleet-locked-setup')).toBeVisible();
+  assert.ok((await title().boundingBox()).height >= 15, 'agent title remains readable with actions at 320px');
+  await expect(button('Agent actions')).toBeVisible();
+  await page.screenshot({ path: join(output, 'launcher-agent-chat-320.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
   await button('Agent actions').click(); await page.waitForTimeout(350); await page.screenshot({ path: join(output, 'agent-menu-mobile.png') }); await button('Accept invite').click(); await expect(button('Accept as Mobile Guide')).toBeVisible(); await close();
   await page.goto(origin + '/fleet/work/developer');
   await expect(composer()).toBeVisible(); const box = await composer().boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= 391 && box.y + box.height <= 844, 'mobile composer stays in viewport');
