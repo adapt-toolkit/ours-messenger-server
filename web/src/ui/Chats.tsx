@@ -867,6 +867,8 @@ export function Conversation(props: {
   onRename?: (alias: string) => void;
   onDraftChange?: (hasText: boolean) => void;
   emptyOverride?: ReactNode;
+  /** Optional agent context inside the scrollable timeline; absent in Messenger. */
+  timelineFooter?: ReactNode;
   onSendFile?: (att: PendingAttachment, replyToWireId?: string) => Promise<void>;
   onFetchFile?: (wireId: string) => Promise<void>;
 }) {
@@ -1487,6 +1489,7 @@ export function Conversation(props: {
             onPreview={setPreviewRec}
             onFetchFile={props.onFetchFile}
           />
+          {props.timelineFooter}
           <div className="thread-end" aria-hidden />
         </div>
       </div>

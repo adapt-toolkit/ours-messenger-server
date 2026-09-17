@@ -45,7 +45,9 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 - `FleetDialogs.tsx`: one persistent shared modal shell whose content changes; nested folder dialog retains the host picker beneath it.
 - `fleet.css`: selectors scoped to `.fleet-*`, with a small scoped layout seam around reused chat components. Loaded only with the preview chunk.
 
-No production chat, reply, message, voice, command, or modal implementation was modified. Mock-only controls surround the existing chat; the live application remains unchanged.
+`Conversation` adds an optional `timelineFooter` slot inside its scrollable timeline. Fleet supplies compact agent activity there; live Messenger omits the slot. Reply, message, voice, command, composer, and modal behavior remain unchanged. Profile browsing and its invitation steps share one dismissible shell; outside click, Escape, and Close return to the original screen and preserve its chat draft.
+
+The subsequent pen.dev refinements (simpler menus, conventional folder picker, Temporary task/chat separation, quick New chat, and More options labeling) are design-only proposals, intentionally separate from this application candidate.
 
 ## Verification
 

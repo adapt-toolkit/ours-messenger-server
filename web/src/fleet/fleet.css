@@ -30,8 +30,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-row-copy { display: grid; gap: 5px; flex: 1; min-width: 0; }
 .fleet-row strong { font-size: .85rem; font-weight: 550; overflow-wrap: anywhere; }
 .fleet-row small { color: var(--text-2); font-size: .73rem; line-height: 1.4; }
-.fleet-selected { background: var(--accent-soft); border-left: 2px solid var(--accent); }
-.fleet-selected .fleet-row { padding-left: 8px; }
 .fleet-list-note { font-size: .72rem; color: var(--text-2); margin-top: 22px; }
 .fleet-search { display: flex; align-items: center; gap: 8px; background: var(--inset); border: 1px solid var(--line-soft); padding: 0 12px; border-radius: 10px; margin: 10px 0; color: var(--text-2); }
 .fleet-search input { background: transparent; width: 100%; min-width: 0; min-height: 44px; border: 0; color: var(--text); outline-offset: 1px; }
@@ -46,14 +44,6 @@ button.fleet-row:hover { background: var(--accent-soft); }
 .fleet-chat-slot .messages { flex: 1; min-height: 0; }
 .fleet-chat-slot .composer-wrap { flex-shrink: 0; }
 .fleet-chat-slot .detail-back { display: none; }
-.fleet-chat-context { padding: 0 22px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.fleet-chat-context .fleet-row { flex: 1; min-width: 160px; }
-.fleet-tool { background: var(--inset); border-radius: 12px; margin: 0 20px 16px; padding: 12px; font-size: .78rem; max-height: 35%; overflow: auto; }
-.fleet-tool summary { cursor: pointer; min-height: 32px; }
-.fleet-tool summary span { color: var(--text-2); margin-left: 8px; }
-.fleet-permission { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.fleet-permission > span { flex: 1; }
-.fleet-permission small { display: block; color: var(--text-2); margin-top: 5px; }
 .fleet-badge { display: inline-grid; place-items: center; border-radius: 50%; min-width: 20px; height: 20px; color: var(--accent) !important; background: var(--accent-soft); font-size: .7rem; }
 .fleet-messenger-list { overflow: hidden; position: relative; }
 .fleet-messenger-list > .listcol { height: 100%; width: 100%; display: flex; border: 0; border-radius: 0; }
@@ -116,11 +106,7 @@ button.fleet-row:hover { background: var(--accent-soft); }
   .fleet-context { padding: 8px 12px; gap: 6px; flex-wrap: wrap; }
   .fleet-context .btn { font-size: .7rem; padding: 6px 10px; }
   .fleet-context small { font-size: .55rem; }
-  .fleet-tool { margin: 0 10px 10px; max-height: 28%; }
   .fleet-permission .btn { font-size: .7rem; padding: 6px 10px; }
-  .fleet-chat-context { padding: 0 12px 8px; max-height: 150px; overflow: auto; }
-  .fleet-chat-context .fleet-row { padding: 6px; min-height: 44px; }
-  .fleet-chat-context .btn { font-size: .7rem; }
   .fleet-page { padding: 18px; }
   .fleet-page-heading { align-items: start; flex-direction: column; gap: 6px; }
   .fleet-board { display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 20px; }
@@ -138,3 +124,27 @@ button.fleet-row:hover { background: var(--accent-soft); }
 
 .fleet-messenger-list.signal-stage { display: flex; padding: 0; }
 .fleet-messenger-list.signal-stage > .listcol { width: 100%; height: 100%; min-width: 0; }
+
+/* Work rows use the same contact-row shape and active material as Messenger. */
+.fleet-list .fleet-row.contact-row { margin: 4px 0; }
+.fleet-chat-context { display: grid; gap: 8px; width: min(100%, 500px); margin: 12px 0; padding: 12px 16px; border: 1px solid var(--line-soft); border-radius: var(--r-lg); background: var(--surface); }
+.fleet-chat-context .fleet-row { padding: 4px 0; }
+.fleet-tool { display: grid; gap: 8px; width: min(100%, 500px); margin: 10px 0; color: var(--text-2); font-size: .76rem; }
+.fleet-activity-entry { border: 1px solid var(--line-soft); border-radius: var(--r-md); padding: 10px 12px; background: color-mix(in srgb, var(--surface) 68%, transparent); }
+.fleet-tool summary { display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; }
+.fleet-tool summary::after { content: '⌄'; margin-left: auto; }
+.fleet-tool details[open] summary::after { content: '⌃'; }
+.fleet-tool summary small { color: var(--text-3); font-size: .68rem; }
+.fleet-activity-output { padding: 4px 0 2px 22px; }
+.fleet-tool p { font-size: .76rem; line-height: 1.6; }
+.fleet-permission { display: grid; gap: 10px; }
+.fleet-activity-label { display: flex; align-items: center; gap: 8px; }
+.fleet-permission > small { font-size: .68rem; padding-left: 22px; overflow-wrap: anywhere; }
+.fleet-tool .btn, .fleet-chat-context .btn { font-size: .72rem; padding: 6px 12px; min-height: 36px; }
+@media (pointer: coarse) { .fleet-tool .btn, .fleet-tool summary, .fleet-chat-context .btn { min-height: 44px; } }
+
+.fleet-profile-modal { width: min(640px, calc(100vw - 28px)); max-width: min(640px, calc(100vw - 28px)); }
+.fleet-profile-modal .fleet-page { height: auto; padding: 0; overflow: visible; }
+.fleet-profile-modal .fleet-profile { margin: 0; padding: 12px; width: 100%; background: transparent; }
+.fleet-profile-modal .fleet-profile h1 { font-size: 1.45rem; letter-spacing: -.025em; line-height: 1.25; }
+.fleet-profile-modal .fleet-profile h2 { font-size: 1rem; margin: 18px 0 12px; }

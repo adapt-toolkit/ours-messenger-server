@@ -3,6 +3,7 @@ import DialogShell from '../ui/DialogShell';
 import { Button, Field, Row, SearchField } from './components';
 import type { Agent, Task, Page, Modal, Section } from './model';
 interface Props {
+  embedded?: boolean;
   modal: NonNullable<Modal>; close: () => void; setModal: (m: Modal) => void;
   agents: Agent[]; setAgents: Dispatch<SetStateAction<Agent[]>>;
   tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>>;
@@ -94,5 +95,6 @@ export function FleetDialogs(p: Props) {
     default: title = 'Details'; body = <Button onClick={close}>Done</Button>;
   }
   if(folderOpen) { title = 'Choose host folder'; body = <><p>Workstation · Host folders · Online</p><p>Allowed location: /home/you/work</p><p>Browsing {folder}</p><Row title="Parent folder" subtitle="Browse up within allowed roots" avatar="↑" onClick={() => setFolder('/home/you/work')} />{['website', 'research', 'shared'].map(f => <Row key={f} title={f} subtitle={f === 'research' ? 'Folder · Read only' : 'Read and write'} avatar="▣" onClick={() => setFolder(`/home/you/work/${f}`)} />)}<Button onClick={() => setNewFolder(true)}>＋ New folder</Button><p>Selected: {folder}</p><Button primary onClick={() => setFolderOpen(false)}>Use {folder.split('/').pop()} folder</Button></>; }
+  if(p.embedded) return <div className="fleet-dialog-content"><Button onClick={close}>‹ Contacts</Button><h2>{title}</h2>{body}</div>;
   return <><DialogShell title={title} description={undefined} onClose={folderOpen ? () => setFolderOpen(false) : close} className="fleet-modal"><div className="fleet-dialog-content">{body}</div></DialogShell>{newFolder && <DialogShell title="Create folder" description={`Workstation · ${folder}`} onClose={() => setNewFolder(false)} className="fleet-modal"><div className="fleet-dialog-content"><Field label="Folder name"><input autoFocus value={folderName} onChange={e => setFolderName(e.target.value)} /></Field><div className="fleet-dialog-actions"><Button onClick={() => setNewFolder(false)}>Cancel</Button><Button primary disabled={!folderName.trim() || /[/.]/.test(folderName)} onClick={() => { setFolder(`${folder}/${folderName.trim()}`); setNewFolder(false); }}>Create folder</Button></div></div></DialogShell>}</>;
 }

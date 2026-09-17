@@ -3,8 +3,9 @@ import { Button, Field, PageHeader, Row, SearchField } from './components';
 import type { Agent, Modal, Page, Section } from './model';
 export function ProfilePage({ page, agents, go, back, openChat, openRoom, modal }: { page: Extract<Page, {kind: 'profile' | 'contacts'}>; agents: Agent[]; go: (p: Page) => void; back: () => void; openChat: (id: string, section?: Section) => void; openRoom: (id: string) => void; modal: (m: Modal) => void }) {
   const [search, setSearch] = useState('');
-  const id = page.id;
-  const a = agents.find(a => a.id === id || `messenger-${a.id}` === id);
+  const a = agents.find(a => a.id === page.id || `messenger-${a.id}` === page.id);
+  // Messenger history IDs are presentation routes, never invitation actors.
+  const id = a?.id ?? page.id;
   const human = id === 'human' || id === 'mira'; const workspace = id === 'workspace' || id === 'personal' || id === 'mira-workspace';
   const foreign = id === 'alex-reviewer' || id === 'external-developer' || id === 'mira' || id === 'mira-workspace';
   const person = id === 'maya' || id === 'noor';
