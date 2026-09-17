@@ -64,7 +64,6 @@
 .fleet-account { padding-top: 50px; max-width: 470px; }
 .fleet-account .fleet-brand { justify-content: center; }
 .fleet-check { font-size: .8rem; display: flex; gap: 10px; align-items: center; }
-.fleet-modal { max-width: min(560px, calc(100vw - 28px)); }
 .fleet-dialog-content { display: grid; gap: 14px; }
 .fleet-dialog-content p { margin: 0; }
 .fleet-dialog-content h2 { margin: 0; }
@@ -99,7 +98,6 @@
   .fleet-task-detail > aside, .fleet-task-detail > section { padding: 18px; margin-bottom: 16px; }
   .fleet-form-page { padding: 20px; }
   .fleet-profile { margin: 20px auto; padding: 22px; }
-  .fleet-modal { width: calc(100vw - 28px); max-height: calc(100dvh - 32px); }
 }
 @media (prefers-reduced-motion: reduce) { .fleet-app *, .fleet-modal * { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; } .fleet-app button:active, .fleet-modal button:active { transform: none; } }
 @media (prefers-reduced-transparency: reduce) { .fleet-nav, .fleet-modal { background: var(--surface); backdrop-filter: none; } }
@@ -124,7 +122,6 @@
 .fleet-permission > small { font-size: .68rem; padding-left: 22px; overflow-wrap: anywhere; }
 @media (pointer: coarse) { .fleet-tool .btn, .fleet-tool summary, .fleet-chat-context .btn { min-height: 44px; } }
 
-.fleet-profile-modal { width: min(640px, calc(100vw - 28px)); max-width: min(640px, calc(100vw - 28px)); }
 .fleet-profile-modal .fleet-page { height: auto; padding: 0; overflow: visible; }
 .fleet-profile-modal .fleet-profile { margin: 0; padding: 12px; width: 100%; background: transparent; }
 .fleet-profile-modal .fleet-profile h1 { font-size: 1.45rem; letter-spacing: -.025em; line-height: 1.25; }
@@ -306,5 +303,5 @@
   .fleet-nav .fleet-preview { display: none; }
   .fleet-section-trigger { flex: 1; padding-inline: 6px; font-size: .8rem; line-height: 1.2; }
   .fleet-nav .fleet-actions { gap: 4px; flex-wrap: nowrap; }
-  .fleet-nav .fleet-actions > .btn { width: 44px; padding-inline: 0; }
+  .fleet-nav .fleet-actions > .btn { width: 44px; padding-inline: 0; justify-content: center; }
 }

@@ -54,6 +54,8 @@
   --danger-soft: #f8e7e1;
   --r-xs: 5px;
   --r-sm: 8px;
+  --r-control: 14px;
+  --r-icon-control: 13px;
   --r-md: 12px;
   --r-lg: 16px;
   --r-xl: 22px;
@@ -323,7 +325,7 @@
   min-height: 40px;
   padding: 0.58rem 0.9rem;
   border-color: var(--line-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-control);
   background: var(--surface);
   font-size: 0.86rem;
   font-weight: 600;
@@ -381,7 +383,7 @@
 .icon-btn {
   width: 38px;
   height: 38px;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-icon-control);
 }
 
 .icon-btn:hover { background: var(--surface-3); }
@@ -390,7 +392,7 @@
   min-height: 44px;
   padding: 0.68rem 0.78rem;
   border-color: var(--line-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-control);
   background-color: var(--surface);
   box-shadow: 0 1px 1px rgba(41,32,18,0.03) inset;
 }

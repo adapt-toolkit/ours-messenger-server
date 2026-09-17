@@ -72,3 +72,5 @@ Fleet lists share Messenger’s `ContactRow`, `SearchInput` and list/tab materia
 Only the outer header provides list creation: New chat, persistent agent, task, invitations, and context-sensitive “Add to this task” all live under +. Fleet hides the embedded Messenger titlebar and invite shortcut with scoped CSS; the standalone Messenger retains them. Current section + chevron and the nine-square launcher open the same navigation dialog. Phone conversations show neither control until Back returns to the list.
 
 Validation: `node tests/browser-fleet-consistency.test.mjs` checks shared computed styles, section controls, search retention and task-context creation at 320/390/1280px in both themes (uses `FLEET_PREVIEW_ORIGIN`, otherwise starts an isolated local preview server).
+
+Control geometry is shared across themes: `--r-control` is 14px for standard buttons and fields; `--r-icon-control` is 13px for icon buttons, matching the requested dark-theme roundness. Dialog sizing/position comes entirely from Messenger’s responsive `DialogShell` styles (full-width phone sheet, centered desktop dialog; Profile uses the standard `wide` variant).

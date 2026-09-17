@@ -29,8 +29,11 @@ try {
     assert.deepEqual(sessionStyles, messengerStyles, `${width}/${theme}: shared list styles`);
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-messenger-${width}-${theme}.png` });
     await button('Navigate').click(); await page.getByRole('dialog').getByRole('button', { name: /^Sessions/ }).click();
+    // DialogShell restores launcher focus on the next frame; finish that before typing.
+    await expect(button('Navigate')).toBeFocused();
     await expect(page.getByLabel('Search sessions')).toHaveValue('Research');
     await page.getByLabel('Search sessions').fill('');
+    await expect(page.getByLabel('Search sessions')).toHaveValue('');
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-sessions-${width}-${theme}.png` });
     await button('Add or connect').click();
     const checkReference = async (selector, className) => {
@@ -45,15 +48,21 @@ try {
       }, { className, properties });
     };
     await checkReference('.fleet-menu-action', 'btn');
+    await expect(page.locator('.fleet-menu-action').first()).toHaveCSS('border-radius', '14px');
+    await expect(button('Close Add or connect')).toHaveCSS('border-radius', '13px');
+    const modalBox = await page.getByRole('dialog').boundingBox();
+    assert.ok(Math.abs(modalBox.x + modalBox.width / 2 - width / 2) < 1, 'modal centered horizontally');
+    assert.ok(modalBox.x >= 0 && modalBox.x + modalBox.width <= width, 'modal inside viewport');
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-menu-${width}-${theme}.png` });
     await button('New persistent agent').click();
     await checkReference('.fleet-field input', 'field');
+    await expect(page.locator('.fleet-field input').first()).toHaveCSS('border-radius', '14px');
     await checkReference('.fleet-dialog-actions .btn.primary', 'btn primary');
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-form-${width}-${theme}.png` });
     await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.getByRole('tab', { name: 'Temporary', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Temporary', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await button('Launch website Task · 2 agents · Active').click();
+    try { await button('Launch website Task · 2 agents · Active').click({ timeout: 5000 }); } catch(error) { console.error('TASK LOOKUP', width, theme, await page.locator('.fleet-list').innerText(), await page.getByLabel('Search sessions').inputValue()); await page.screenshot({ path: '/tmp/ours-fleet-evidence/consistency-failure.png' }); throw error; }
     await button('Add or connect').click(); await button('Add to this task').click();
     await expect(page.getByRole('dialog')).toContainText('Launch website');
     await page.keyboard.press('Escape');
@@ -63,6 +72,9 @@ try {
     await expect(button('Change section: Task manager')).toBeVisible();
     await button('Change section: Task manager').focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('dialog')).toContainText('Task manager'); await page.keyboard.press('Escape');
     const addBox = await button('Add or connect').boundingBox(); assert.ok(addBox.x + addBox.width <= width);
+    const plusBox = await button('Add or connect').locator('svg').boundingBox();
+    assert.ok(Math.abs(addBox.x + addBox.width / 2 - plusBox.x - plusBox.width / 2) < 1, 'plus icon horizontally centered');
+    assert.ok(Math.abs(addBox.y + addBox.height / 2 - plusBox.y - plusBox.height / 2) < 1, 'plus icon vertically centered');
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-tasks-${width}-${theme}.png` });
     await page.close();
   }
