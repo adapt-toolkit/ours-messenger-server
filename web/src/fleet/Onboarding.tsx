@@ -29,7 +29,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   const slide = slides[step];
   return <main className="fleet-intro">
     <header className="fleet-intro-header"><span className="fleet-brand">ours<span className="fleet-preview">Preview</span></span><Button onClick={onComplete}>Skip</Button></header>
-    <div className="fleet-intro-main"><Scene step={step} /><section className="fleet-intro-copy"><p className="fleet-intro-eyebrow">{slide.eyebrow}</p><h1 tabIndex={-1} ref={heading}>{slide.title}</h1><p>{slide.body}</p>{step === 1 && <p className="fleet-intro-security"><Lock size={16} aria-hidden /><span>Messages on the ours network are end-to-end encrypted.</span></p>}</section></div>
+    <div className="fleet-intro-main"><Scene step={step} /><section className="fleet-intro-copy"><p className="fleet-intro-eyebrow">{slide.eyebrow}</p><h1 tabIndex={-1} ref={heading}>{slide.title}</h1><p>{slide.body}</p>{step === 1 && <p className="fleet-intro-security"><Lock size={16} aria-hidden /><span><strong>Connect with confidence.</strong>Modern cryptography protects your messages with end-to-end encryption.</span></p>}</section></div>
     <footer className="fleet-intro-footer"><div className="fleet-intro-progress" aria-label={`Step ${step + 1} of 5`}>{slides.map((_, i) => <span key={i} className={i === step ? 'current' : ''} aria-hidden />)}</div><div className="fleet-intro-buttons">{step > 0 && <Button onClick={() => setStep(x => x - 1)}>Back</Button>}<Button primary onClick={() => step === 4 ? onComplete() : setStep(x => x + 1)}>{step === 4 ? 'Start with your Coordinator' : 'Continue'}</Button></div></footer>
   </main>;
 }
