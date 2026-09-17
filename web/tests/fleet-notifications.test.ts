@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { countAt, markTargetRead, resolveRequest, seedNotifications } from '../src/fleet/notifications';
+const seed = seedNotifications();
+assert.equal(countAt(seed, 'root'), 5);
+assert.equal(countAt(seed, 'messenger'), 2);
+assert.equal(countAt(seed, 'work'), 3);
+assert.equal(countAt(seed, 'task:0mu1gv4ndd96af6f4'), 1);
+const read = markTargetRead(seed, 'maya');
+assert.equal(countAt(read, 'root'), 4);
+assert.equal(countAt(markTargetRead(read, 'researcher'), 'root'), 4, 'reading does not resolve request');
+const resolved = resolveRequest(read, 'request-researcher');
+assert.equal(countAt(resolved, 'root'), 3);
+assert.equal(countAt(resolveRequest(resolved, 'request-researcher'), 'root'), 3, 'idempotent resolution');
+assert.equal(countAt([...seed, seed[0]], 'root'), 5, 'unique events, not duplicated ancestor counts');
+assert.equal(resolveRequest(resolved, 'request-researcher', 'declined').find(n=>n.id==='request-researcher')?.decision, 'approved');
+console.log('fleet notifications selectors PASS');

@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { initialConfiguration, validateDefinition } from '../src/fleet/configuration';
+const c = initialConfiguration();
+assert.ok(Object.keys(c.brain).length > 2);
+assert.ok(Object.keys(c.role).length > 2);
+assert.equal(validateDefinition('template', {role:{ref:'missing'},brain:{ref:Object.keys(c.brain)[0]}}, c), 'Choose an existing role.');
+assert.equal(validateDefinition('template', {role:{inline:{mission:'bad'}},brain:{ref:Object.keys(c.brain)[0]}}, c), 'Choose an existing role.');
+assert.equal(validateDefinition('tasks', {version:1,members:[{slot:'a',role:'Developer',count:1,agent_template:'missing'}]}, c), 'Choose an existing agent template for each member.');
+assert.equal(validateDefinition('brain', {harness:'codex',model:'custom-model',session:'acp'}, c), '');
+for(const [kind, entries] of Object.entries(c)) for(const entry of Object.values(entries)) assert.equal(validateDefinition(kind, entry, c), '', kind);
+assert.equal(validateDefinition('template', {...Object.values(c.template)[0],permissions:{approval:'never'}}, c), 'Choose a valid approval policy.');
+assert.equal(validateDefinition('brain', {harness:'claude-code',session:'codex-app-server'}, c), 'Choose a session supported by this harness.');
+assert.equal(validateDefinition('brain', {harness:'claude-code',model:'custom',effort:'ultra'}, c), 'Choose an effort supported by this model.');
+console.log('fleet configuration validation PASS');

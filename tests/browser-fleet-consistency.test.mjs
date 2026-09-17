@@ -62,7 +62,7 @@ try {
     await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.getByRole('tab', { name: 'Temporary', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Temporary', exact: true })).toHaveAttribute('aria-selected', 'true');
-    try { await button('Launch website Task · 2 agents · Active').click({ timeout: 5000 }); } catch(error) { console.error('TASK LOOKUP', width, theme, await page.locator('.fleet-list').innerText(), await page.getByLabel('Search sessions').inputValue()); await page.screenshot({ path: '/tmp/ours-fleet-evidence/consistency-failure.png' }); throw error; }
+    try { await button('Launch website Task · 2 agents · Active 1').click({ timeout: 5000 }); } catch(error) { console.error('TASK LOOKUP', width, theme, await page.locator('.fleet-list').innerText(), await page.getByLabel('Search sessions').inputValue()); await page.screenshot({ path: '/tmp/ours-fleet-evidence/consistency-failure.png' }); throw error; }
     await button('Add or connect').click(); await button('Add to this task').click();
     await expect(page.getByRole('dialog')).toContainText('Launch website');
     await page.keyboard.press('Escape');

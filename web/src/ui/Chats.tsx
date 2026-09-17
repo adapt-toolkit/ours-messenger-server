@@ -860,6 +860,8 @@ export function Conversation(props: {
   timelineFooter?: ReactNode;
   /** Optional contextual actions in the existing peer header. */
   headerActions?: ReactNode;
+  /** Optional navigation attention cue; absent in standalone Messenger. */
+  backAdornment?: ReactNode;
   onSendFile?: (att: PendingAttachment, replyToWireId?: string) => Promise<void>;
   onFetchFile?: (wireId: string) => Promise<void>;
 }) {
@@ -1378,7 +1380,7 @@ export function Conversation(props: {
       <div className="detail-head" ref={detailHeadRef}>
         <div className="conv-peer">
           <button className="icon-btn detail-back" aria-label="Back to conversations" onClick={props.onBack}>
-            <Icon name="back" />
+            <Icon name="back" />{props.backAdornment}
           </button>
           <div className="conv-peer-status">
             <span className="conv-peer-name">{contact.name}</span>

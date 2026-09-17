@@ -1,5 +1,6 @@
 import { useEffect, useState, type Dispatch, type SetStateAction, type ReactNode } from 'react';
 import { Link, ScanLine, Users, MessageCircle, SlidersHorizontal, Trash2, UserRound, Bot, ClipboardList, UserPlus, Square } from 'lucide-react';
+import { NotificationBadge, NotificationPanel } from './Notifications';
 import { Navigation } from './Navigation';
 import { FolderPicker } from './FolderPicker';
 import DialogShell from '../ui/DialogShell';
@@ -65,7 +66,8 @@ export function FleetDialogs(p: Props) {
     close(); notify(remove ? 'Task deleted' : 'Task closed');
   };
   switch(m.kind) {
-    case 'navigation': title = 'Navigation'; body = <Navigation current={p.section} select={p.switchSection} profile={() => p.go({ kind: 'profile', id: 'human' })} settings={() => p.go({ kind: 'settings' })} />; break;
+    case 'navigation': title = 'Navigation'; body = <Navigation notifications={() => next('notifications')} current={p.section} select={p.switchSection} profile={() => p.go({ kind: 'profile', id: 'human' })} settings={() => p.go({ kind: 'settings' })} />; break;
+    case 'notifications': title = 'Notifications'; body = <NotificationPanel open={target => p.openChat(target.chat, target.section)} />; break;
     case 'add': title = 'Add or connect'; body = <><MenuAction title="Generate invite" icon={Link} onClick={() => next('generate')} /><MenuAction title="Accept invite" icon={ScanLine} onClick={() => next('accept')} /><div className="fleet-menu-divider" /><MenuAction title="New chat" icon={MessageCircle} onClick={p.newChat} /><MenuAction title="New persistent agent" icon={Bot} onClick={() => next('new-agent')} /><MenuAction title="New task" icon={ClipboardList} onClick={() => next('new-task')} />{p.taskId && <MenuAction title="Add to this task" icon={UserPlus} onClick={() => next('add-agent', p.taskId)} />}</>; break;
     case 'new-agent': case 'add-agent': {
       title = m.kind === 'add-agent' ? 'Add task agent' : 'New persistent agent';
@@ -99,5 +101,5 @@ export function FleetDialogs(p: Props) {
   }
   if(folderOpen) { title = 'Choose folder'; body = <FolderPicker value={folder} onCancel={() => setFolderOpen(false)} onSelect={value => { setFolder(value); setFolderOpen(false); }} />; }
   if(p.embedded) return <div className="fleet-dialog-content"><Button onClick={close}>‹ Contacts</Button><h2>{title}</h2>{body}</div>;
-  return <DialogShell title={title} onClose={folderOpen ? () => setFolderOpen(false) : close} className="fleet-modal"><div className="fleet-dialog-content">{body}</div></DialogShell>;
+  return <DialogShell closeAdornment={<NotificationBadge node="root" />} title={title} onClose={folderOpen ? () => setFolderOpen(false) : close} className="fleet-modal"><div className="fleet-dialog-content">{body}</div></DialogShell>;
 }

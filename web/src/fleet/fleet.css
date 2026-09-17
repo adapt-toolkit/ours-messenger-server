@@ -305,3 +305,19 @@
   .fleet-nav .fleet-actions { gap: 4px; flex-wrap: nowrap; }
   .fleet-nav .fleet-actions > .btn { width: 44px; padding-inline: 0; justify-content: center; }
 }
+
+.fleet-notification-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-size: 11px; line-height: 1; font-weight: 700; flex-shrink: 0; vertical-align: middle; margin-left: 5px; }
+.fleet-nav-trigger, .fleet-chat-slot .detail-back { position: relative; }
+.fleet-nav-trigger > .fleet-notification-badge, .fleet-chat-slot .detail-back > .fleet-notification-badge { position: absolute; right: -4px; top: -3px; margin: 0; border: 2px solid var(--surface); }
+.fleet-agent-requests { display: grid; gap: 12px; margin: 16px; }
+.fleet-agent-request { padding: 16px; border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: var(--surface); }
+.fleet-agent-request p { margin: 8px 0 12px; }
+.fleet-config-form { display: grid; gap: 16px; }
+.fleet-config-list { margin-top: 16px; }
+.fleet-config-list .contact-last { white-space: normal; overflow-wrap: anywhere; }
+.fleet-config-member { min-width: 0; display: grid; gap: 12px; border: 1px solid var(--line-strong); border-radius: var(--r-lg); padding: 16px; }
+.fleet-config-form textarea { min-height: 100px; resize: vertical; }
+.fleet-config-form details > .fleet-field { margin-top: 12px; }
+.fleet-modal .modal-head > .icon-btn { position: relative; }
+.fleet-modal .modal-head > .icon-btn > .fleet-notification-badge { position: absolute; right: -5px; top: -5px; margin: 0; border: 2px solid var(--surface); }
+.theme-dark .fleet-notification-badge { color: #062510; }

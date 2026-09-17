@@ -39,12 +39,12 @@ try {
   await button('Agent actions').click(); await button('Generate invite').click(); await button('Generate an invite').click(); await expect(dialog().getByLabel('Invitation code')).toHaveValue(/ours:\/\/preview-invite\/agent-/); await close();
   await page.getByRole('tab', { name: 'Persistent', exact: true }).click(); await button('Coordinator Persistent · Ready').click();
   await composer().fill('Coordinator draft');
-  await button('Research assistant Persistent · Idle').click(); await composer().fill('Research draft');
+  await button('Research assistant Persistent · Idle 1').click(); await composer().fill('Research draft');
   await button('Coordinator Persistent · Ready').click(); await expect(composer()).toHaveValue('Coordinator draft');
   await navigate('Messenger'); await composer().fill('Maya draft'); await navigate('Sessions'); await expect(composer()).toHaveValue('Coordinator draft');
-  await page.getByRole('tab', { name: 'Temporary', exact: true }).click(); await button('Launch website Task · 2 agents · Active').click();
-  await expect(button('Room Shared chat 2')).toBeVisible();
-  await button('Developer Direct agent chat · Working').click();
+  await page.getByRole('tab', { name: 'Temporary', exact: true }).click(); await button('Launch website Task · 2 agents · Active 1').click();
+  await expect(button('Room Shared chat')).toBeVisible();
+  await button('Developer Direct agent chat · Working 1').click();
   const chatSpace = async () => {
     const head = await page.locator('.fleet-chat-slot:not([hidden]) .detail-head').boundingBox();
     const composerBox = await page.locator('.fleet-chat-slot:not([hidden]) .composer-wrap').boundingBox();
@@ -54,7 +54,7 @@ try {
   await composer().fill('Developer draft'); await button('Agent actions').click(); await button('View task').click(); await button('‹ Back').click(); await expect(composer()).toHaveValue('Developer draft');
   await button('Settings').first().click(); await button('‹ Back').click(); await expect(composer()).toHaveValue('Developer draft');
   await composer().fill('Developer draft'); await button('Agent actions').click(); await button('Room').click(); await composer().fill('Room draft');
-  await button('Developer Direct agent chat · Working').click(); await expect(composer()).toHaveValue('Developer draft');
+  await button('Developer Direct agent chat · Working 1').click(); await expect(composer()).toHaveValue('Developer draft');
   await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages .fleet-tool')).toBeVisible();
   await button('Allow once').click(); await expect(page.getByText('Test command · Allowed once · Complete')).toBeVisible();
   await page.locator('.fleet-tool summary').click(); await button('Open full output').click(); await expect(dialog()).toContainText('3 files inspected'); await close();
@@ -76,7 +76,7 @@ try {
   await button('Working folder Workstation /home/you/work/website').click(); await button('New folder in website').click(); await dialog().getByLabel('Folder name').fill('preview-assets'); await dialog().getByRole('button', { name: 'Create folder', exact: true }).click();
   await button('Select folder').click(); await expect(dialog().getByLabel('Agent name')).toHaveValue('Preview Tester'); await button('Create persistent agent').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .conv-peer-name')).toHaveText('Preview Tester');
   await button('Add or connect').click(); await button('New task').click(); await dialog().getByLabel('Task name').fill('Preview room'); await button('Empty / custom Create an empty room; add temporary agents later').click(); await button('Create task session').click(); await expect(dialog()).toContainText('No agents yet'); await button('Add agent').click(); await button('Add Tester').click(); await expect(page.locator('.fleet-list h2')).toHaveText('Preview room');
-  await button('Settings').first().click(); await button('Roles').click(); await page.getByLabel('Purpose', { exact: true }).fill('Verify the preview'); await button('Save role').click(); await expect(page.getByRole('status')).toContainText('Definition saved');
+  await button('Settings').first().click(); await button('Roles').click(); await page.locator('.fleet-config-list .contact-row').filter({ has: page.locator('.contact-name', { hasText: /^Developer$/ }) }).click(); await page.getByLabel('Mission', { exact: true }).fill('Verify the preview'); await button('Save role').click(); await expect(page.locator('.fleet-config-list')).toContainText('Developer');
   await page.goto(origin + '/fleet/account/signup'); await page.getByRole('checkbox').check(); await button('Create account').click(); await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible(); await button('Preview confirmed email').click();
   const slides = ['The network is ours. The rest is yours.', 'Connect any two agents.', 'Your fleet. One room for each task.', 'Your room. Invite anyone.', 'Close the room. End its access.'];
   for (let i = 0; i < slides.length; i++) { await expect(page.getByRole('heading', { name: slides[i] })).toBeVisible(); if(i < 4) await button('Continue').click(); }
@@ -128,7 +128,7 @@ try {
   await page.goto(origin + '/fleet/work/developer');
   await expect(composer()).toBeVisible(); const box = await composer().boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= 391 && box.y + box.height <= 844, 'mobile composer stays in viewport');
   assert.ok(await chatSpace() >= 700, 'mobile chat fills screen with a single header');
-  await composer().fill('Mobile draft'); await button('Back to conversations').click(); await expect(button('Developer Direct agent chat · Working')).toBeVisible(); await button('Developer Direct agent chat · Working').click(); await expect(composer()).toHaveValue('Mobile draft');
+  await composer().fill('Mobile draft'); await button('Back to conversations').click(); await expect(button('Developer Direct agent chat · Working 1')).toBeVisible(); await button('Developer Direct agent chat · Working 1').click(); await expect(composer()).toHaveValue('Mobile draft');
   // Every dismissal path closes the whole mobile profile journey and preserves its source.
   for (const dismissal of ['outside', 'Escape', 'Close']) {
     const trigger = button('Open contact details for Developer');
@@ -154,7 +154,7 @@ try {
   await activity.locator('summary').click(); await expect(activity.locator('details')).toHaveAttribute('open', '');
   await button('Open full output').click(); await close(); await expect(composer()).toHaveValue('Mobile draft');
   const expandedBox = await composer().boundingBox(); assert.ok(expandedBox.y + expandedBox.height <= 844, 'expanded activity does not move the mobile composer out of view');
-  await button('Back to conversations').click(); await button('Use dark theme').click(); await button('Developer Direct agent chat · Working').click(); await expect(page.locator('.fleet-nav')).toBeHidden(); await page.screenshot({ path: join(output, 'agent-mobile-dark.png') });
+  await button('Back to conversations').click(); await button('Use dark theme').click(); await button('Developer Direct agent chat · Working 1').click(); await expect(page.locator('.fleet-nav')).toBeHidden(); await page.screenshot({ path: join(output, 'agent-mobile-dark.png') });
   await button('Back to conversations').click(); await navigate('Messenger'); await expect(page.locator('div.fleet-messenger-list')).toBeVisible(); await page.getByRole('button', { name: /Maya/ }).first().click(); await expect(composer()).toBeVisible(); await composer().fill('Hello Maya'); await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hello Maya');
   await page.screenshot({ path: join(output, 'messenger-mobile-dark.png') });
   // Each full entry URL visit starts a fresh mock, even in the same browser.

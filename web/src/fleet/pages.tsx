@@ -1,3 +1,4 @@
+import { ConfigurationEditor } from './Configuration';
 import { useState } from 'react';
 import { Layers, UserRound, Brain, ShieldCheck, Folder, ListTodo } from 'lucide-react';
 import { Onboarding } from './Onboarding';
@@ -34,6 +35,7 @@ const definitions: Record<string, { title: string; intro: string; fields: [strin
 };
 export function SettingsPage({ editor, go, notify, back }: { back: () => void; editor?: string; go: (p: Page) => void; notify: (s: string) => void }) {
   const [values, setValues] = useState<Record<string, string>>({});
+  if(editor && ['role','brain','template','tasks'].includes(editor.split('/')[0])) return <ConfigurationEditor key={editor} editor={editor} go={go} />;
   const d = editor && definitions[editor];
   return <main className="fleet-form-page"><PageHeader title={d ? d.title : 'Configuration'} subtitle={d ? d.intro : 'Reusable defaults for simple session creation'} onBack={back} />{d ? <form onSubmit={e => { e.preventDefault(); notify('Definition saved in this preview'); }}>{d.fields.map(([label, value]) => <Field key={`${editor}-${label}`} label={label}>{['Purpose', 'Instructions', 'Context / briefing', 'Briefing'].includes(label) ? <textarea required value={values[`${editor}-${label}`] ?? value} onChange={e => setValues(v => ({ ...v, [`${editor}-${label}`]: e.target.value }))} /> : <input required readOnly={label === 'Credentials'} value={values[`${editor}-${label}`] ?? value} onChange={e => setValues(v => ({ ...v, [`${editor}-${label}`]: e.target.value }))} />}</Field>)}<Row title="Used by" subtitle="Current sessions keep their saved snapshots" /><Button primary type="submit">Save {editor === 'permissions' ? 'permission profile' : editor}</Button></form> : <>{[['template', 'Agent Templates', 'Developer, Tester, Writer · Combine role, brain and permissions'], ['role', 'Roles', 'Purpose, instructions and responsibilities'], ['brain', 'Brains', 'Harness, model and runtime settings'], ['permissions', 'Permission profiles', 'Read-only, Workspace edits, Restricted'], ['host', 'Host and folders', 'Workstation · Allowed roots and default folder'], ['tasks', 'Task / room templates', 'single · pair · team · custom']].map(([key, title, subtitle]) => <MenuAction key={key} title={title} icon={{ template: Layers, role: UserRound, brain: Brain, permissions: ShieldCheck, host: Folder, tasks: ListTodo }[key]!} onClick={() => go({ kind: 'settings', editor: key })} />)}<Button onClick={() => notify('Something went wrong. Please try again.')}>Preview notification</Button></>}</main>;
 }
