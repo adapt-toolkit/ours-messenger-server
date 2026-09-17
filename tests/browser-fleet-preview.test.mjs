@@ -10,7 +10,7 @@ const browser = await chromium.launch();
 const errors = []; const apiCalls = [];
 const output = '/tmp/ours-fleet-evidence'; mkdirSync(output, { recursive: true });
 try {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   page.on('pageerror', e => errors.push(e.message)); page.on('request', req => { if(new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url()); });
   const button = name => page.getByRole('button', { name, exact: true });
@@ -19,6 +19,7 @@ try {
   const close = async () => { if(await button('‹ Contacts').count()) { await button('‹ Contacts').click(); return; } const count = await page.locator('[role=dialog]').count(); await page.keyboard.press('Escape'); await expect(page.locator('[role=dialog]')).toHaveCount(count - 1); };
   await page.goto(origin + '/fleet');
   await expect(button('Coordinator Persistent · Ready')).toBeVisible();
+  await expect(page.locator('.fleet-context')).toHaveCount(0);
   await composer().fill('Coordinator draft');
   await button('Research assistant Persistent · Idle').click(); await composer().fill('Research draft');
   await button('Coordinator Persistent · Ready').click(); await expect(composer()).toHaveValue('Coordinator draft');
@@ -26,7 +27,13 @@ try {
   await button('Temporary').click(); await button('Launch website Task · 2 agents · Active').click();
   await expect(button('Room Shared chat · 2 unread 2')).toBeVisible();
   await button('Developer Direct agent chat · Working').click();
-  await composer().fill('Developer draft'); await button('Room 2').click(); await composer().fill('Room draft');
+  const chatSpace = async () => {
+    const head = await page.locator('.fleet-chat-slot:not([hidden]) .detail-head').boundingBox();
+    const composerBox = await page.locator('.fleet-chat-slot:not([hidden]) .composer-wrap').boundingBox();
+    return composerBox.y - head.y - head.height;
+  };
+  assert.ok(await chatSpace() >= 600, 'desktop timeline gains height with navigation beside it');
+  await composer().fill('Developer draft'); await button('Agent actions').click(); await button('Room Shared task conversation').click(); await composer().fill('Room draft');
   await button('Developer Direct agent chat · Working').click(); await expect(composer()).toHaveValue('Developer draft');
   await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages .fleet-tool')).toBeVisible();
   await button('Allow once').click(); await expect(page.getByText('Test command · Allowed once · Complete')).toBeVisible();
@@ -73,6 +80,7 @@ try {
   await page.goto(origin + '/fleet/tasks'); await button('Use light theme').click(); await page.screenshot({ path: join(output, 'tasks-desktop-light.png') });
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(origin + '/fleet/work/developer');
   await expect(composer()).toBeVisible(); const box = await composer().boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= 391 && box.y + box.height <= 844, 'mobile composer stays in viewport');
+  assert.ok(await chatSpace() >= 700, 'mobile chat fills screen with a single header');
   await composer().fill('Mobile draft'); await button('Back to conversations').click(); await expect(button('Developer Direct agent chat · Working')).toBeVisible(); await button('Developer Direct agent chat · Working').click(); await expect(composer()).toHaveValue('Mobile draft');
   // Every dismissal path closes the whole mobile profile journey and preserves its source.
   for (const dismissal of ['outside', 'Escape', 'Close']) {
@@ -98,8 +106,8 @@ try {
   await activity.locator('summary').click(); await expect(activity.locator('details')).toHaveAttribute('open', '');
   await button('Open full output').click(); await close(); await expect(composer()).toHaveValue('Mobile draft');
   const expandedBox = await composer().boundingBox(); assert.ok(expandedBox.y + expandedBox.height <= 844, 'expanded activity does not move the mobile composer out of view');
-  await button('Use dark theme').click(); await page.screenshot({ path: join(output, 'agent-mobile-dark.png') });
-  await button('Navigate').click(); await button('Messenger People and connected identities').click(); await expect(page.locator('.fleet-messenger-list')).toBeVisible(); await page.getByRole('button', { name: /Maya/ }).first().click(); await expect(composer()).toBeVisible(); await composer().fill('Hello Maya'); await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hello Maya');
+  await button('Back to conversations').click(); await button('Use dark theme').click(); await button('Developer Direct agent chat · Working').click(); await expect(page.locator('.fleet-nav')).toBeHidden(); await page.screenshot({ path: join(output, 'agent-mobile-dark.png') });
+  await button('Back to conversations').click(); await button('Navigate').click(); await button('Messenger People and connected identities').click(); await expect(page.locator('.fleet-messenger-list')).toBeVisible(); await page.getByRole('button', { name: /Maya/ }).first().click(); await expect(composer()).toBeVisible(); await composer().fill('Hello Maya'); await button('Send').click(); await expect(page.locator('.fleet-chat-slot:not([hidden]) .messages')).toContainText('Hello Maya');
   await page.screenshot({ path: join(output, 'messenger-mobile-dark.png') });
   // Each full entry URL visit starts a fresh mock, even in the same browser.
   await page.goto(origin + '/fleet/account/signup'); await page.getByLabel('Your name', { exact: true }).fill('Alex');
@@ -112,7 +120,7 @@ try {
   }
   await button('Start with your Coordinator').click(); await expect(greeting).toContainText('Hi Alex!');
   await composer().fill('A private test message'); await button('Send').click(); await composer().fill('Keep this draft');
-  await button('Close conversation').click(); await expect(button('Coordinator Persistent · Ready')).toBeVisible();
+  await button('Back to conversations').click(); await expect(button('Coordinator Persistent · Ready')).toBeVisible();
   await button('Coordinator Persistent · Ready').click(); await expect(greeting).toContainText('A private test message'); await expect(composer()).toHaveValue('Keep this draft');
   const secondTab = await page.context().newPage();
   await secondTab.goto(origin + '/fleet/account/signup'); await secondTab.getByRole('checkbox').check();

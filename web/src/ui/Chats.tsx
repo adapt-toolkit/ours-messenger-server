@@ -869,6 +869,8 @@ export function Conversation(props: {
   emptyOverride?: ReactNode;
   /** Optional agent context inside the scrollable timeline; absent in Messenger. */
   timelineFooter?: ReactNode;
+  /** Optional contextual actions in the existing peer header. */
+  headerActions?: ReactNode;
   onSendFile?: (att: PendingAttachment, replyToWireId?: string) => Promise<void>;
   onFetchFile?: (wireId: string) => Promise<void>;
 }) {
@@ -1406,6 +1408,7 @@ export function Conversation(props: {
           <button type="button" className="conv-contact-trigger conv-contact-avatar" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
             <span className="conv-contact-initials" aria-hidden>{contact.initials}</span>
           </button>
+          {props.headerActions}
         </div>
       </div>
       <div
