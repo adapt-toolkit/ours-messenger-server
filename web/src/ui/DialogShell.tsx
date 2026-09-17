@@ -11,7 +11,6 @@ export default function DialogShell(props: {
   wide?: boolean;
   className?: string;
   contentId?: string;
-  closeAdornment?: ReactNode;
 }) {
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
@@ -41,7 +40,7 @@ export default function DialogShell(props: {
             </div>
             <Dialog.Close asChild>
               <button className="icon-btn" aria-label={`Close ${props.title}`}>
-                <Icon name="close" />{props.closeAdornment}
+                <Icon name="close" />
               </button>
             </Dialog.Close>
           </div>

@@ -318,6 +318,4 @@
 .fleet-config-member { min-width: 0; display: grid; gap: 12px; border: 1px solid var(--line-strong); border-radius: var(--r-lg); padding: 16px; }
 .fleet-config-form textarea { min-height: 100px; resize: vertical; }
 .fleet-config-form details > .fleet-field { margin-top: 12px; }
-.fleet-modal .modal-head > .icon-btn { position: relative; }
-.fleet-modal .modal-head > .icon-btn > .fleet-notification-badge { position: absolute; right: -5px; top: -5px; margin: 0; border: 2px solid var(--surface); }
 .theme-dark .fleet-notification-badge { color: #062510; }

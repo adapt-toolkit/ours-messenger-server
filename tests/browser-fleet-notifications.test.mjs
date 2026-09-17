@@ -12,8 +12,10 @@ for (const engine of [chromium, webkit]) {
   await page.goto(origin + '/fleet');
   const badge = node => page.locator(`[data-notification-node="${node}"]:visible`).first();
   await expect(badge('root')).toHaveText('5');
+  await expect(page.locator('.fleet-nav [data-notification-node="root"]')).toHaveCount(1);
   await page.getByRole('button', {name:'Navigate', exact:true}).click();
   await expect(badge('messenger')).toHaveText('2');
+  await expect(page.getByRole('button', {name:'Close Navigation',exact:true}).locator('[data-notification-node]')).toHaveCount(0);
   await page.getByRole('dialog').getByRole('button', {name:/^Messenger/}).click();
   // Selecting a section alone never marks its conversations read.
   await expect(badge('root')).toHaveText('5');
@@ -45,6 +47,7 @@ for (const engine of [chromium, webkit]) {
   await page.getByRole('button',{name:'Navigate',exact:true}).click();
   await page.getByRole('button',{name:'Notifications',exact:true}).click();
   await expect(page.getByRole('dialog')).toContainText('Alex’s reviewer finished the review');
+  await expect(page.getByRole('button',{name:'Close Notifications',exact:true}).locator('[data-notification-node]')).toHaveCount(0);
   await page.screenshot({path:`/tmp/ours-fleet-evidence/notification-panel-${engine.name()}-${width}.png`});
   await page.getByRole('dialog').getByRole('button',{name:/Alex’s reviewer finished/}).click();
   await expect(page.locator('.fleet-chat-slot:not([hidden])')).toContainText('Review complete.');
