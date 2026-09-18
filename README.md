@@ -12,12 +12,31 @@ invalidations; the browser rebuilds durable truth from REST snapshots.
 
 ## Shared daemon and identity
 
-`start()` calls the SDK's client-only `attachOursClient`, using the standard
-`OURS_CONFIG`, `OURS_STATE_DIR`, `OURS_PORT`, endpoint, and API-token selection.
-The SDK verifies that the endpoint belongs to the expected state directory
-before sending credentials. Messenger then calls `chooseIdentity` for exactly
-`OURS_MESSENGER_IDENTITY`; it never creates an identity or chooses one
-implicitly.
+For V1, set all three variables: `OURS_DAEMON_URL` (HTTP endpoint),
+`OURS_DAEMON_ID` (expected daemon instance ID), and
+`OURS_DAEMON_CREDENTIAL_PATH` (protected current API-token file).
+The same SDK client handles identity operations and complete notification pages.
+It checks daemon selection, refuses redirects and rereads the token file on
+each request, including after an official CLI token update. Partial selection
+fails before attachment; API errors never activate legacy selection.
+
+One opaque process owner survives ordinary reconnect and daemon restart.
+Messenger binds exactly `OURS_MESSENGER_IDENTITY`, preserving its existing
+permanent identity; it never implicitly provisions or forces takeover.
+When all three V1 inputs are absent, the existing SDK local configuration
+selection remains temporary compatibility. Its removal is post-V1 work.
+
+Example against an already provisioned V1 daemon (use the endpoint, instance ID
+and protected credential path supplied by your deployment):
+
+```bash
+OURS_DAEMON_URL=http://127.0.0.1:38351 \
+OURS_DAEMON_ID='<daemon-instance-id>' \
+OURS_DAEMON_CREDENTIAL_PATH=/srv/messenger/daemon-token \
+OURS_MESSENGER_IDENTITY='Ada@server' \
+OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
+node dist/cli.js serve
+```
 
 The shared daemon owns identity keys, MUFL protocol state, message/file history,
 and file blobs. Messenger owns only its public HTTP server and application state
@@ -28,12 +47,16 @@ but does not stop the daemon.
 Startup is transactional: a daemon-attach, identity-bind, application-store,
 watcher, or listener failure closes the public server if present, stops the
 watcher, releases the lease, and preserves existing state. Normal `close()` is
-idempotent and follows the same ordered path.
+idempotent and follows the same ordered path. It waits for admitted HTTP work,
+notification watching and delivery before retiring the owner and closing the
+SDK transport. An incomplete owner release rejects close and makes CLI shutdown
+exit unsuccessfully; repeated close calls retain that result.
 
 ## Running
 
 Install and start the shared daemon with `@ours.network/cli`, create the identity
-there, then start messenger with the same daemon selection:
+there, then start messenger with the same daemon selection. The following
+example uses the temporary local configuration path:
 
 ```bash
 npm install
@@ -301,3 +324,70 @@ Messenger imports only the public client surface of `@ours.network/sdk`.
 Bundle-contract tests reject daemon/native/MUFL artifacts and embedded-runtime
 imports. Process signals stop the messenger HTTP application and release its
 identity lease; daemon lifecycle remains exclusively under the ours CLI.
+
+### Retained messenger session
+
+With complete V1 selection and the available Linux activation primitive, messenger
+retains one logical owner in private
+`owner-session.json` and holds the stable `owner-session.lock` descriptor for its
+entire active lifetime. The existing `flock` utility must support this filesystem;
+a competing activation refuses before daemon attachment. Foreground/container
+restart with the same state continues the nonterminal owner and permanent identity.
+The lock is not process-death evidence, and restart does not replay ambiguous sends.
+
+After existing work drains, normal shutdown saves terminal intent before the
+official bounded SDK release. Incomplete acknowledgement preserves that same
+intent; ordinary startup completes it before creating a fresh logical owner.
+Changed daemon/credential-path/identity selection cannot retarget saved state.
+Corrupt or unsafe state is preserved and refused. Keep the lock file and its inode.
+
+This recovery is qualified initially for the tested Linux Docker local-volume
+profile. Existing legacy/non-Linux entrypoints without retained V1 state keep their prior
+behavior. On Linux, an absent `flock` executable also preserves the original
+process-session behavior only when no owner record exists; V1 daemon selection
+stays unchanged. Contention, invalid state and other activation errors refuse;
+there is no unlocked resume or fallback after a daemon/API failure.
+A saved V1 owner cannot resume through an unqualified or legacy path. Native,
+bind-mount and other runtime conformance remains required; no utility is installed
+automatically. The state contains owner/selection/terminal metadata, not API-token
+bytes. Existing push/VAPID/cursor state and live-push requirements remain unchanged.
+
+## Container-runtime checks
+
+After the normal build, `npm run test:offline` includes the existing owner-session
+and V1 runtime tests. They exercise lifecycle, explicit selection and notification
+behavior with temporary fixtures. For the built server plus installed selected CLI/SDK and local development broker,
+run `node tests/v1-messenger.integration.mjs lifecycle` (also supports `crash` and
+`incomplete`). `node tests/v1-live-push.integration.mjs` additionally requires
+Playwright Firefox and public HTTPS/WSS access to Mozilla Autopush; keep it outside
+offline checks. `MESSENGER_V1_DIST` selects an alternative prepared build directory.
+Package test results alone do not establish complete Compose or live push acceptance.
+
+### Build with selected SDK and CLI archives
+
+Run in the build container with Node 22+, npm and tar available:
+
+```sh
+node scripts/build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tgz --cli /artifacts/ours.network-cli-2.7.2.tgz --out-dir /artifacts/consumer
+```
+
+The recipe validates package names, installs and builds in disposable staging,
+then writes one complete portable npm archive. Stdout is a JSON object with its
+actual `filename`; build/npm logs go to stderr. Normal source manifests, locks
+and installed dependencies are preserved. The installer must install the same
+selected SDK and CLI archives alongside this package; its final dependency
+versions come from those archives. Existing bundling choices are unchanged.
+
+Git source provenance is captured before staging. For source-only input, supply
+`OURS_MESSENGER_BUILD_SHA` (full source commit) and truthful
+`OURS_MESSENGER_BUILD_CLEAN=1` for a clean snapshot, as required by `build.mjs`.
+`OURS_MESSENGER_RELEASE_BUILD=1` retains the existing clean-source gate.
+
+Focused build/install verification (two real builds, including changed bytes
+under identical input names and versions, plus a missing-vendor negative check):
+
+```sh
+node scripts/check-build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tgz --cli /artifacts/ours.network-cli-2.7.2.tgz
+```
+
+For development against the selected, unpublished SDK/CLI sources, see [selected-source development](docs/selected-source-development.md).

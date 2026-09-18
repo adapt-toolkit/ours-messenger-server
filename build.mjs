@@ -10,6 +10,7 @@
 // contains the SDK HTTP client, but never the daemon engine, MUFL packets,
 // evaluator WASM, or native ADAPT bindings.
 
+import { buildTimestamp } from './scripts/build-epoch.mjs';
 import { build } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -22,6 +23,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, 'dist');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const releaseBuild = process.env.OURS_MESSENGER_RELEASE_BUILD === '1';
+const versionTime = buildTimestamp(process.env.SOURCE_DATE_EPOCH);
 
 function command(args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -57,6 +59,9 @@ await build({
   target: 'node20',
   format: 'esm',
   splitting: true,
+  // Bundled CommonJS dependencies still require Node builtins in every split
+  // ESM chunk. Keep this import alias distinct from bundled SDK identifiers.
+  banner: { js: 'import { createRequire as __messengerCreateRequire } from "node:module"; const require = __messengerCreateRequire(import.meta.url);' },
   define: {
     __MESSENGER_BUILD_INFO__: JSON.stringify(buildInfo),
   },
@@ -80,5 +85,5 @@ if (serviceWorker.split(serviceWorkerPlaceholder).length !== 2) {
 await writeFile(serviceWorkerPath, serviceWorker.replace(serviceWorkerPlaceholder, sha));
 await writeFile(
   resolve(dist, 'web', 'version.json'),
-  JSON.stringify({ sha, time: new Date().toISOString() }) + '\n',
+  JSON.stringify({ sha, time: versionTime }) + '\n',
 );
