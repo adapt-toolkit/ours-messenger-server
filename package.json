@@ -67,7 +67,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@ours.network/cli": "2.8.1-nightly.1",
+    "@ours.network/cli": "2.8.1-nightly.2",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^20.14.0",
