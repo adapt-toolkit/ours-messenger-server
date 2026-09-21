@@ -54,7 +54,7 @@ exit unsuccessfully; repeated close calls retain that result.
 
 ## Running
 
-Install and start the shared daemon with `@ours.network/cli`, create the identity
+Install and start the shared daemon with `@ours.network/daemon`, create the identity
 there, then start messenger with the same daemon selection. The following
 example uses the temporary local configuration path:
 
@@ -62,9 +62,9 @@ example uses the temporary local configuration path:
 npm install
 npm run build
 
-# One-time host setup. These commands come from @ours.network/cli.
-ours config setup --port 3070 --state-dir /srv/ours
-ours daemon start
+# One-time host setup: daemon lifecycle is separate from API client commands.
+ours-daemon config setup --port 3070 --state-dir /srv/ours
+ours-daemon start
 ours identity create-root --name 'Ada@server'
 
 OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
