@@ -58,7 +58,7 @@ export const freePort = () =>
   });
 
 /**
- * Boot an isolated daemon through @ours.network/cli and return
+ * Boot an isolated daemon through @ours.network/daemon and return
  * `{ url, stateDir, sdk, close }`.
  */
 export async function startHarnessDaemon(tag, options = {}) {
@@ -82,7 +82,7 @@ export async function startHarnessDaemon(tag, options = {}) {
 
   const cli = options.cliEntry
     ? resolve(options.cliEntry)
-    : resolve(import.meta.dirname, '..', 'node_modules', '@ours.network', 'cli', 'dist', 'cli.js');
+    : resolve(import.meta.dirname, '..', 'node_modules', '@ours.network', 'daemon', 'dist', 'cli.js');
   const child = spawn(process.execPath, [cli, 'daemon', 'serve'], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],

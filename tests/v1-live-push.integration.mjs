@@ -12,7 +12,7 @@ import { sleep, startProcess, stopProcess, unusedPort, waitFor, waitForPort } fr
 
 const ROOT = resolve(import.meta.dirname, '..');
 const cli = join(ROOT, process.env.MESSENGER_V1_DIST ?? 'dist', 'cli.js');
-const oursCli = join(ROOT, 'node_modules/@ours.network/cli/dist/cli.js');
+const oursCli = join(ROOT, 'node_modules/@ours.network/daemon/dist/cli.js');
 const state = mkdtempSync(join(tmpdir(), 'messenger-live-push-'));
 const oursState = join(state, 'ours');
 const messengerState = join(state, 'messenger');

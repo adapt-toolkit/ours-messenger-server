@@ -57,7 +57,7 @@ const watchdog=setTimeout(()=>{console.error('FAIL controller watchdog');process
 try{
  broker=startProcess(['/cowork/node_modules/.bin/adapt-broker','--host','127.0.0.1','--port','9000','--test_mode'],process.env,'/messenger');
  await waitForPort(9000);
- daemon=startProcess(['/messenger/node_modules/@ours.network/cli/dist/cli.js','daemon','serve'],env,'/messenger');
+ daemon=startProcess(['/messenger/node_modules/@ours.network/daemon/dist/cli.js','daemon','serve'],env,'/messenger');
  await waitFor(async()=>{const response=await fetch(endpoint+'/selection',{signal:AbortSignal.timeout(1000)});return response.ok&&(await response.json()).instanceId===daemonId;},'real daemon',180000);
  root=await attach();await root.createRootIdentity({...defaults('ContainerRoot'),skipIfRootExists:false});rootCid=(await root.currentIdentity()).cid;
  creator=await attach();await creator.createIdentity(defaults('MessengerContainer'));cid=(await creator.currentIdentity()).cid;

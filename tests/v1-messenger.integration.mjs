@@ -11,7 +11,7 @@ const ROOT = resolve(import.meta.dirname, '..');
 const mode = process.argv[2] ?? 'lifecycle';
 assert(['lifecycle', 'crash', 'incomplete'].includes(mode));
 const cli = join(ROOT, process.env.MESSENGER_V1_DIST ?? 'dist', 'cli.js');
-const oursCli = join(ROOT, 'node_modules/@ours.network/cli/dist/cli.js');
+const oursCli = join(ROOT, 'node_modules/@ours.network/daemon/dist/cli.js');
 const state = mkdtempSync(join(tmpdir(), 'messenger-v1-'));
 const oursState = join(state, 'ours'); mkdirSync(oursState, {mode: 0o700});
 const messengerState = join(state, 'messenger');
