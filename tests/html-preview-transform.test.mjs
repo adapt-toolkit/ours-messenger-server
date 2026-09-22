@@ -67,7 +67,7 @@ try { transformHtmlPreview(deep); } catch (error) { assert.ok(error instanceof H
 
 const component = readFileSync(new URL('../web/src/ui/HtmlPreview.tsx', import.meta.url), 'utf8');
 assert.match(component, /sandbox=\{HTML_PREVIEW_SANDBOX\}/); assert.match(component, /key=\{rec\.id\}/);
-assert.match(component, /src=\{`\/api\/html-preview\/\$\{encodeURIComponent\(rec\.id\)\}`\}/);
+assert.match(component, /src=\{appPath\(`\/api\/html-preview\/\$\{encodeURIComponent\(rec\.id\)\}`\)\}/);
 assert.doesNotMatch(component, /srcDoc|buildSandboxedHtmlDocument/); assert.match(component, /attachmentBlobMime/);
 assert.match(component, /URL\.revokeObjectURL\(objectUrl\)/); assert.match(component, /Transformed safe preview/);
 

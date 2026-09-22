@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   root: resolve(import.meta.dirname, 'web'),
-  base: '/',
+  base: './',
   plugins: [tailwindcss(), react()],
   build: {
     target: 'es2022',

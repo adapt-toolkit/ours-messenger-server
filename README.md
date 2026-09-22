@@ -391,3 +391,9 @@ node scripts/check-build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tg
 ```
 
 For development against the selected, unpublished SDK/CLI sources, see [selected-source development](docs/selected-source-development.md).
+
+### Gateway mount path
+
+Set `OURS_MESSENGER_BASE_PATH=/base/messenger/` when a reverse proxy strips that prefix before forwarding to Messenger. `OURS_MESSENGER_PUBLIC_ORIGIN` remains the exact external origin, for example `https://ours.example`, with no path. Assets, API requests, browser routes, service-worker scope and presence WebSockets retain the configured mount. `ours-messenger-server capabilities` reports `messenger.gateway-prefix-v1`.
+
+Messenger still has no application authentication. Use the installer's loopback gateway or an authenticated external proxy/tunnel. A shared gateway origin trusts every hosted application; path prefixes and Cowork's separate server-token prompt do not isolate or authenticate Messenger. Keep backend ports private and use the installer documentation's browser-authenticated entry configuration.

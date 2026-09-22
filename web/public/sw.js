@@ -4,6 +4,12 @@
 // document and hashed JS chunks in Cache Storage can strand an installed PWA
 // on a blank screen during a deployment.
 const SW_BUILD = '__MESSENGER_BUILD_SHA__';
+function workerBase() {
+  try { return new URL(self.registration.scope).pathname; } catch { return '/'; }
+}
+function inWorkerScope(url, origin) {
+  try { const parsed = new URL(url); return parsed.origin === origin && parsed.pathname.startsWith(workerBase()); } catch { return false; }
+}
 const FOREGROUND_HEARTBEAT_FRESH_MS = 30_000;
 let lastVisibility = null;
 let lastIOSStandalone = false;
@@ -57,19 +63,22 @@ function queryClientsVisible(clientList, timeoutMs) {
 }
 
 function safeNotificationUrl(value, origin) {
-  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return '/chats';
+  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return workerBase() + 'chats';
   try {
     const parsed = new URL(value, origin);
-    if (parsed.origin !== origin || !parsed.pathname.startsWith('/')) return '/chats';
-    return parsed.pathname + parsed.search + parsed.hash;
+    if (parsed.origin !== origin || !parsed.pathname.startsWith('/')) return workerBase() + 'chats';
+    const base = workerBase();
+    const pathname = base !== '/' && parsed.pathname.startsWith('/chats') ? base + parsed.pathname.slice(1) : parsed.pathname;
+    if (!pathname.startsWith(base)) return base + 'chats';
+    return pathname + parsed.search + parsed.hash;
   } catch {
-    return '/chats';
+    return workerBase() + 'chats';
   }
 }
 
 function selectClickTarget(clientList, origin, targetUrl) {
   const safe = (clientList || []).filter((client) => {
-    try { return new URL(client.url).origin === origin; } catch { return false; }
+    return inWorkerScope(client.url, origin);
   });
   if (targetUrl) {
     const target = new URL(targetUrl, origin).href;
@@ -81,7 +90,7 @@ function selectClickTarget(clientList, origin, targetUrl) {
 
 function selectForegroundClient(clientList, origin) {
   const safe = (clientList || []).filter((client) => {
-    try { return new URL(client.url).origin === origin; } catch { return false; }
+    return inWorkerScope(client.url, origin);
   });
   return safe.find((client) => client.visibilityState === 'visible') || safe[0] || null;
 }
@@ -102,11 +111,11 @@ self.addEventListener('activate', (event) => {
     await self.clients.claim();
     try {
       const keys = await caches.keys();
-      await Promise.all(keys.map((key) => caches.delete(key)));
+      if (workerBase() === '/') await Promise.all(keys.map((key) => caches.delete(key)));
     } catch { /* Cache API may be unavailable; nothing to purge. */ }
     try {
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of windows) client.postMessage({ type: 'ours-sw-activated', build: SW_BUILD });
+      for (const client of windows.filter(client => inWorkerScope(client.url, self.location.origin))) client.postMessage({ type: 'ours-sw-activated', build: SW_BUILD });
     } catch { /* no clients */ }
   })());
 });
@@ -151,7 +160,7 @@ self.addEventListener('push', (event) => {
       return;
     }
     await self.registration.showNotification(title, {
-      body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png', tag, data: { url },
+      body, icon: workerBase() + 'icons/icon-192.png', badge: workerBase() + 'icons/icon-192.png', tag, data: { url },
     });
     if ('setAppBadge' in self.navigator) {
       const notifications = await self.registration.getNotifications();

@@ -1,9 +1,11 @@
+import { appPath, localPath } from './basePath.js';
 export type AppRoute =
   | { name: 'chats'; contactCid: string | null }
   | { name: 'contact'; contactCid: string }
   | { name: 'not_found'; pathname: string };
 
 export function parseRoute(pathname: string): AppRoute {
+  pathname = localPath(pathname);
   if (pathname === '/' || pathname === '/chats' || pathname === '/chats/') {
     return { name: 'chats', contactCid: null };
   }
@@ -29,11 +31,11 @@ export function parseRoute(pathname: string): AppRoute {
 }
 
 export function chatPath(contactCid?: string | null): string {
-  return contactCid ? `/chats/${encodeURIComponent(contactCid)}` : '/chats';
+  return appPath(contactCid ? `/chats/${encodeURIComponent(contactCid)}` : '/chats');
 }
 
 export function contactPath(contactCid: string): string {
-  return `/chats/${encodeURIComponent(contactCid)}/contact`;
+  return appPath(`/chats/${encodeURIComponent(contactCid)}/contact`);
 }
 
 /** A contact route opened inside Messenger returns through browser history;

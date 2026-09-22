@@ -47,6 +47,10 @@ Other:
 
 async function main(): Promise<void> {
   const cmd = process.argv[2];
+  if (cmd === 'capabilities' && process.argv.length === 3) {
+    console.log(JSON.stringify({ capabilities: ['messenger.gateway-prefix-v1'] }));
+    return;
+  }
   if (cmd === undefined || cmd === '--help' || cmd === '-h') {
     // A forced exit can truncate stdout when it is a pipe (the smoke test and
     // ordinary shell redirection). Wait for the write before letting Node exit.
