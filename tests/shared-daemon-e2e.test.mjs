@@ -45,8 +45,9 @@ try {
   const durable = await messenger.listHistory({ peer_cid: peerIdentity.info.cid });
   assert.equal(durable.items.at(0)?.text, 'persisted outside the packet');
   assert.equal(durable.items.at(0)?.inbox_state, 'read');
-  assert.equal(existsSync(join(daemon.stateDir, 'Human', 'history.sqlite3')), true,
-    'identity history is stored in the daemon filesystem');
+  assert.equal(['history.sqlite3', 'history-postgresql.json'].some(name =>
+    existsSync(join(daemon.stateDir, 'Human', name))), true,
+    'identity history retains either its SQLite database or PostgreSQL binding in the daemon state directory');
 
   await messenger.releaseLease();
   assert.equal((await peer.version()).stateDir, daemon.stateDir,

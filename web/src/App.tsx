@@ -1,3 +1,4 @@
+import { appBasePath } from './basePath.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { api } from './api.js';
 import { connectEvents, dispatchLiveEvent, listenLiveEvents } from './events.js';
@@ -398,7 +399,7 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    if (window.location.pathname === '/') window.history.replaceState(null, '', chatPath());
+    if (window.location.pathname === appBasePath()) window.history.replaceState(null, '', chatPath());
     desktop.current = window.matchMedia('(min-width: 861px)');
     const onRoute = () => {
       const route = parseRoute(window.location.pathname);

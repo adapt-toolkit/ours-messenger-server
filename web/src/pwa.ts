@@ -1,3 +1,4 @@
+import { appPath } from './basePath.js';
 import { api } from './api.js';
 import { dispatchLiveEvent } from './events.js';
 import type { PushPreviewMode, PushState, PushView } from './types.js';
@@ -119,7 +120,7 @@ export async function registerMessengerWorker(
   navigator.serviceWorker?.addEventListener('controllerchange', controllerChanged);
 
   if (supported) {
-    registration = await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
+    registration = await navigator.serviceWorker.register(appPath('/sw.js'), { scope: appPath('/'), updateViaCache: 'none' });
     await navigator.serviceWorker.ready;
     const track = (worker: ServiceWorker | null) => worker?.addEventListener('statechange', () => {
       if (worker.state === 'installed' && navigator.serviceWorker.controller) {

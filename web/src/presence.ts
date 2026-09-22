@@ -1,3 +1,4 @@
+import { appPath } from './basePath.js';
 import type { ServerEvent } from './types.js';
 
 export interface PresenceOptions {
@@ -8,7 +9,7 @@ export interface PresenceOptions {
 }
 
 export function presenceUrl(location: Pick<Location, 'protocol' | 'host'> = window.location): string {
-  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/presence`;
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${appPath('/api/presence')}`;
 }
 
 function serverEvent(value: unknown): ServerEvent | null {

@@ -1,3 +1,4 @@
+import { appPath } from '../basePath.js';
 // In-app viewer for received .html/.htm attachments. Mirrors the Markdown
 // preview's modal, byte-loading and off-device behaviour, but the document is
 // hostile input: it is NEVER injected into this React tree, only handed to a
@@ -99,7 +100,7 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
               title={`Sandboxed preview of ${rec.filename}`}
               sandbox={HTML_PREVIEW_SANDBOX}
               referrerPolicy="no-referrer"
-              src={`/api/html-preview/${encodeURIComponent(rec.id)}`}
+              src={appPath(`/api/html-preview/${encodeURIComponent(rec.id)}`)}
             />
           )}
         </div>

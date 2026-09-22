@@ -76,6 +76,12 @@ await viteBuild({
   define: { __MESSENGER_WEB_BUILD_SHA__: JSON.stringify(sha) },
 });
 
+// Keep the shipped document usable on root-level SPA deep links. Runtime
+// prefixDocument rewrites these entry URLs for a configured nested mount; Vite's
+// relative module/CSS references remain relocatable under that entry path.
+const indexPath = resolve(dist, 'web', 'index.html');
+await writeFile(indexPath, (await readFile(indexPath, 'utf8')).replace(/((?:src|href)=")\.\//g, '$1/'));
+
 const serviceWorkerPath = resolve(dist, 'web', 'sw.js');
 const serviceWorkerPlaceholder = '__MESSENGER_BUILD_SHA__';
 const serviceWorker = await readFile(serviceWorkerPath, 'utf8');

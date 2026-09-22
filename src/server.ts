@@ -1,3 +1,4 @@
+import { normalizeBasePath, prefixDocument } from './base-path.js';
 // The HTTP host. It attaches to one shared ours daemon and owns only the public
 // REST/SSE server plus messenger-specific WebPush state.
 
@@ -76,6 +77,7 @@ async function redirectStaleEntryAsset(
   res: ServerResponse,
   appDir: string,
   pathname: string,
+  basePath = '/',
 ): Promise<boolean> {
   const staleEntry = /^\/assets\/index-[A-Za-z0-9_-]+\.(js|css)$/.exec(pathname);
   if (!staleEntry) return false;
@@ -84,12 +86,12 @@ async function redirectStaleEntryAsset(
     const index = (await readContainedFile(appDir, resolve(appDir, 'index.html'))).toString('utf8');
     const extension = staleEntry[1];
     const currentEntry = new RegExp(
-      `(?:src|href)=["'](\\/assets\\/index-[A-Za-z0-9_-]+\\.${extension})["']`,
+      `(?:src|href)=["'](\\.?\\/assets\\/index-[A-Za-z0-9_-]+\\.${extension})["']`,
     ).exec(index)?.[1];
     if (!currentEntry || currentEntry === pathname) return false;
 
     const headers = appHeaders('text/plain; charset=utf-8', 'no-cache', 0);
-    res.writeHead(307, { ...headers, location: currentEntry });
+    res.writeHead(307, { ...headers, location: normalizeBasePath(basePath) + currentEntry.replace(/^\.?\//, '') });
     res.end(req.method === 'HEAD' ? undefined : '');
     return true;
   } catch {
@@ -110,7 +112,7 @@ async function readContainedFile(root: string, path: string): Promise<Buffer> {
 }
 
 /** Serve only Vite output and the SPA entry. API/MCP namespaces always fail closed. */
-export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir: string): Promise<void> {
+export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir: string, basePath = '/'): Promise<void> {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' }).end();
     return;
@@ -165,7 +167,15 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
   }
 
   try {
-    const body = await readContainedFile(assetRoot, asset);
+    let body = await readContainedFile(assetRoot, asset);
+    const base = normalizeBasePath(basePath);
+    if (asset === resolve(appDir, 'index.html')) body = Buffer.from(prefixDocument(body.toString('utf8'), base));
+    if (pathname === '/manifest.webmanifest' && base !== '/') {
+      const manifest = JSON.parse(body.toString('utf8'));
+      for (const key of ['id', 'start_url', 'scope']) if (typeof manifest[key] === 'string') manifest[key] = base + manifest[key].replace(/^\//, '');
+      for (const icon of manifest.icons ?? []) icon.src = base + icon.src.replace(/^\//, '');
+      body = Buffer.from(JSON.stringify(manifest));
+    }
     const type = MIME_TYPES[extname(asset).toLowerCase()] ?? 'application/octet-stream';
     res.writeHead(200, appHeaders(type, cacheControl, body.length));
     res.end(req.method === 'HEAD' ? undefined : body);
@@ -175,7 +185,7 @@ export async function serveApp(req: IncomingMessage, res: ServerResponse, appDir
       // open page still references the previous release's hashed entry bundle.
       // Keep that narrow upgrade path alive without turning arbitrary missing
       // assets into HTML or aliases with immutable cache semantics.
-      if (await redirectStaleEntryAsset(req, res, appDir, decodedPathname)) return;
+      if (await redirectStaleEntryAsset(req, res, appDir, decodedPathname, basePath)) return;
       appNotFound(res);
       return;
     }
@@ -439,7 +449,7 @@ export async function start(
       }
       serving = pathname === '/api' || pathname.startsWith('/api/')
         ? serveApi(req, res, readyDeps)
-        : serveApp(req, res, appDir);
+        : serveApp(req, res, appDir, cfg.basePath);
       const settled = serving.catch((error: Error) => {
         const publicError = publicInternalError(error, 'unhandled request', log.warn);
         if (!res.headersSent) {

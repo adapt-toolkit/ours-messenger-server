@@ -1,3 +1,4 @@
+import { appPath } from './basePath.js';
 import type { ConnectionState, ServerEvent } from './types.js';
 
 export const LIVE_EVENT_NAME = 'ours-messenger-live-event';
@@ -19,7 +20,7 @@ export function connectEvents(
   onEvent: (event: ServerEvent) => void,
   onState: (state: ConnectionState) => void,
 ): () => void {
-  const source = new EventSource('/api/events');
+  const source = new EventSource(appPath('/api/events'));
   let opened = false;
   onState('connecting');
   source.onopen = () => {
