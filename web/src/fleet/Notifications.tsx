@@ -25,5 +25,5 @@ export function AgentRequests({ chat }: { chat: string }) {
 export function NotificationPanel({open}:{open:(target:FleetNotification['target'])=>void}) {
  const {items}=useNotifications();
  const pending=items.filter(isPending);
- return <div className="fleet-notification-panel"><p>{pending.length ? 'Unread messages and requests needing your decision.' : 'You’re all caught up.'}</p>{pending.map(n=><Row key={n.id} title={n.title} subtitle={`${n.kind==='request'?'Decision needed':'Unread message'} · ${n.target.section==='messenger'?'Messenger':'Sessions'}`} onClick={()=>open(n.target)} />)}</div>;
+ return <div className="fleet-notification-panel"><p>{pending.length ? 'Unread messages and requests needing your decision.' : 'You’re all caught up.'}</p>{pending.map(n=><Row key={n.id} title={n.title} subtitle={`${n.kind==='request'?'Decision needed':'Unread message'} · ${n.target.section==='messenger'?'External':'Workspace'}`} onClick={()=>open(n.target)} />)}</div>;
 }

@@ -70,9 +70,9 @@ export function ContactRow(props: {
       <span className="contact-row-bottomline">
         <span className="contact-last">{c.last}</span>
         {c.status === 'pending' && <span className="chip">pending approval</span>}
-        {!!c.unread && <span className="contact-unread">{c.unread}</span>}
       </span>
     </span>
+    {!!c.unread && <span className="contact-unread">{c.unread}</span>}
     {c.status === 'pending' && <span className="pending-actions" role="group" aria-label={`Decide whether to accept ${c.name}`}>
       <button type="button" className="linkbtn" disabled={decisionBusy} onClick={(event) => void decide(props.onApprove, event.currentTarget)}>Approve</button>
       <button type="button" className="linkbtn quiet" disabled={decisionBusy} onClick={(event) => void decide(props.onReject, event.currentTarget)}>Reject</button>

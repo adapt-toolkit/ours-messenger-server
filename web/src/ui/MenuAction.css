@@ -1,0 +1,10 @@
+.menu-action { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; text-align: left; }
+.menu-action > span { flex: 1; }
+.menu-action > svg:first-child { color: var(--accent); }
+.menu-action > svg:last-child { color: var(--text-2); }
+.menu-action.danger, .menu-action.danger > svg:first-child { color: var(--danger); }
+
+.menu-action > svg { flex-shrink: 0; }
+.menu-action > span { min-width: 0; overflow-wrap: anywhere; }
+
+.menu-action-description { display: block; margin-top: 3px; color: var(--text-2); font-size: .75rem; font-weight: 400; line-height: 1.4; }

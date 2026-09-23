@@ -15,25 +15,25 @@ try {
     if(theme === 'light') await button('Use light theme').click();
     await page.waitForTimeout(400);
     const style = selector => page.locator(selector).first().evaluate((el, props) => Object.fromEntries(props.map(p => [p, getComputedStyle(el)[p]])), properties);
-    const sessionStyles = await Promise.all(['.contact-row:not(.active)', '.contact-row:not(.active) .contact-avatar', '.conversation-list-modes', '.search'].map(s => style('.fleet-list ' + s)));
+    const sessionStyles = await Promise.all(['.contact-row:not(.active)', '.contact-row:not(.active) .contact-avatar', '.search'].map(s => style('.fleet-list ' + s)));
     await expect(page.locator('.fleet-list h1')).toHaveCount(0);
     await expect(page.locator('.fleet-list').getByRole('button', { name: /New chat|＋/ })).toHaveCount(0);
-    await page.getByLabel('Search sessions').fill('Research');
+    await page.getByLabel('Search chats').fill('Research');
     await expect(button('Coordinator Persistent · Ready')).toHaveCount(0);
-    await button('Change section: Sessions').click(); await page.getByRole('dialog').getByRole('button', { name: /^Messenger/ }).click();
-    await expect(button('Change section: Messenger')).toBeVisible();
+    await page.getByLabel('Search chats',{exact:true}).fill(''); await page.getByRole('tab',{name:'External',exact:true}).click();
+    await expect(button('Change section: Chats')).toBeVisible();
     await page.waitForTimeout(400);
-    await expect(page.locator('div.fleet-messenger-list .listcol-titlebar')).toBeHidden();
-    await expect(page.locator('div.fleet-messenger-list .list-bottom-invite')).toBeHidden();
-    const messengerStyles = await Promise.all(['.contact-row:not(.active)', '.contact-row:not(.active) .contact-avatar', '.conversation-list-modes', '.search'].map(s => style('div.fleet-messenger-list ' + s)));
+    await expect(page.locator('.fleet-external-list .listcol-titlebar')).toBeHidden();
+    await expect(page.locator('.fleet-external-list .list-bottom-invite')).toBeHidden();
+    const messengerStyles = await Promise.all(['.contact-row:not(.active)', '.contact-row:not(.active) .contact-avatar', '.search'].map(s => style('.fleet-external-list ' + s)));
     assert.deepEqual(sessionStyles, messengerStyles, `${width}/${theme}: shared list styles`);
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-messenger-${width}-${theme}.png` });
-    await button('Navigate').click(); await page.getByRole('dialog').getByRole('button', { name: /^Sessions/ }).click();
+    await page.getByRole('tab',{name:'All',exact:true}).click();
     // DialogShell restores launcher focus on the next frame; finish that before typing.
-    await expect(button('Navigate')).toBeFocused();
-    await expect(page.getByLabel('Search sessions')).toHaveValue('Research');
-    await page.getByLabel('Search sessions').fill('');
-    await expect(page.getByLabel('Search sessions')).toHaveValue('');
+
+    await expect(page.getByLabel('Search chats')).toHaveValue('');
+    await page.getByLabel('Search chats').fill('');
+    await expect(page.getByLabel('Search chats')).toHaveValue('');
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-sessions-${width}-${theme}.png` });
     await button('Add or connect').click();
     const checkReference = async (selector, className) => {
@@ -47,8 +47,8 @@ try {
         copy.remove(); reference.remove(); if(differences.length) throw Error(differences.join('; '));
       }, { className, properties });
     };
-    await checkReference('.fleet-menu-action', 'btn');
-    await expect(page.locator('.fleet-menu-action').first()).toHaveCSS('border-radius', '14px');
+    await checkReference('.menu-action', 'btn');
+    await expect(page.locator('.menu-action').first()).toHaveCSS('border-radius', '14px');
     await expect(button('Close Add or connect')).toHaveCSS('border-radius', '13px');
     const modalBox = await page.getByRole('dialog').boundingBox();
     assert.ok(Math.abs(modalBox.x + modalBox.width / 2 - width / 2) < 1, 'modal centered horizontally');
@@ -60,17 +60,31 @@ try {
     await checkReference('.fleet-dialog-actions .btn.primary', 'btn primary');
     await page.screenshot({ path: `/tmp/ours-fleet-evidence/consistent-form-${width}-${theme}.png` });
     await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0);
-    await page.getByRole('tab', { name: 'Temporary', exact: true }).click();
-    await expect(page.getByRole('tab', { name: 'Temporary', exact: true })).toHaveAttribute('aria-selected', 'true');
-    try { await button('Launch website Task · 2 agents · Active 1').click({ timeout: 5000 }); } catch(error) { console.error('TASK LOOKUP', width, theme, await page.locator('.fleet-list').innerText(), await page.getByLabel('Search sessions').inputValue()); await page.screenshot({ path: '/tmp/ours-fleet-evidence/consistency-failure.png' }); throw error; }
+    await page.getByRole('tab', { name: 'Workspace', exact: true }).click(); await page.getByRole('combobox', { name: 'Workspace conversations' }).selectOption('Agents'); await page.getByRole('combobox', { name: 'Agent lifetime' }).selectOption('Temporary');
+    await expect(page.getByRole('combobox', { name: 'Agent lifetime' })).toHaveValue('Temporary');
+    assert.ok((await page.locator('.fleet-session-head').boundingBox()).height <= 110, 'source tabs and dropdowns fit in two compact rows');
+    await page.getByRole('combobox', { name: 'Workspace conversations' }).selectOption('Tasks');
+    try { await button('Launch website Task · 2 agents · Active 1').click({ timeout: 5000 }); } catch(error) { console.error('TASK LOOKUP', width, theme, await page.locator('.fleet-list').innerText(), await page.getByLabel('Search chats').inputValue()); await page.screenshot({ path: '/tmp/ours-fleet-evidence/consistency-failure.png' }); throw error; }
+    assert.ok((await page.locator('.fleet-session-head').boundingBox()).height <= 130, 'task heading stays compact');
+    const backBox = await button('‹ Back to chats').boundingBox();
+    const taskMenuBox = await button('Task ⋯').boundingBox();
+    assert.ok(Math.abs(backBox.y - taskMenuBox.y) < 1, 'task controls share a row');
+    await button('Task ⋯').click();
+    await checkReference('.fleet-task-menu .menu-action', 'btn');
+    await expect(page.locator('.fleet-task-menu .contact-avatar')).toHaveCount(0);
+    await expect(button('Delete task')).toBeVisible();
+    await page.screenshot({ path: `/tmp/ours-fleet-evidence/task-menu-${width}-${theme}.png` });
+    await button('Move to list').click();
+    await expect(page.getByRole('dialog')).toContainText('Move to list');
+    await page.keyboard.press('Escape');
     await button('Add or connect').click(); await button('Add to this task').click();
     await expect(page.getByRole('dialog')).toContainText('Launch website');
     await page.keyboard.press('Escape');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     console.log(`${width}px ${theme}: list/header/search, shared control styles, task-context creation PASS`);
-    await button('Navigate').click(); await page.getByRole('dialog').getByRole('button', { name: /^Task manager/ }).click();
-    await expect(button('Change section: Task manager')).toBeVisible();
-    await button('Change section: Task manager').focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('dialog')).toContainText('Task manager'); await page.keyboard.press('Escape');
+    await button('Navigate').click(); await page.getByRole('dialog').getByRole('button', { name: /^Tasks/ }).click();
+    await expect(button('Change section: Tasks')).toBeVisible();
+    await button('Change section: Tasks').focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('dialog')).toContainText('Tasks'); await page.keyboard.press('Escape');
     const addBox = await button('Add or connect').boundingBox(); assert.ok(addBox.x + addBox.width <= width);
     const plusBox = await button('Add or connect').locator('svg').boundingBox();
     assert.ok(Math.abs(addBox.x + addBox.width / 2 - plusBox.x - plusBox.width / 2) < 1, 'plus icon horizontally centered');

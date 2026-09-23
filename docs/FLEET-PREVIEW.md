@@ -2,11 +2,11 @@
 
 Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Messenger remains at `/chats`. The preview is also included in the normal production build and supports direct URL reloads through the existing SPA fallback.
 
-This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Sessions, Messenger and Task manager, with a current-section marker. Its 3×3 launcher is available in the outer desktop and mobile navigation. On phones, leave a conversation with Back before opening the launcher. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
+This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Chats and Tasks, with a current-section marker. Its 3×3 launcher is available in the outer desktop and mobile navigation. On phones, leave a conversation with Back before opening the launcher. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
 
 ## Shareable first-run walkthrough
 
-Start at `/fleet/account/signup`: mock registration → preview email confirmation → five visual introduction slides → Coordinator chat. The slides lead with practical benefits: you own your agents and rooms, any two agents in the ours network can communicate by invitation, each task has a visible team conversation, anyone in the network can be invited into your rooms without a shared organization, and closing the task room ends access through that room. Agent communication means exchanging messages. A website example connects the scenes. Example fields are prefilled; the test name personalizes the greeting. The greeting explains Sessions, Messenger, Task manager and Settings. Skip also opens Coordinator. Close conversation returns to the list without deleting the chat or draft.
+Start at `/fleet/account/signup`: mock registration → preview email confirmation → five visual introduction slides → Coordinator chat. The slides lead with practical benefits: you own your agents and rooms, any two agents in the ours network can communicate by invitation, each task has a visible team conversation, anyone in the network can be invited into your rooms without a shared organization, and closing the task room ends access through that room. Agent communication means exchanging messages. A website example connects the scenes. Example fields are prefilled; the test name personalizes the greeting. The greeting explains Chats, Workspace, External, Tasks and Settings. Skip also opens Coordinator. Close conversation returns to the list without deleting the chat or draft.
 
 Every full entry URL visit/reload starts a fresh, independent in-memory mock session. Separate tabs and people do not share account, messages or mutations. Only theme preference persists. Returning to a chat inside the same visit preserves messages and drafts and does not duplicate the greeting. No real registration, email or agent backend is involved.
 
@@ -24,18 +24,18 @@ Agent/task/list mutations, messages, permissions and definitions live in React s
 | --- | --- |
 | 01–04 Account | Account profile → Account; `/fleet/account/login`, Create account → confirmation → welcome |
 | 05 Empty Work | Account profile → Getting started |
-| 06 Navigation | Navigate → Sessions / Messenger / Task manager / My profile / Settings |
-| 07–11 Work and direct agents | Work → Persistent / Temporary → agent; Developer → tool output, Allow/Deny, Agent actions |
+| 06 Navigation | Navigate → Chats / Tasks / My profile / Settings |
+| 07–11 Work and direct agents | Chats → Workspace → Agents → Persistent / Temporary → agent; Developer → tool output, Allow/Deny, Agent actions |
 | 12 Add | Global + → invitation, new agent, new task, task-local agent |
 | 13–20 Agent creation | New chat → editable name/role/brain → More options/folder → first Send creates and locks temporary agent; + → New persistent agent for durable agents |
 | 21–22 Agent lifecycle | Agent actions → Delete temporary session / Stop persistent agent |
 | 23 Task board | Tasks; search and list filter; all seven columns |
 | 24–26 Task creation | + New task → single/pair/team/custom → provisioning or empty room → task / agent |
 | 27–31 Task detail and actions | Task card → status menu → Move / Block / Finish; Back restores the source screen |
-| 32–33 Nested Work | Temporary → task → Room, then direct agent rows; agent context retains room unread badge |
+| 32–33 Nested Work | Chats → task → focused Room and agent list, then direct agent rows; agent context retains room unread badge |
 | 34–37 Membership and closure | Task or nested Work → + Agent; task detail → Remove; Task actions → Close / Delete with repeated task ID |
 | 38–39 Lists | Tasks → Manage lists → New list / Delete, with destination list |
-| 40 Messenger | Messenger → seeded contacts → unchanged Conversation; same-agent Messenger from Agent actions |
+| 40 Messenger | Chats → External → seeded contacts → unchanged Conversation; same-agent Messenger from Agent actions |
 | 41–43 Accept | Global + → Accept as yourself → optional agent picker; pasted code survives actor selection |
 | 44–47 Generate | Global or room member invitation → choose type → explicit Generate → Copy; opening or changing type does not generate |
 | 48–50 Room | Room → Members → pending member/admission → information; external participants open external profiles |
@@ -82,3 +82,9 @@ Notifications use typed events with target IDs and derived ancestor counts (`not
 Additional verification: `node --import tsx web/tests/fleet-config.test.ts`, `node --import tsx web/tests/fleet-notifications.test.ts`, `node tests/browser-fleet-config.test.mjs`, and `node tests/browser-fleet-notifications.test.mjs`. Browser tests accept `FLEET_PREVIEW_ORIGIN`; otherwise they serve the built preview.
 
 The launcher also contains Notifications, a combined pending inbox. Opening it does not mark anything read; selecting a row opens its target chat. Resolved decisions record approval or decline and leave the pending inbox. Empty state appears when all seeded attention has been handled. There is no additional header button.
+
+## Chats and Tasks navigation
+
+Chats combines workspace and external conversations through All / Workspace / External filters. Workspace can show All work, Agents, or Tasks; Agents adds All agents / Temporary / Persistent. Opening a task replaces the list with just its room and agents. Back restores the parent filters, search, and list position. External retains the existing Recent / By identity controls. The launcher, conversation UI, creation dialogs, and profile flows retain their existing appearance.
+
+`/fleet/chats` stores filters, focused task, selection, and mobile detail state in query parameters. Legacy `/fleet/work/...` and `/fleet/messenger/...` links remain supported. Run `node tests/browser-fleet-chats.test.mjs` for the split-specific navigation and draft regression checks.

@@ -14,12 +14,12 @@ for (const engine of [chromium, webkit]) {
   await expect(badge('root')).toHaveText('5');
   await expect(page.locator('.fleet-nav [data-notification-node="root"]')).toHaveCount(1);
   await page.getByRole('button', {name:'Navigate', exact:true}).click();
-  await expect(badge('messenger')).toHaveText('2');
+  await expect(page.getByRole('dialog').locator('[data-notification-node="root"]')).toHaveText('5');
   await expect(page.getByRole('button', {name:'Close Navigation',exact:true}).locator('[data-notification-node]')).toHaveCount(0);
-  await page.getByRole('dialog').getByRole('button', {name:/^Messenger/}).click();
+  await page.getByRole('dialog').getByRole('button', {name:/^Chats/}).click(); await page.getByRole('tab',{name:'External',exact:true}).click();
   // Selecting a section alone never marks its conversations read.
   await expect(badge('root')).toHaveText('5');
-  await page.locator('.fleet-messenger-list:visible .contact-row').filter({hasText:'Maya'}).click();
+  await page.locator('.fleet-messenger-list:visible .contact-row:visible').filter({hasText:'Maya'}).click();
   await expect(page.getByText('Yes. Send an agent invite.', {exact:false})).toBeVisible();
   if(width < 600) {
    await expect(page.getByRole('button', {name:'Back to conversations'}).locator('[data-notification-node="root"]')).toHaveText('4');
@@ -27,18 +27,18 @@ for (const engine of [chromium, webkit]) {
   }
   await expect(badge('root')).toHaveText('4');
   await page.getByRole('button', {name:'Navigate',exact:true}).click();
-  await expect(badge('messenger')).toHaveText('1');
-  await page.getByRole('dialog').getByRole('button', {name:/^Sessions/}).click();
-  await page.locator('.fleet-list .contact-row').filter({hasText:'Research assistant'}).click();
+  await expect(page.getByRole('dialog').locator('[data-notification-node="root"]')).toHaveText('4');
+  await page.getByRole('dialog').getByRole('button', {name:/^Chats/}).click(); await page.getByRole('tab',{name:'All',exact:true}).click();
+  await page.locator('.fleet-list .contact-row:visible').filter({hasText:'Research assistant'}).click();
   await expect(page.getByRole('button',{name:'Approve request',exact:true})).toBeVisible();
   // Seeing a request does not clear an actionable decision.
   await page.getByRole('button',{name:'Approve request',exact:true}).click();
   await expect(page.getByText('Request resolved in this preview.', {exact:false})).toBeVisible();
   if(width < 600) await page.getByRole('button',{name:'Back to conversations'}).click();
   await expect(badge('root')).toHaveText('3');
-  await page.getByRole('tab', {name:/^Temporary/}).click();
-  await page.locator('.fleet-list .contact-row').filter({hasText:'Launch website'}).click();
-  await page.locator('.fleet-list .contact-row').filter({hasText:'Developer'}).click();
+  await page.getByRole('tab', {name:'Workspace',exact:true}).click(); await page.getByRole('combobox', { name: 'Workspace conversations' }).selectOption('Tasks');
+  await page.locator('.fleet-list .contact-row:visible').filter({hasText:'Launch website'}).click();
+  await page.locator('.fleet-list .contact-row:visible').filter({hasText:'Developer'}).click();
   await page.getByRole('button',{name:'Decline request',exact:true}).click();
   if(width < 600) await page.getByRole('button',{name:'Back to conversations'}).click();
   await expect(badge('root')).toHaveText('2');

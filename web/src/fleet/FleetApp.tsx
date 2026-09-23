@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, Moon, Sun, Settings, User, MoreHorizontal, X, ChevronDown } from 'lucide-react';
 import DialogShell from '../ui/DialogShell';
-import { ChatList, Conversation } from '../ui/Chats';
+import { Conversation } from '../ui/Chats';
 import type { ChatMessage } from '../ui/chatTypes';
 import { Button, Row, SearchField, PageHeader } from './components';
 import { contact, initialAgents, initialContacts, initialMessages, initialTasks, statuses, type Agent, type Task, type Section, type Page, type Modal } from './model';
@@ -10,7 +10,7 @@ import { AgentActivity } from './AgentActivity';
 import { FleetDialogs } from './FleetDialogs';
 import { ProfilePage, SettingsPage, AccountPage } from './pages';
 import { IconButton, TextButton } from '../ui/Button';
-import { SessionList } from './SessionList';
+import { SessionList, type ChatScope, type WorkspaceView } from './SessionList';
 import './fleet.css';
 import { ConfigurationProvider } from './Configuration';
 import { NotificationProvider, NotificationBadge, AgentRequests, useNotifications } from './Notifications';
@@ -38,7 +38,11 @@ function FleetAppContent() {
     if(next && !modal && document.activeElement instanceof HTMLElement) modalTrigger.current = document.activeElement;
     rawSetModal(next);
   };
-  const [lifetime, setLifetime] = useState('Persistent');
+  const [lifetime, setLifetime] = useState('All agents');
+  const [scope, setScope] = useState<ChatScope>('All');
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('All work');
+  const chatSource = useRef<Section>('work');
+  const parentSearch = useRef('');
   const [nested, setNested] = useState<string | null>(null);
   const [workChat, setWorkChat] = useState<string | null>('coordinator');
   const [messengerChat, setMessengerChat] = useState<string | null>('maya');
@@ -79,17 +83,29 @@ function FleetAppContent() {
     requestAnimationFrame(() => { if(profileTrigger.current?.isConnected) profileTrigger.current.focus({ preventScroll: true }); });
   };
   const backPage = () => { setPage(pageStack.current.pop() ?? { kind: 'home' }); setModal(null); };
-  const switchSection = (s: Section) => { setSection(s); go({ kind: 'home' }); setMobileDetail(false); };
+  const switchSection = (s: Section) => { setSection(s === 'work' ? chatSource.current : s); if(s === 'messenger') { setScope('External'); setNested(null); chatSource.current = s; } go({ kind: 'home' }); setMobileDetail(false); };
   useEffect(() => {
     const read = () => {
       const bits = location.pathname.replace(/^\/fleet\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
-      if (bits[0] === 'tasks') { setSection('tasks'); setPage(bits[1] ? { kind: 'task', id: bits[1] } : { kind: 'home' }); }
+      if (bits[0] === 'chats') {
+        const q = new URLSearchParams(location.search);
+        const source = q.get('source') === 'messenger' ? 'messenger' : 'work';
+        setSection(source); chatSource.current = source; setPage({ kind: 'home' });
+        setScope((['All', 'Workspace', 'External'].includes(q.get('scope') ?? '') ? q.get('scope') : 'All') as ChatScope);
+        setWorkspaceView((['All work', 'Agents', 'Tasks'].includes(q.get('view') ?? '') ? q.get('view') : 'All work') as WorkspaceView);
+        setLifetime(['All agents', 'Temporary', 'Persistent'].includes(q.get('lifetime') ?? '') ? q.get('lifetime')! : 'All agents');
+        setNested(q.get('task')); setSearch(q.get('search') ?? ''); parentSearch.current = q.get('parentSearch') ?? '';
+        const id = q.get('chat'); setMobileDetail(q.get('detail') === '1');
+        if(source === 'messenger') setMessengerChat(id); else setWorkChat(id);
+        if(id) { notifications.read(id); setOpenedChats(x => [...new Set([...x, id])]); }
+      }
+      else if (bits[0] === 'tasks') { setSection('tasks'); setPage(bits[1] ? { kind: 'task', id: bits[1] } : { kind: 'home' }); }
       else if (bits[0] === 'profile') setPage(bits[2] === 'contacts' ? { kind: 'contacts', id: bits[1] ?? 'human', peer: bits[3] } : { kind: 'profile', id: bits[1] ?? 'human' });
       else if (bits[0] === 'settings') setPage({ kind: 'settings', editor: bits.slice(1).join('/') || undefined });
       else if (bits[0] === 'account') setPage({ kind: 'account', step: bits[1] ?? 'login' });
       else if (bits[0] === 'empty') setPage({ kind: 'empty' });
-      else if (bits[0] === 'messenger') { setSection('messenger'); setPage({ kind: 'home' }); if(bits[1]) { notifications.read(bits[1]); setMessengerChat(bits[1]); const own = initialAgents.find(a => `messenger-${a.id}` === bits[1]); if(own) setContacts(x => x.some(c => c.id === bits[1]) ? x : [...x, contact(bits[1], own.name)]); setMobileDetail(true); setOpenedChats(x => [...new Set([...x, bits[1]])]); } }
-      else { setSection('work'); setPage({ kind: 'home' }); if(bits[1]) { notifications.read(bits[1]); setWorkChat(bits[1]); setMobileDetail(true); setOpenedChats(x => [...new Set([...x, bits[1]])]); const a = initialAgents.find(a => a.id === bits[1]); if(a) { setLifetime(a.lifetime); setNested(a.taskId ?? null); } else if(bits[1].startsWith('room-')) { setLifetime('Temporary'); setNested(bits[1].slice(5)); } } }
+      else if (bits[0] === 'messenger') { setScope('External'); setNested(null); chatSource.current = 'messenger'; setSection('messenger'); setPage({ kind: 'home' }); if(bits[1]) { notifications.read(bits[1]); setMessengerChat(bits[1]); const own = initialAgents.find(a => `messenger-${a.id}` === bits[1]); if(own) setContacts(x => x.some(c => c.id === bits[1]) ? x : [...x, contact(bits[1], own.name)]); setMobileDetail(true); setOpenedChats(x => [...new Set([...x, bits[1]])]); } }
+      else { setNested(null); setMobileDetail(false); chatSource.current = 'work'; setSection('work'); setPage({ kind: 'home' }); if(bits[1]) { notifications.read(bits[1]); setWorkChat(bits[1]); setMobileDetail(true); setOpenedChats(x => [...new Set([...x, bits[1]])]); const a = initialAgents.find(a => a.id === bits[1]); if(a) { setLifetime(a.lifetime); setNested(a.taskId ?? null); } else if(bits[1].startsWith('room-')) { setLifetime('Temporary'); setNested(bits[1].slice(5)); } } }
       setModal(null);
     };
     read(); historyReady.current = true;
@@ -98,33 +114,60 @@ function FleetAppContent() {
   useEffect(() => {
     if(!historyReady.current) return;
     let path = '/fleet';
-    if(page.kind === 'home') path += `/${section}` + (section === 'work' && mobileDetail && workChat ? `/${encodeURIComponent(workChat)}` : section === 'messenger' && mobileDetail && messengerChat ? `/${encodeURIComponent(messengerChat)}` : '');
+    if(page.kind === 'home') {
+      if(section === 'tasks') path += '/tasks';
+      else {
+        const q = new URLSearchParams();
+        if(scope !== 'All') q.set('scope', scope);
+        if(workspaceView !== 'All work') q.set('view', workspaceView);
+        if(lifetime !== 'All agents') q.set('lifetime', lifetime);
+        if(nested) { q.set('task', nested); if(parentSearch.current) q.set('parentSearch', parentSearch.current); }
+        if(search) q.set('search', search);
+        if(section === 'messenger') q.set('source', section);
+        if(activeId) q.set('chat', activeId);
+        if(mobileDetail) q.set('detail', '1');
+        path += '/chats' + (q.size ? '?' + q.toString() : '');
+      }
+    }
     else if(page.kind === 'task') path += `/tasks/${page.id}`;
     else if(page.kind === 'profile' || page.kind === 'contacts') path += `/profile/${page.id}${page.kind === 'contacts' ? '/contacts' + (page.peer ? '/' + encodeURIComponent(page.peer) : '') : ''}`;
     else if(page.kind === 'settings') path += `/settings${page.editor ? '/' + page.editor : ''}`;
     else if(page.kind === 'account') path += `/account/${page.step}`;
     else path += '/empty';
-    if(location.pathname !== path) history.pushState({}, '', path);
-  }, [section, page, mobileDetail, workChat, messengerChat]);
-  useEffect(() => { const a = agents.find(a => a.id === workChat); if(a) { setLifetime(a.lifetime); setNested(a.taskId ?? null); } else if(workChat?.startsWith('room-')) { setLifetime('Temporary'); setNested(workChat.slice(5)); } }, [workChat, agents]);
+    if(location.pathname + location.search !== path) history.pushState({}, '', path);
+  }, [section, page, mobileDetail, workChat, messengerChat, scope, workspaceView, lifetime, nested, search]);
+  const knownAgents = useRef(agents);
+  // Creation can select an agent in the same render that adds it to the collection.
+  useEffect(() => {
+    if(knownAgents.current === agents) return;
+    knownAgents.current = agents;
+    const agent = agents.find(a => a.id === workChat);
+    if(agent) {
+      setNested(agent.taskId ?? null);
+      if(!agent.taskId && scope === 'Workspace' && workspaceView === 'Agents' && lifetime !== 'All agents') setLifetime(agent.lifetime);
+    }
+  }, [workChat, agents]);
   const openChat = (id: string, target: Section = 'work') => {
     notifications.read(id);
     setOpenedChats(x => [...new Set([...x, id])]);
-    if(target === 'messenger') { setMessengerChat(id); const ownerAgent = agents.find(a => `messenger-${a.id}` === id); if(ownerAgent) setContacts(x => x.some(c => c.id === id) ? x : [...x, contact(id, ownerAgent.name)]); } else { setWorkChat(id); const a = agents.find(a => a.id === id); if(a) { setLifetime(a.lifetime); setNested(a.taskId ?? null); } }
+    chatSource.current = target;
+    if(target === 'messenger' && scope === 'Workspace') setScope('External');
+    if(target === 'work' && scope === 'External') setScope('Workspace');
+    if(target === 'messenger') { setNested(null); setMessengerChat(id); const ownerAgent = agents.find(a => `messenger-${a.id}` === id); if(ownerAgent) setContacts(x => x.some(c => c.id === id) ? x : [...x, contact(id, ownerAgent.name)]); } else { setWorkChat(id); const a = agents.find(a => a.id === id); if(a) { if(a.taskId && !nested) { parentSearch.current = search; setSearch(''); } setNested(a.taskId ?? null); } }
     setSection(target); setPage({ kind: 'home' }); setMobileDetail(true); setModal(null);
   };
   const newChat = () => {
     const draft = draftAgent && !startedDrafts.current.has(draftAgent.id) ? draftAgent : { id: `agent-${crypto.randomUUID()}`, name: `Sage ${crypto.randomUUID().slice(0, 4)}`, role: 'Assistant', brain: 'Codex', permissions: 'Ask before changes', folder: '/home/you/work/website' };
-    setDraftAgent(draft); setNested(null); setLifetime('Temporary'); openChat(draft.id);
+    setDraftAgent(draft); setNested(null); setScope('Workspace'); setWorkspaceView('Agents'); setLifetime('Temporary'); setSearch(''); openChat(draft.id);
   };
   const completeOnboarding = (name: string) => {
     if(!coordinatorWelcomed) {
-      setHistories(x => ({ ...x, coordinator: [{ dir: 'in', text: 'Hi ' + name + '! I’m your persistent Coordinator.\n\nHere’s where to find your way around ours network:\n\n• **Sessions** — chat with your agents. Persistent keeps your configured agents; Temporary holds short chats and task rooms.\n• **Messenger** — conversations with people and connected identities.\n• **Task manager** — organize work and follow your team’s progress.\n• **Settings** — configure agent templates, roles, brains and permissions. To choose a section, open the launcher outside the chat. On your phone, tap Back to return to the list first.\n\nAsk me anything about the app, or tell me what you want to work on. I can explain how things work and help bring a team together.', date: new Date().toISOString(), read: true, wireId: 'coordinator-welcome', replyTo: null, receipt: 'read' }] }));
+      setHistories(x => ({ ...x, coordinator: [{ dir: 'in', text: 'Hi ' + name + '! I’m your persistent Coordinator.\n\nHere’s where to find your way around ours network:\n\n• **Chats** — all your conversations in one place. Workspace contains agents and focused task rooms; External contains your connections. Under Workspace → Agents, filter Temporary or Persistent.\n• **Tasks** — organize work and follow your team’s progress.\n• **Settings** — configure agent templates, roles, brains and permissions. To choose a section, open the launcher outside the chat. On your phone, tap Back to return to the list first.\n\nAsk me anything about the app, or tell me what you want to work on. I can explain how things work and help bring a team together.', date: new Date().toISOString(), read: true, wireId: 'coordinator-welcome', replyTo: null, receipt: 'read' }] }));
       setCoordinatorWelcomed(true);
     }
     openChat('coordinator');
   };
-  const openRoom = (id: string, showChat = true) => { setNested(id); setLifetime('Temporary'); openChat(`room-${id}`); setMobileDetail(showChat); };
+  const openRoom = (id: string, showChat = true) => { if(!nested) parentSearch.current = search; setSearch(''); setNested(id); openChat(`room-${id}`); setMobileDetail(showChat); };
   const updateTask = (id: string, patch: Partial<Task>) => setTasks(x => x.map(t => t.id === id ? { ...t, ...patch } : t));
   const send = async (id: string, text: string, replyTo?: string) => {
     if(draftAgent?.id === id && !startedDrafts.current.has(id)) {
@@ -144,7 +187,7 @@ function FleetAppContent() {
   return <div className={'fleet-app' + (mobileDetail && displayPage.kind === 'home' && section !== 'tasks' ? ' fleet-in-chat' : '') + (displayPage.kind === 'account' ? ' fleet-account-mode' : '')}>
     <header className="fleet-nav" hidden={displayPage.kind === 'account'}>
       <button className="fleet-brand" onClick={() => switchSection('work')}>ours<span className="fleet-preview">Preview</span></button>
-      <TextButton className="fleet-section-trigger" aria-label={`Change section: ${section === 'work' ? 'Sessions' : section === 'tasks' ? 'Task manager' : 'Messenger'}`} aria-haspopup="dialog" aria-expanded={modal?.kind === 'navigation'} onClick={() => setModal({ kind: 'navigation' })}><span>{section === 'work' ? 'Sessions' : section === 'tasks' ? 'Task manager' : 'Messenger'}</span><ChevronDown size={12} aria-hidden /></TextButton>
+      <TextButton className="fleet-section-trigger" aria-label={`Change section: ${section === 'tasks' ? 'Tasks' : 'Chats'}`} aria-haspopup="dialog" aria-expanded={modal?.kind === 'navigation'} onClick={() => setModal({ kind: 'navigation' })}><span>{section === 'tasks' ? 'Tasks' : 'Chats'}</span><ChevronDown size={12} aria-hidden /></TextButton>
       <IconButton className=" fleet-nav-trigger" aria-label="Navigate" onClick={() => setModal({ kind: 'navigation' })}><LauncherIcon /><NotificationBadge node="root" /></IconButton>
 
       <span className="fleet-host">Workstation · Online</span>
@@ -152,21 +195,20 @@ function FleetAppContent() {
     </header>
     <div className="fleet-body">
       <div className={'fleet-workspace' + (mobileDetail ? ' fleet-show-detail' : '')} hidden={displayPage.kind !== 'home' || section === 'tasks'}>
-        <aside className="fleet-list fleet-messenger-list signal-stage" hidden={section !== 'work'} aria-label="Sessions">
-          <SessionList agents={agents} tasks={tasks} task={task} selected={workChat} lifetime={lifetime} search={search} setSearch={setSearch} setLifetime={value => { setLifetime(value); setNested(null); }} leaveTask={() => setNested(null)} openChat={openChat} openRoom={openRoom} taskMenu={id => setModal({ kind: 'task-menu', id })} />
+        <aside className="fleet-list fleet-messenger-list signal-stage" aria-label="Chats">
+          <SessionList invite={() => setModal({ kind: 'add' })} settings={() => go({ kind: 'settings' })} agents={agents} tasks={tasks} contacts={contacts} task={task} selected={activeId} scope={scope} workspaceView={workspaceView} lifetime={lifetime} search={search} setSearch={setSearch} setScope={value => { setScope(value); setNested(null); }} setWorkspaceView={setWorkspaceView} setLifetime={setLifetime} leaveTask={() => { setNested(null); setSearch(parentSearch.current); setMobileDetail(false); setWorkChat(null); }} openChat={openChat} openExternal={id => openChat(id, 'messenger')} openRoom={openRoom} taskMenu={id => setModal({ kind: 'task-menu', id })} approve={async id => { setContacts(x => x.map(c => c.id === id ? { ...c, status: 'active' } : c)); return true; }} reject={async id => { setContacts(x => x.filter(c => c.id !== id)); return true; }} />
         </aside>
-        <div hidden={section !== 'messenger'} className="fleet-messenger-list signal-stage"><ChatList contacts={contacts.map(c => ({ ...c, unread: countAt(notifications.items, `chat:${c.id}`) }))} roots={{}} selected={messengerChat} onSelect={id => openChat(id, 'messenger')} onInvite={() => setModal({ kind: 'add' })} onSettings={() => go({ kind: 'settings' })} onApprovePending={async id => { setContacts(x => x.map(c => c.id === id ? { ...c, status: 'active' } : c)); return true; }} onRejectPending={async id => { setContacts(x => x.filter(c => c.id !== id)); return true; }} /></div>
         <section className="fleet-conversation" aria-label={section === 'messenger' ? 'Messenger' : 'My Agent chat'}>
           {!activeId && <div className="fleet-no-conversation"><h2>Choose a conversation</h2><p>Your agents and their chats are in the list. Open one whenever you’re ready.</p></div>}
           {openedChats.map(id => { const a = agents.find(a => a.id === id || `messenger-${a.id}` === id); const c = contacts.find(c => c.id === id) ?? contact(id, id.startsWith('room-') ? 'Room' : a?.name ?? (draftAgent?.id === id ? 'New chat' : 'Agent')); return <div key={id} className="fleet-chat-slot signal-stage show-detail" hidden={activeId !== id}><Conversation backAdornment={<NotificationBadge node="root" excludeChat={id} />} headerActions={<div className="fleet-header-actions">{section === 'work' && (a || id.startsWith('room-')) && <IconButton className="" aria-label={id.startsWith('room-') ? 'Room actions' : 'Agent actions'} onClick={() => setModal({ kind: id.startsWith('room-') ? 'members' : 'agent-menu', id: id.startsWith('room-') ? id.slice(5) : id })}><MoreHorizontal size={20} /></IconButton>}<IconButton className=" fleet-desktop-control" aria-label="Close conversation" onClick={() => { if(section === 'messenger') setMessengerChat(null); else setWorkChat(null); setMobileDetail(false); }}><X size={18} /></IconButton></div>} timelineFooter={<><AgentRequests chat={id} />{draftAgent?.id === id ? <ChatSetup draft={a?.brain ? { ...a, brain: a.brain, permissions: a.permissions! } : draftAgent} locked={!!a} onChange={next => { if(!startedDrafts.current.has(id)) setDraftAgent(next); }} /> : a?.brain ? <ChatSetup draft={{ ...a, brain: a.brain, permissions: a.permissions! }} locked /> : id === 'coordinator' && !coordinatorWelcomed ? <div className="fleet-chat-context"><Row title="Launch website" subtitle="Task created · pair · 2 agents" onClick={() => openRoom(initialTasks[0].id, false)} /><Button onClick={() => go({ kind: 'settings', editor: 'template' })}>Configuration</Button><Button onClick={() => go({ kind: 'contacts', id: 'coordinator' })}>Agent identity connections</Button></div> : a?.id === id && a.role === 'Developer' ? <AgentActivity onOpenOutput={() => setModal({ kind: 'tool-output' })} /> : undefined}</>} contact={c} messages={histories[id] ?? []} onBack={() => setMobileDetail(false)} onOpenContact={draftAgent?.id === id && !a ? undefined : () => id.startsWith('room-') ? setModal({ kind: 'members', id: id.slice(5) }) : go({ kind: 'profile', id })} onSend={(text, reply) => send(id, text, reply)} onSendFile={async () => { notify('Attachment selected. File delivery is unavailable in this preview.'); }} /></div>; })}
         </section>
       </div>
-      {displayPage.kind === 'home' && section === 'tasks' && <main className="fleet-page fleet-board-page"><PageHeader title="Task manager" actions={<><select className="field" aria-label="Filter task list" value={listFilter} onChange={e => setListFilter(e.target.value)}>{['All lists', ...lists].map(l => <option key={l}>{l}</option>)}</select><Button onClick={() => setModal({ kind: 'lists' })}>Manage lists</Button></>} /><SearchField value={taskSearch} onChange={setTaskSearch} placeholder="Search tasks" /><div className="fleet-board">{statuses.map(status => { const rows = tasks.filter(t => t.status === status && (listFilter === 'All lists' || t.list === listFilter) && t.name.toLowerCase().includes(taskSearch.toLowerCase())); return <section key={status} className="fleet-column"><h2>{status} <span>{rows.length}</span></h2>{rows.map(t => <button key={t.id} className="fleet-task-card" onClick={() => go({ kind: 'task', id: t.id })}><strong>{t.name}</strong><span>{t.list}</span><small className={t.blocked ? 'fleet-warning' : ''}>{t.blocked ? `Blocked · ${t.blocked}` : t.status === 'Provisioning' ? 'Joining room · 2/3' : t.status === 'Backlog' ? 'Not started' : t.status === 'Failed' ? 'Launch failed' : t.status === 'Done' ? 'Completed today' : 'Developer + Critic'}</small></button>)}</section>; })}</div></main>}
-      {displayPage.kind === 'task' && (selectedTask ? <main className="fleet-page"><PageHeader title={selectedTask.name} subtitle={`TASK · ${selectedTask.id}`} onBack={backPage} actions={<><Button onClick={() => setModal({ kind: 'task-menu', id: selectedTask.id })}>{selectedTask.status} ▾</Button><Button primary onClick={() => { updateTask(selectedTask.id, { status: selectedTask.status === 'Backlog' ? 'Provisioning' : 'Review' }); if(selectedTask.status === 'Backlog') setModal({ kind: 'provisioning', id: selectedTask.id }); }}>{selectedTask.status === 'Backlog' ? 'Start task' : 'Send to review →'}</Button></>} /><div className="fleet-task-detail"><section><h2>Description</h2><p>{selectedTask.description}</p>{selectedTask.blocked && <p className="fleet-warning">Blocked · {selectedTask.blocked}</p>}<h2>Work <span className="muted">{selectedTask.agents.length} agents</span></h2><Row title={`${selectedTask.name} · Room`} subtitle={selectedTask.closed ? 'Closed' : 'Shared room · Ready'} avatar="#" onClick={() => openRoom(selectedTask.id)} />{selectedTask.agents.map(id => { const a = agents.find(a => a.id === id); return a && <div key={id} className="fleet-member"><Row title={a.name} subtitle={a.state} onClick={() => openChat(a.id)} /><Button onClick={() => setModal({ kind: 'remove-agent', id: a.id })}>Remove</Button></div>; })}{!selectedTask.agents.length && <p>Add your first temporary task agent.</p>}</section><aside><h2>Details</h2><Row title="List" subtitle={selectedTask.list} onClick={() => setModal({ kind: 'move-task', id: selectedTask.id })} /><Row title="Template" subtitle="Pair · v1" /><Row title="Created" subtitle="Today, 10:24" /><Row title="Updated" subtitle="2 minutes ago" /><p className="muted">Created from Work</p></aside></div></main> : <main className="fleet-page"><PageHeader title="Task no longer available" onBack={() => switchSection('tasks')} /></main>)}
+      {displayPage.kind === 'home' && section === 'tasks' && <main className="fleet-page fleet-board-page"><PageHeader title="Tasks" actions={<><select className="field" aria-label="Filter task list" value={listFilter} onChange={e => setListFilter(e.target.value)}>{['All lists', ...lists].map(l => <option key={l}>{l}</option>)}</select><Button onClick={() => setModal({ kind: 'lists' })}>Manage lists</Button></>} /><SearchField value={taskSearch} onChange={setTaskSearch} placeholder="Search tasks" /><div className="fleet-board">{statuses.map(status => { const rows = tasks.filter(t => t.status === status && (listFilter === 'All lists' || t.list === listFilter) && t.name.toLowerCase().includes(taskSearch.toLowerCase())); return <section key={status} className="fleet-column"><h2>{status} <span>{rows.length}</span></h2>{rows.map(t => <button key={t.id} className="fleet-task-card" onClick={() => go({ kind: 'task', id: t.id })}><strong>{t.name}</strong><span>{t.list}</span><small className={t.blocked ? 'fleet-warning' : ''}>{t.blocked ? `Blocked · ${t.blocked}` : t.status === 'Provisioning' ? 'Joining room · 2/3' : t.status === 'Backlog' ? 'Not started' : t.status === 'Failed' ? 'Launch failed' : t.status === 'Done' ? 'Completed today' : 'Developer + Critic'}</small></button>)}</section>; })}</div></main>}
+      {displayPage.kind === 'task' && (selectedTask ? <main className="fleet-page"><PageHeader title={selectedTask.name} subtitle={`TASK · ${selectedTask.id}`} onBack={backPage} actions={<><Button onClick={() => setModal({ kind: 'task-menu', id: selectedTask.id })}>{selectedTask.status} ▾</Button><Button primary onClick={() => { updateTask(selectedTask.id, { status: selectedTask.status === 'Backlog' ? 'Provisioning' : 'Review' }); if(selectedTask.status === 'Backlog') setModal({ kind: 'provisioning', id: selectedTask.id }); }}>{selectedTask.status === 'Backlog' ? 'Start task' : 'Send to review →'}</Button></>} /><div className="fleet-task-detail"><section><h2>Description</h2><p>{selectedTask.description}</p>{selectedTask.blocked && <p className="fleet-warning">Blocked · {selectedTask.blocked}</p>}<h2>Work <span className="muted">{selectedTask.agents.length} agents</span></h2><Row title={`${selectedTask.name} · Room`} subtitle={selectedTask.closed ? 'Closed' : 'Shared room · Ready'} avatar="#" onClick={() => openRoom(selectedTask.id)} />{selectedTask.agents.map(id => { const a = agents.find(a => a.id === id); return a && <div key={id} className="fleet-member"><Row title={a.name} subtitle={a.state} onClick={() => openChat(a.id)} /><Button onClick={() => setModal({ kind: 'remove-agent', id: a.id })}>Remove</Button></div>; })}{!selectedTask.agents.length && <p>Add your first temporary task agent.</p>}</section><aside><h2>Details</h2><Row title="List" subtitle={selectedTask.list} onClick={() => setModal({ kind: 'move-task', id: selectedTask.id })} /><Row title="Template" subtitle="Pair · v1" /><Row title="Created" subtitle="Today, 10:24" /><Row title="Updated" subtitle="2 minutes ago" /><p className="muted">Created from Workspace</p></aside></div></main> : <main className="fleet-page"><PageHeader title="Task no longer available" onBack={() => switchSection('tasks')} /></main>)}
       {(page.kind === 'profile' || page.kind === 'contacts') && <DialogShell title="Profile" wide onClose={closeProfile} className="fleet-modal fleet-profile-modal">{!modal && <ProfilePage page={page} agents={agents} tasks={tasks} go={go} back={backPage} openChat={openChat} modal={setModal} />}{dialogs}</DialogShell>}
       {displayPage.kind === 'settings' && <SettingsPage back={backPage} editor={displayPage.editor} go={go} notify={notify} />}
       {displayPage.kind === 'account' && <AccountPage step={displayPage.step} go={go} notify={notify} onComplete={completeOnboarding} />}
-      {displayPage.kind === 'empty' && <main className="fleet-form-page"><PageHeader title="Your first agent session" subtitle="Start a focused conversation with an agent on Workstation." onBack={() => go({ kind: 'home' })} /><Row title="One agent" subtitle="Choose a template and host folder" onClick={newChat} /><Row title="A task with several agents" subtitle="Create a task session with a shared room" onClick={() => setModal({ kind: 'new-task' })} /><Row title="Persistent agents" subtitle="Configured agents appear here when available" onClick={() => switchSection('work')} /><Row title="Looking for someone?" subtitle="Open Messenger" onClick={() => switchSection('messenger')} /></main>}
+      {displayPage.kind === 'empty' && <main className="fleet-form-page"><PageHeader title="Your first agent session" subtitle="Start a focused conversation with an agent on Workstation." onBack={() => go({ kind: 'home' })} /><Row title="One agent" subtitle="Choose a template and host folder" onClick={newChat} /><Row title="A task with several agents" subtitle="Create a task session with a shared room" onClick={() => setModal({ kind: 'new-task' })} /><Row title="Persistent agents" subtitle="Configured agents appear here when available" onClick={() => switchSection('work')} /><Row title="Looking for someone?" subtitle="Open external chats" onClick={() => switchSection('messenger')} /></main>}
     </div>
     {!isProfile(page) && dialogs}
     {toast && <div className="fleet-toast" role="status">{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}>×</button></div>}

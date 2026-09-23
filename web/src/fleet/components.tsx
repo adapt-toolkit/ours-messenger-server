@@ -1,5 +1,5 @@
 import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
-import { ChevronRight, type LucideIcon } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 export { Button } from '../ui/Button';
 import { Button } from '../ui/Button';
 import { SearchInput } from '../ui/SearchInput';
@@ -8,4 +8,4 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function SearchField(props: { value: string; onChange: (v: string) => void; placeholder: string }) { return <SearchInput {...props} />; }
 export function PageHeader({ title, subtitle, onBack, actions }: { title: string; subtitle?: string; onBack?: () => void; actions?: ReactNode }) { return <header className="fleet-page-heading"><div>{onBack && <Button onClick={onBack}>‹ Back</Button>}<h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div><div className="fleet-actions">{actions}</div></header>; }
 
-export function MenuAction({ title, icon: Icon, onClick, danger = false }: { title: string; icon: LucideIcon; onClick: () => void; danger?: boolean }) { return <Button className={'fleet-menu-action' + (danger ? ' danger' : '')} onClick={onClick}><Icon size={20} aria-hidden /><span>{title}</span><ChevronRight size={16} aria-hidden /></Button>; }
+export { MenuAction } from '../ui/MenuAction';

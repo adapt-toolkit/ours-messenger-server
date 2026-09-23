@@ -1338,3 +1338,6 @@
 @media (prefers-reduced-transparency: reduce) {
   .jump-latest { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
 }
+
+/* Unread counts belong to the whole conversation row, not its preview line. */
+.contact-row > .contact-unread { align-self: center; flex-shrink: 0; margin-left: 8px; }
