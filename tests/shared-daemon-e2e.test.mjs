@@ -7,8 +7,8 @@ import { startHarnessDaemon, until } from './harness.mjs';
 const daemon = await startHarnessDaemon('shared-e2e');
 try {
   const { OursClient } = daemon.sdk;
-  const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
-  const peer = new OursClient({ url: daemon.url, leaseToken: 'peer' });
+  const provision = new OursClient({ ...daemon.clientOptions, leaseToken: 'provision' });
+  const peer = new OursClient({ ...daemon.clientOptions, leaseToken: 'peer' });
 
   const human = await provision.createRootIdentity({
     name: 'Human', bio: 'messenger identity', expose_local: true,
@@ -18,7 +18,7 @@ try {
   const peerIdentity = await peer.createIdentity({
     name: 'Peer', bio: 'sender', expose_local: true, local_auto_accept: true,
   });
-  const messenger = new OursClient({ url: daemon.url, leaseToken: 'messenger' });
+  const messenger = new OursClient({ ...daemon.clientOptions, leaseToken: 'messenger' });
   await messenger.chooseIdentity({ name: 'Human', force: false });
   assert.equal((await messenger.currentIdentity()).cid, human.info.cid);
 

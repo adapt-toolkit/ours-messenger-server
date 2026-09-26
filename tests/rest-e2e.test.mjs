@@ -77,12 +77,12 @@ const daemon = await startHarnessDaemon('rest-e2e');
 const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-app-state-'));
 const publicOrigin = 'http://messenger.test';
 const { OursClient } = daemon.sdk;
-const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
+const provision = new OursClient({ ...daemon.clientOptions, leaseToken: 'provision' });
 const human = await provision.createRootIdentity({
   name: 'Me', bio: 'messenger identity', exposeLocal: true,
   localAutoAccept: true, skipIfRootExists: false,
 });
-const peer = new OursClient({ url: daemon.url, leaseToken: 'peer-lease' });
+const peer = new OursClient({ ...daemon.clientOptions, leaseToken: 'peer-lease' });
 const peerIdentity = await peer.createIdentity({
   name: 'Peer', bio: 'the other end', exposeLocal: true, localAutoAccept: true,
 });

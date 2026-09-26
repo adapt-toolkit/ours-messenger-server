@@ -4,8 +4,9 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -65,19 +66,29 @@ export async function startHarnessDaemon(tag, options = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), `messenger-${tag}-`));
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
+  const instanceId = randomUUID();
+  // All fixture clients explicitly select the authenticated daemon. No client
+  // infers its server or credential from ambient daemon-local configuration.
+  const credentialPath = join(stateDir, 'fixture-client-credential');
+  writeFileSync(credentialPath, 'ab'.repeat(32) + '\n', { mode: 0o600 });
   const env = {
     ...process.env,
     OURS_STATE_DIR: stateDir,
     OURS_PORT: String(port),
     OURS_BROKER_URL: 'wss://invalid.local/none',
-    OURS_API_VISIBILITY: 'open',
+    OURS_API_VISIBILITY: 'owner',
+    OURS_API_TOKEN: 'ab'.repeat(32),
+    OURS_DAEMON_ID: instanceId,
   };
-  // Keep the parent selection coherent as well: start() uses attachOursClient.
+  // Server-side attachment uses an explicit V1 selection, never SDK defaults.
   Object.assign(process.env, {
     OURS_STATE_DIR: stateDir,
     OURS_PORT: String(port),
     OURS_BROKER_URL: env.OURS_BROKER_URL,
     OURS_API_VISIBILITY: env.OURS_API_VISIBILITY,
+    OURS_DAEMON_URL: url,
+    OURS_DAEMON_ID: instanceId,
+    OURS_DAEMON_CREDENTIAL_PATH: credentialPath,
   });
 
   const cli = options.cliEntry
@@ -94,8 +105,8 @@ export async function startHarnessDaemon(tag, options = {}) {
     await until('shared daemon startup', async () => {
       if (child.exitCode !== null) throw new Error(`ours daemon exited ${child.exitCode}: ${output}`);
       try {
-        const response = await fetch(`${url}/version`);
-        return response.ok ? true : undefined;
+        const response = await fetch(`${url}/selection`);
+        return response.ok && (await response.json()).instanceId === instanceId ? true : undefined;
       } catch {
         return undefined;
       }
@@ -115,6 +126,7 @@ export async function startHarnessDaemon(tag, options = {}) {
     port,
     stateDir,
     sdk,
+    clientOptions: { url, credentialPath, sessionMode: 'external' },
     async close() {
       if (child.exitCode === null) {
         child.kill('SIGTERM');
