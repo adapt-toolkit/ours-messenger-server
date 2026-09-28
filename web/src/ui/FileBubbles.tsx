@@ -391,6 +391,9 @@ export function AttachPreview(props: {
   sending: boolean;
   onSend: () => void;
   onDiscard: () => void;
+  actionLabel?: string;
+  busyLabel?: string;
+  allowDiscardWhileBusy?: boolean;
 }) {
   const { att } = props;
   const [url, setUrl] = useState<string | null>(null);
@@ -406,7 +409,7 @@ export function AttachPreview(props: {
       {att.mime.startsWith('image/') && url ? (
         <img className="attach-thumb" src={url} alt={att.filename} />
       ) : att.voice && url ? (
-        <audio className="attach-audio" src={url} controls />
+        <audio className="attach-audio" aria-label="Recording preview" src={url} controls />
       ) : (
         <div className="filecard-ic"><Icon name="copy" size={16} /></div>
       )}
@@ -419,10 +422,10 @@ export function AttachPreview(props: {
             : ''}
         </div>
       </div>
-      <button className="btn primary sm" disabled={props.sending} onClick={props.onSend}>
-        {props.sending ? 'Sending…' : 'Send'}
+      <button type="button" className="btn primary sm" disabled={props.sending} onClick={props.onSend}>
+        {props.sending ? (props.busyLabel ?? 'Sending…') : (props.actionLabel ?? 'Send')}
       </button>
-      <button className="icon-btn" title="Discard" disabled={props.sending} onClick={props.onDiscard}>
+      <button type="button" className="icon-btn" title="Discard" disabled={props.sending && !props.allowDiscardWhileBusy} onClick={props.onDiscard}>
         <Icon name="close" />
       </button>
     </div>
@@ -485,6 +488,8 @@ export function VoiceComposer(props: {
   // shell's 5s notify re-render never tears the take down (the bug that stuck
   // the old recorder's discard flag). Props are inline arrows → keep in refs.
   const modeRef = useRef<Mode>('idle');
+  const mountedRef = useRef(true);
+  const finishingRef = useRef(false);
   const recRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -531,13 +536,16 @@ export function VoiceComposer(props: {
   const finish = (discard: boolean) => {
     discardRef.current = discard;
     const rec = recRef.current;
-    if (rec && rec.state !== 'inactive') rec.stop(); // onstop fires onReady
+    if (finishingRef.current) return;
+    if (rec && rec.state !== 'inactive') { finishingRef.current = true; rec.stop(); } // onstop fires onReady
     else afterStop(); // no recorder yet (arming) — just reset
     removeWinListeners();
   };
 
   const afterStop = () => {
     teardownAudio();
+    finishingRef.current = false;
+    if (!mountedRef.current) return;
     setModeBoth('idle');
     setSeconds(0);
     setLevels([]);
@@ -575,7 +583,7 @@ export function VoiceComposer(props: {
   }
 
   const beginHold = (e: React.PointerEvent) => {
-    if (props.disabled || modeRef.current !== 'idle') return;
+    if (props.disabled || finishingRef.current || modeRef.current !== 'idle') return;
     e.preventDefault(); // no focus/selection flicker on press
     startRef.current = { x: e.clientX, y: e.clientY };
     releasedEarlyRef.current = false;
@@ -595,14 +603,15 @@ export function VoiceComposer(props: {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: VOICE_CONSTRAINTS });
     } catch {
+      if (!mountedRef.current) return;
       onErrorRef.current('Microphone unavailable — check the browser permission.');
       removeWinListeners();
       setModeBoth('idle');
       return;
     }
-    if (releasedEarlyRef.current || modeRef.current === 'idle') {
+    if (!mountedRef.current || releasedEarlyRef.current || modeRef.current === 'idle') {
       stream.getTracks().forEach((t) => t.stop()); // released during the permission prompt
-      setModeBoth('idle');
+      if (mountedRef.current) setModeBoth('idle');
       return;
     }
     streamRef.current = stream;
@@ -611,20 +620,25 @@ export function VoiceComposer(props: {
     );
     extRef.current = pick?.ext ?? 'webm';
     baseRef.current = pick?.base ?? 'audio/webm';
-    const rec = pick
+    let rec: MediaRecorder;
+    try { rec = pick
       ? new MediaRecorder(stream, { mimeType: pick.rec, audioBitsPerSecond: VOICE_BITRATE })
       : new MediaRecorder(stream, { audioBitsPerSecond: VOICE_BITRATE });
+    } catch { teardownAudio(); removeWinListeners(); setModeBoth('idle'); onErrorRef.current('Unable to start voice recording.'); return; }
     recRef.current = rec;
     rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
     rec.onstop = () => {
+      finishingRef.current = true;
+      teardownAudio();
       const discard = discardRef.current;
       if (discard) { afterStop(); return; }
       // TYPED, because the length is measured off this blob through an <audio>
       // element and an untyped one gives the decoder nothing to go on.
       const blob = new Blob(chunksRef.current, { type: baseRef.current });
       void Promise.all([blob.arrayBuffer(), measureVoiceDuration(blob)]).then(([buf, seconds]) => {
+        const discarded = discardRef.current || !mountedRef.current;
         afterStop();
-        if (buf.byteLength === 0) return;
+        if (discarded || buf.byteLength === 0) return;
         const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
         onReadyRef.current({
           // the LOCKED Dev-8 marker: real container base + x-ours-kind param,
@@ -634,9 +648,10 @@ export function VoiceComposer(props: {
           bytes: new Uint8Array(buf),
           voice: true,
         });
-      });
+      }).catch(() => { afterStop(); if (mountedRef.current) onErrorRef.current('Unable to prepare voice recording.'); });
     };
-    rec.start();
+    rec.onerror = () => { discardRef.current = true; rec.onstop = null; rec.ondataavailable = null; rec.onerror = null; if (rec.state !== 'inactive') rec.stop(); removeWinListeners(); afterStop(); if (mountedRef.current) onErrorRef.current('Voice recording failed.'); };
+    try { rec.start(); } catch { rec.onstop = null; rec.ondataavailable = null; rec.onerror = null; discardRef.current = true; removeWinListeners(); afterStop(); onErrorRef.current('Unable to start voice recording.'); return; }
     t0Ref.current = Date.now();
     setModeBoth('recording');
     setSeconds(0);
@@ -690,7 +705,7 @@ export function VoiceComposer(props: {
   }
 
   // clean up if the component ever unmounts mid-take (e.g. contact switch)
-  useEffect(() => () => { discardRef.current = true; recRef.current?.stop(); removeWinListeners(); teardownAudio(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; discardRef.current = true; modeRef.current = 'idle'; const rec=recRef.current;if(rec){rec.onstop=null;rec.ondataavailable=null;rec.onerror=null;if(rec.state!=='inactive')rec.stop();} removeWinListeners(); teardownAudio(); }; }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = mode === 'recording' || mode === 'locked' || mode === 'arming';
 
@@ -705,6 +720,8 @@ export function VoiceComposer(props: {
   return (
     <>
       <button
+        type="button"
+        aria-label="Record voice message"
         className="icon-btn composer-tool vr-mic"
         title="Hold to record a voice message"
         disabled={props.disabled}
@@ -726,10 +743,10 @@ export function VoiceComposer(props: {
           {mode === 'locked' ? (
             <>
               {wave}
-              <button className="icon-btn vr-trash" title="Cancel" onClick={() => finish(true)}>
+              <button type="button" className="icon-btn vr-trash" title="Cancel" onPointerDown={e => e.preventDefault()} onClick={() => finish(true)}>
                 <Icon name="trash" size={16} />
               </button>
-              <button className="btn primary sm vr-stop" onClick={() => finish(false)}>
+              <button type="button" className="btn primary sm vr-stop" onPointerDown={e => e.preventDefault()} onClick={() => finish(false)}>
                 <Icon name="check" size={13} />
                 Stop
               </button>
