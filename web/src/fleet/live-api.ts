@@ -99,3 +99,8 @@ export async function permissionRequests(id: string) {
     permissionId: e.permissionId, sessionGeneration: snapshot.sessionGeneration, options: e.payload.options,
   }));
 }
+
+export async function cowork(method:string,params:Record<string,unknown>):Promise<any> {
+  const response=await fetch('/cowork/browser/rpc',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({version:1,id:crypto.randomUUID(),method,params})});
+  const data=await response.json();if(!response.ok||data.error)throw new Error(data.error?.message??`HTTP ${response.status}`);return data.result;
+}
