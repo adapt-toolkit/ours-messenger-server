@@ -407,3 +407,7 @@
 .fleet-task-properties button { min-height:44px; text-align:left; color:inherit; background:none; border:0; padding:0; cursor:pointer; text-decoration:underline; text-underline-offset:4px; }
 .fleet-task-participant { width:100%; min-height:44px; display:flex; justify-content:space-between; gap:12px; align-items:center; background:none; border:0; color:inherit; text-align:left; cursor:pointer; padding:8px 0; }
 @media(max-width:700px) { .fleet-task-content { grid-template-columns:minmax(0,1fr); gap:24px; } .fleet-task-content aside { border-top:1px solid var(--border); padding-top:16px; } .fleet-task-toolbar { margin-bottom:20px; } }
+.fleet-description-heading,.fleet-description-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.fleet-description-actions{justify-content:flex-start;margin-top:12px}
+.fleet-description-heading button,.fleet-description-actions button{min-height:44px;padding:8px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:inherit;cursor:pointer}
+.fleet-task-content textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:160px;padding:12px;font:inherit;color:inherit;background:transparent;border:1px solid var(--border);border-radius:12px}

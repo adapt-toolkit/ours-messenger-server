@@ -1,3 +1,4 @@
+import { TaskDescription } from './TaskDescription';
 import { LiveAgentConversations } from './LiveAgentConversations';
 import { DraftConversation } from './DraftConversation';
 import { AcpConversation } from './AcpConversation';
@@ -246,7 +247,7 @@ function FleetAppContent() {
           {selectedTask.roomCid && <Button onClick={()=>openRoom(selectedTask.id)}>Open room</Button>}
         </div>
         {selectedTask.pending && <p role="status">{selectedTask.pending}</p>}{selectedTask.blocked && <p className="fleet-warning">Blocked · {selectedTask.blocked}</p>}
-        <div className="fleet-task-content"><section aria-label="Task description"><h2>Description</h2><p className={selectedTask.description?'fleet-task-description':'muted'}>{selectedTask.description || 'No description yet.'}</p></section>
+        <div className="fleet-task-content"><TaskDescription key={selectedTask.id} task={selectedTask} onSaved={task => setTasks(items => items.map(item => item.id === task.id ? task : item))} />
           <aside aria-label="Task properties"><dl className="fleet-task-properties"><dt>List</dt><dd><button onClick={()=>setModal({kind:'move-task',id:selectedTask.id})}>{selectedTask.list}</button></dd><dt>Task ID</dt><dd className="muted">{selectedTask.id}</dd></dl>
           <h2>Participants <span className="muted">{selectedTask.agents.length || ''}</span></h2>{selectedTask.agents.length ? selectedTask.agents.map(id=>{const a=agents.find(a=>a.id===id);return <button className="fleet-task-participant" key={id} onClick={()=>openChat(id)}><span>{a?.name ?? id}</span>{a&&<small className="muted">{a.state}</small>}</button>;}) : <p className="muted">{selectedTask.status==='Backlog'?'Assigned when the task starts.':'No participants.'}</p>}
           </aside></div>

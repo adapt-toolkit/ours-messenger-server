@@ -23,6 +23,7 @@ export function AcpConversation({ id, name, active, dark, back, actions }: { id:
   const [text,setText]=useState('');
   const [sending,setSending]=useState(false);const [stopping,setStopping]=useState(false);
   const [receipt,setReceipt]=useState<any>(null);
+  const [taskCards,setTaskCards]=useState<Array<{operationId:string;taskId:string;title:string;state:string;at:string}>>([]);
   const [commands,setCommands]=useState<Array<{name:string;description?:{text?:string};inputHint?:string}>>([]);
   const [permanent,setPermanent]=useState(false);const [suggestionsHidden,setSuggestionsHidden]=useState(false);const [commandIndex,setCommandIndex]=useState(0);const composerInput=useRef<HTMLTextAreaElement>(null);const [restart,setRestart]=useState<'restart_resume'|'restart_fresh'|null>(null);
   const [model,setModel]=useState('');
@@ -40,7 +41,7 @@ export function AcpConversation({ id, name, active, dark, back, actions }: { id:
       if(!reachable){setSnapshot(null);setCommands([]);setError('');return;}
       let after='';const events:any[]=[];let page:any;
       do {page=await fleet(`/roles/${encodeURIComponent(id)}/conversation?limit=1000${after?'&after='+encodeURIComponent(after):''}`);events.push(...page.events);if(!page.hasMore || page.nextCursor===after)break;after=page.nextCursor;}while(after);
-      if(!alive)return;setMessages(acpMessages(events));setSnapshot(page.snapshot);setCommands(events.filter(e=>e.kind==='capabilities.updated'&&e.sessionGeneration===page.snapshot.sessionGeneration&&Array.isArray(e.payload?.commands)).at(-1)?.payload.commands??[]);setError('');
+      if(!alive)return;setMessages(acpMessages(events));setTaskCards([...new Map(events.filter(e=>e.kind==='fleet.task_created'&&e.source==='fleet_lifecycle'&&e.promptId&&/^[a-z0-9]{17}$/.test(e.payload?.taskId)).map(e=>[e.payload.operationId,{...e.payload,at:e.at}])).values()] as any);setSnapshot(page.snapshot);setCommands(events.filter(e=>e.kind==='capabilities.updated'&&e.sessionGeneration===page.snapshot.sessionGeneration&&Array.isArray(e.payload?.commands)).at(-1)?.payload.commands??[]);setError('');
       latest.current={cursor:Number(page.nextCursor),sessionId:role.status.session.sessionId}; if(follow.current && document.visibilityState==='visible')read.current(id,latest.current.cursor,latest.current.sessionId);
       setReceipt((r:any)=>r && !events.some(e=>e.kind==='turn.completed' && e.promptId===r.promptId) ? r : null);
     }catch(e){if(alive)setError((e as Error).message.includes('ENOENT')?'Agent is starting. Reconnecting…':(e as Error).message);}finally{if(alive)timer=setTimeout(tick,2000);}};
@@ -63,7 +64,7 @@ export function AcpConversation({ id, name, active, dark, back, actions }: { id:
     <header className="fleet-acp-header"><BackButton onClick={back} label="Back to chats" /><div><strong>{name}</strong><small>{model} · Agent session</small></div><IconButton aria-label="Agent actions" onClick={actions}><MoreHorizontal size={22}/></IconButton></header>
     <div ref={scroll} className="fleet-acp-scroll" onWheel={()=>{userScroll.current=Date.now();}} onTouchMove={()=>{userScroll.current=Date.now();}} onPointerDown={()=>{userScroll.current=Date.now();}} onScroll={e=>{const el=e.currentTarget;if(Date.now()-userScroll.current<500)follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<100;if(follow.current&&active&&latest.current&&document.visibilityState==='visible')read.current(id,latest.current.cursor,latest.current.sessionId);}}>
       <div className="fleet-acp-thread">{messages.length===0 && <div className="fleet-acp-empty"><h2>What would you like to work on?</h2><p>Send a message to {name}.</p></div>}
-      {groups.map(group=><article key={group[0].id} className={'fleet-acp-message '+group[0].role} aria-label={group[0].role==='user'?'You':'Agent'}><small>{group[0].role==='user'?'You':name}</small><MessageBubble messages={group} /></article>)}
+      {[...groups.map(group=>({time:group[0].timestamp,node:<article key={group[0].id} className={'fleet-acp-message '+group[0].role} aria-label={group[0].role==='user'?'You':'Agent'}><small>{group[0].role==='user'?'You':name}</small><MessageBubble messages={group}/></article>})),...taskCards.map(card=>({time:Date.parse(card.at),node:<section key={'task:'+card.operationId} className="fleet-task-notice" aria-label="Task created"><small>Task created · {card.state}</small><strong>{card.title}</strong><a href={'/fleet/tasks/'+encodeURIComponent(card.taskId)}>Open task →</a></section>}))].sort((a,b)=>a.time-b.time).map(item=>item.node)}
       {active && <AgentRequests chat={id}/>}<div ref={bottom}/></div>
     </div>
     <form className="fleet-acp-composer" onSubmit={e=>{e.preventDefault();void send();}}>
