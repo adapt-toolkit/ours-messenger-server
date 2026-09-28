@@ -581,7 +581,25 @@ export function VoiceComposer(props: {
     if (e.pointerType !== 'touch' || !e.isPrimary || touchControl.current?.id !== e.pointerId || touchControl.current.button !== e.currentTarget) return;
     touchControl.current = null;
     const box = e.currentTarget.getBoundingClientRect();
-    if (e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom) finish(discard);
+    if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) return;
+    // Stop replaces this control with a preview before the browser emits its
+    // compatibility click. That click can target the new Discard/Send button.
+    // Consume only this touch's click, even if the recorder unmounts meanwhile.
+    const doc = e.currentTarget.ownerDocument;
+    const pointerId = e.pointerId;
+    const x = e.clientX, y = e.clientY;
+    const clear = () => { doc.removeEventListener('click', consume, true); window.clearTimeout(timer); };
+    const consume = (click: MouseEvent) => {
+      if (click.detail === 0) return; // preserve keyboard activation
+      if ('pointerId' in click && (click as PointerEvent).pointerId !== pointerId) return;
+      if (Math.abs(click.clientX - x) > 2 || Math.abs(click.clientY - y) > 2) return;
+      click.preventDefault();
+      click.stopImmediatePropagation();
+      clear();
+    };
+    const timer = window.setTimeout(clear, 750);
+    doc.addEventListener('click', consume, true);
+    finish(discard);
   };
 
   const afterStop = () => {
