@@ -27,7 +27,7 @@ export function agentView(row: RoleRow): Agent {
     state: row.status.overall, role: row.role.config?.mission ?? '', folder: row.role.config?.cwd ?? '' };
 }
 export function taskView(row: any): Task {
-  return { id: row.task_id, name: row.title, list: row.list_name,
+  return { id: row.task_id, name: row.title, list: row.list_name, roomCid: row.room_identity_cid,
     status: (row.state[0].toUpperCase() + row.state.slice(1)) as Status, description: row.brief ?? '',
     agents: row.member_roles.map((r: any) => r.name), blocked: row.blocked?.reason,
     pending: row.terminal_intent?.status === 'pending' ? row.terminal_intent.error ?? 'Closing the room…' : undefined, closed: ['done', 'cancelled'].includes(row.state) };

@@ -4,14 +4,15 @@ import { catalog, effortChoices, initialConfiguration, validateDefinition, type 
 import type { Page } from './model';
 import { fleet } from './live-api';
 const empty = (): Configuration => ({ role: {}, brain: {}, template: {}, tasks: {} });
-const Context = createContext({ data: empty(), live: false, loaded: true, error: '', save: async (_kind: ConfigKind, _id: string, _value: Definition) => {} });
+const Context = createContext({ data: empty(), live: false, loaded: true, error: '', refresh: async () => {}, save: async (_kind: ConfigKind, _id: string, _value: Definition) => {} });
 export const useConfiguration = () => useContext(Context);
 export function ConfigurationProvider({children, live = false}: {children: ReactNode; live?: boolean}) {
   const [data,setData] = useState<Configuration>(live ? empty : initialConfiguration);
   const [snapshot,setSnapshot] = useState<any>(null);
   const [error,setError] = useState('');
   const adopt = (value: any) => { setSnapshot(value); setData({ role: value.model.roles, brain: value.model.brains, template: value.model.agent_templates, tasks: value.model.room_templates }); };
-  useEffect(() => { if (live) fleet('/configuration?includeDefinitions=true').then(adopt).catch(e => setError(e.message)); }, [live]);
+  const refresh = async () => { if (live) { try { adopt(await fleet('/configuration?includeDefinitions=true')); setError(''); } catch (e) { setError((e as Error).message); throw e; } } };
+  useEffect(() => { if (live) void refresh().catch(() => {}); }, [live]);
   const save = async (kind: ConfigKind, id: string, value: Definition) => {
     if (!live) { setData(d => ({ ...d, [kind]: { ...d[kind], [id]: structuredClone(value) } })); return; }
     if (!snapshot) throw new Error(error || 'Configuration is still loading.');
@@ -20,7 +21,7 @@ export function ConfigurationProvider({children, live = false}: {children: React
     await fleet('/configuration/save', { revision: snapshot.revision, model });
     adopt(await fleet('/configuration?includeDefinitions=true')); setError('');
   };
-  return <Context.Provider value={{data,live,loaded: !live || !!snapshot,error,save}}>{children}</Context.Provider>;
+  return <Context.Provider value={{data,live,loaded: !live || !!snapshot,error,refresh,save}}>{children}</Context.Provider>;
 }
 const titles: Record<ConfigKind,string> = {role:'Roles',brain:'Brains',template:'Agent Templates',tasks:'Room Templates'};
 const singular: Record<ConfigKind,string> = {role:'role',brain:'brain',template:'agent template',tasks:'room template'};

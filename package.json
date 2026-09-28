@@ -46,6 +46,8 @@
     "test:fleet": "node --import tsx web/tests/fleet-config.test.ts && node --import tsx web/tests/fleet-notifications.test.ts && node tests/browser-fleet-chats.test.mjs && node tests/browser-fleet-preview.test.mjs && node tests/browser-fleet-consistency.test.mjs && node tests/browser-fleet-config.test.mjs && node tests/browser-fleet-notifications.test.mjs && node tests/browser-fleet-correspondence.test.mjs"
   },
   "dependencies": {
+    "@acp-components/core": "0.1.0",
+    "@acp-components/react": "0.1.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@ours.network/sdk": "3.8.1-nightly.14",
     "@radix-ui/react-dialog": "^1.1.23",

@@ -1,49 +1,56 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react';
 import { countAt, isPending, markTargetRead, resolveRequest, seedNotifications, type FleetNotification } from './notifications';
-import { fleet, messenger, permissionRequests } from './live-api';
+import { fleet, messenger } from './live-api';
+import { roleNotifications, roomTarget, notificationIsRead, retainedOfflineMessages } from './live-notifications';
 import { Button, Row } from './components';
-const Context = createContext({ items: [] as FleetNotification[], live: false, error: '', read: (_chat: string) => {}, resolve: async (_id: string, _decision = 'approved') => {} });
+const READ_KEY='fleet-acp-read-v1';
+function storedReads():Record<string,number>{try{const v=JSON.parse(localStorage.getItem(READ_KEY)??'{}');return v && typeof v==='object'&&!Array.isArray(v)?v:{};}catch{return {};}}
+const Context = createContext({ items: [] as FleetNotification[], live: false, error: '', read: (_chat: string, _cursor?:number, _sessionId?:string) => {}, resolve: async (_id: string, _decision = 'approved') => {} });
 export function NotificationProvider({ children, live = false }: { children: ReactNode; live?: boolean }) {
-  const [items, setItems] = useState<FleetNotification[]>(live ? [] : seedNotifications);
-  const [error, setError] = useState('');
-  const [messageError, setMessageError] = useState('');
-  const refresh = async () => {
-    const roles = await fleet('/roles?includeTemporary=true');
-    const pending = roles.roles.filter((r: any) => r.status.session.readiness === 'awaiting_permission');
-    const requests = (await Promise.all(pending.map((r: any) => permissionRequests(r.role.id)))).flat();
-    setItems(previous => [...previous.filter(n => n.kind !== 'request'), ...requests]); setError('');
-  };
-  useEffect(() => {
-    if (!live) return;
-    let stopped = false; let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => { try { await refresh(); } catch(e) { if (!stopped) setError((e as Error).message); } finally { if (!stopped) timer = setTimeout(tick, 4000); } };
-    void tick(); return () => { stopped = true; clearTimeout(timer); };
-  }, [live]);
-  useEffect(() => {
-    if (!live) return;
-    let stopped = false; let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      try {
-        const contacts = await messenger.contacts();
-        const messages = (await Promise.all(contacts.contacts.map(async c => {
-          const page = await messenger.conversation(c.container_id);
-          return page.messages.filter(m => m.dir === 'in' && !m.read).map(m => ({ id: m.wire_id, kind: 'message' as const,
-            target: { section: 'messenger' as const, chat: c.container_id }, title: `${c.display_name ?? c.name}: ${page.preview ?? 'New message'}`, read: false, resolved: false }));
-        }))).flat();
-        if (!stopped) { setItems(previous => [...previous.filter(n => n.kind !== 'message'), ...messages]); setMessageError(''); }
-      } catch(e) { if (!stopped) setMessageError((e as Error).message); }
-      finally { if (!stopped) timer = setTimeout(tick,15000); }
-    };
-    void tick(); return () => { stopped = true; clearTimeout(timer); };
-  },[live]);
-  const resolve = async (id: string, decision = 'approved') => {
-    if (!live) { setItems(x => resolveRequest(x,id,decision === 'declined' ? 'declined' : 'approved')); return; }
-    const item = items.find(n => n.id === id);
-    if (!item?.permissionId || !item.options?.some(o => o.optionId === decision)) throw new Error('Permission request is no longer available.');
-    await fleet(`/roles/${encodeURIComponent(item.target.chat)}/permissions/${encodeURIComponent(item.permissionId)}`, { commandId: crypto.randomUUID(), sessionGeneration: item.sessionGeneration, optionId: decision });
-    await refresh();
-  };
-  return <Context.Provider value={{ items, live, error: error || messageError, read: chat => setItems(x => markTargetRead(x,chat)), resolve }}>{children}</Context.Provider>;
+ const [items,setItems]=useState<FleetNotification[]>(live?[]:seedNotifications);
+ const [error,setError]=useState('');
+ const readCursors=useRef<Record<string,number>>(storedReads());const acknowledged=useRef(new Set<string>());
+ const loadReads=()=>{try{readCursors.current=JSON.parse(localStorage.getItem(READ_KEY)??'{}');}catch{readCursors.current={};}};
+ useEffect(()=>{loadReads();const sync=()=>{loadReads();setItems(items=>applyRead(items));};addEventListener('storage',sync);return()=>removeEventListener('storage',sync);},[]);
+ const applyRead=(rows:FleetNotification[])=>rows.map(n=>({...n,read:notificationIsRead(n,readCursors.current,acknowledged.current)}));
+ const refresh=async()=>{
+  const [roles,tasks,contacts]=await Promise.all([fleet('/roles?includeTemporary=true'),fleet('/tasks'),messenger.contacts()]);
+  const liveTasks=tasks.tasks.filter((t:any)=>['active','review','provisioning'].includes(t.state));
+  const onlineRoles=roles.roles.filter((r:any)=>r.status.session?.reachability==='online');
+  const sourceChats=[...onlineRoles.map((r:any)=>r.role.id),...contacts.contacts.map((c:any)=>roomTarget(liveTasks,c.container_id).chat)];
+  const results=await Promise.allSettled([
+   ...onlineRoles.map(async(row:any)=>{
+    const events:any[]=[];let after='';let page:any;
+    do{page=await fleet(`/roles/${encodeURIComponent(row.role.id)}/conversation?limit=1000${after?'&after='+encodeURIComponent(after):''}`);events.push(...page.events);if(!page.hasMore||page.nextCursor===after)break;after=page.nextCursor;}while(after);
+    return roleNotifications(row,events,page.snapshot,liveTasks);
+   }),
+   ...contacts.contacts.map(async(c:any)=>{
+    const page=await messenger.conversation(c.container_id);
+    return page.messages.filter((m:any)=>m.dir==='in'&&!m.read).map((m:any)=>({id:'messenger:'+m.wire_id,kind:'message' as const,target:roomTarget(liveTasks,c.container_id),title:`${c.display_name??c.name}: New message`,read:false,resolved:false}));
+   })
+  ]);
+  const successful=results.flatMap(r=>r.status==='fulfilled'?r.value:[]);
+  // A failed source must not erase its previous pending permissions or unread items.
+  const failedChats=new Set(results.flatMap((r,i)=>r.status==='rejected'?[sourceChats[i]]:[]));
+  setItems(previous=>applyRead([...previous.filter(n=>failedChats.has(n.target.chat)),...retainedOfflineMessages(previous,roles.roles),...successful]));
+  setError(results.some(r=>r.status==='rejected')?'Some conversations could not be refreshed. Retrying…':'');
+ };
+ useEffect(()=>{if(!live)return;let stopped=false;let timer:ReturnType<typeof setTimeout>;const tick=async()=>{try{await refresh();}catch(e){if(!stopped)setError((e as Error).message);}finally{if(!stopped)timer=setTimeout(tick,4000);}};void tick();return()=>{stopped=true;clearTimeout(timer);};},[live]);
+ const read=(chat:string,cursor?:number,sessionId?:string)=>{
+  if(cursor!==undefined && sessionId){const key=chat+':'+sessionId;readCursors.current[key]=Math.max(cursor,readCursors.current[key]??0);try{localStorage.setItem(READ_KEY,JSON.stringify(readCursors.current));}catch{}}
+  setItems(rows=>{for(const n of rows.filter(n=>n.target.chat===chat&&n.kind==='message')){
+   if(cursor!==undefined && n.cursor!==undefined && n.cursor>cursor)continue;
+   if(n.cursor===undefined)acknowledged.current.add(n.id);
+   if(n.cursor!==undefined){const key=chat+':'+n.sessionId;readCursors.current[key]=Math.max(n.cursor,readCursors.current[key]??0);}
+  }try{localStorage.setItem(READ_KEY,JSON.stringify(readCursors.current));}catch{}return applyRead(rows);});
+ };
+ const resolve=async(id:string,decision='approved')=>{
+  if(!live){setItems(x=>resolveRequest(x,id,decision==='declined'?'declined':'approved'));return;}
+  const item=items.find(n=>n.id===id);
+  if(!item?.permissionId||!item.options?.some(o=>o.optionId===decision))throw new Error('Permission request is no longer available.');
+  await fleet(`/roles/${encodeURIComponent(item.target.chat)}/permissions/${encodeURIComponent(item.permissionId)}`,{commandId:crypto.randomUUID(),sessionGeneration:item.sessionGeneration,optionId:decision});await refresh();
+ };
+ return <Context.Provider value={{items,live,error,read,resolve}}>{children}</Context.Provider>;
 }
 export const useNotifications = () => useContext(Context);
 export function NotificationBadge({ node, excludeChat }: { node: string; excludeChat?: string }) {

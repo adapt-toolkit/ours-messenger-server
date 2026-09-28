@@ -23,13 +23,13 @@ type Props = {
   approve: (id: string) => Promise<boolean>; reject: (id: string) => Promise<boolean>;
 };
 
-function Filters<T extends string>({ label, choices, value, change }: { label: string; choices: T[]; value: T; change: (v: T) => void }) {
+function Filters<T extends string>({ label, choices, value, change, nodes = {} }: { label: string; choices: T[]; value: T; change: (v: T) => void; nodes?: Record<string,string> }) {
   return <div className="fleet-chat-filters" role="tablist" aria-label={label}>{choices.map((v, index) => <button key={v} role="tab" aria-selected={value === v} tabIndex={value === v ? 0 : -1} className={value === v ? 'active' : ''} onClick={() => change(v)} onKeyDown={event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + choices.length) % choices.length;
     change(choices[next]); (event.currentTarget.parentElement?.children[next] as HTMLElement)?.focus();
-  }}>{v}</button>)}</div>;
+  }}>{v}{nodes[v] && <NotificationBadge node={nodes[v]} />}</button>)}</div>;
 }
 
 function FilterSelect<T extends string>({ label, choices, value, change }: { label: string; choices: T[]; value: T; change: (v: T) => void }) {
@@ -55,8 +55,10 @@ export function SessionList(p: Props) {
   const showWorkspace = p.scope !== 'External';
   const agentsOnly = p.scope === 'Workspace' && p.workspaceView === 'Agents';
   const visibleAgents = p.agents.filter(a => (agentsOnly || !a.taskId) && (!agentsOnly || p.lifetime === 'All agents' || a.lifetime === p.lifetime) && matches(a.name));
-  const visibleTasks = p.tasks.filter(t => matches(t.name));
-  const visibleContacts = p.contacts.filter(c => !c.id.startsWith('messenger-') && matches(c.name));
+  const visibleTasks = p.tasks.filter(t => ['Active', 'Review'].includes(t.status) && matches(t.name));
+  const taskRooms = new Set(p.tasks.map(t => t.roomCid).filter(Boolean));
+  const externalContacts = p.contacts.filter(c => !taskRooms.has(c.id));
+  const visibleContacts = externalContacts.filter(c => !c.id.startsWith('messenger-') && matches(c.name));
   const showAgents = showWorkspace && (p.scope === 'All' || p.workspaceView !== 'Tasks');
   const showTasks = showWorkspace && (p.scope === 'All' || p.workspaceView !== 'Agents');
   const showExternal = p.scope !== 'Workspace';
@@ -64,15 +66,13 @@ export function SessionList(p: Props) {
   return <LayoutGroup id="fleet-sessions"><div className="listcol">
     <div className="listcol-head fleet-session-head">
       {p.task ? <div className="fleet-session-context"><div className="fleet-task-toolbar"><Button onClick={p.leaveTask}>‹ Back to chats</Button><Button onClick={() => p.taskMenu(p.task!.id)}>Task ⋯</Button></div><div className="fleet-task-summary"><h2>{p.task.name}</h2><p className="muted">{p.task.status} · {p.task.agents.length} agents<NotificationBadge node={`task:${p.task.id}`} /></p></div></div> : <>
-        <Filters label="Chat source" choices={['All', 'Workspace', 'External']} value={p.scope} change={p.setScope} />
-        {p.scope === 'Workspace' && <div className="fleet-filter-refinements">
-          <FilterSelect label="Workspace conversations" choices={['All work', 'Agents', 'Tasks']} value={p.workspaceView} change={p.setWorkspaceView} />
-          {agentsOnly && <FilterSelect label="Agent lifetime" choices={['All agents', 'Temporary', 'Persistent']} value={p.lifetime} change={p.setLifetime} />}
-        </div>}
+        <Filters label="Chat source" choices={['All', 'Agents', 'Tasks', 'External']} value={p.scope === 'Workspace' ? p.workspaceView === 'Tasks' ? 'Tasks' : 'Agents' : p.scope} nodes={{All:'root',Agents:'agents',Tasks:'tasks',External:'messenger'}} change={value => { p.setScope(value === 'Agents' || value === 'Tasks' ? 'Workspace' : value); p.setWorkspaceView(value === 'Tasks' ? 'Tasks' : value === 'Agents' ? 'Agents' : 'All work'); }} />
+        {agentsOnly && <Filters label="Agent lifetime" choices={['All agents', 'Persistent', 'Temporary']} value={p.lifetime} change={p.setLifetime} nodes={{Persistent:'lifetime:Persistent',Temporary:'lifetime:Temporary'}} />}
+
       </>}
     </div>
     <div className="fleet-external-list" hidden={p.scope !== 'External' || !!p.task}>
-      <ChatList contacts={p.contacts.map(c => ({ ...c, id: c.status === 'pending' ? `pending:${c.id}` : c.id, unread: countAt(items, `chat:${c.id}`) }))} roots={{}} selected={p.selected} onSelect={p.openExternal} onInvite={p.invite} onSettings={p.settings} onApprovePending={p.approve} onRejectPending={p.reject} />
+      <ChatList contacts={externalContacts.map(c => ({ ...c, id: c.status === 'pending' ? `pending:${c.id}` : c.id, unread: countAt(items, `chat:${c.id}`) }))} roots={{}} selected={p.selected} onSelect={p.openExternal} onInvite={p.invite} onSettings={p.settings} onApprovePending={p.approve} onRejectPending={p.reject} />
     </div>
     <div ref={scroll} onScroll={event => positions.current.set(scrollKey, event.currentTarget.scrollTop)} className="listcol-scroll" hidden={p.scope === 'External' && !p.task} aria-label={p.task ? `${p.task.name} conversations` : 'Chats'}>
       {p.task ? <div className="conversation-group">

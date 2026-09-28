@@ -3,7 +3,7 @@ import type { ChatMessage } from '../ui/chatTypes';
 export type Status = 'Backlog' | 'Provisioning' | 'Active' | 'Review' | 'Done' | 'Cancelled' | 'Failed';
 export const statuses: Status[] = ['Backlog', 'Provisioning', 'Active', 'Review', 'Done', 'Cancelled', 'Failed'];
 export interface Agent { id: string; name: string; lifetime: 'Persistent' | 'Temporary'; state: string; role: string; folder: string; taskId?: string; brain?: string; permissions?: string }
-export interface Task { id: string; name: string; list: string; status: Status; description: string; agents: string[]; blocked?: string; pending?: string; closed?: boolean }
+export interface Task { id: string; name: string; list: string; status: Status; description: string; agents: string[]; blocked?: string; pending?: string; closed?: boolean; roomCid?: string }
 export const initialAgents: Agent[] = [
   { id: 'coordinator', name: 'Coordinator', lifetime: 'Persistent', state: 'Ready', role: 'Coordinator', folder: '/home/you/work' },
   { id: 'researcher', name: 'Research assistant', lifetime: 'Persistent', state: 'Idle', role: 'Researcher', folder: '/home/you/work/research' },

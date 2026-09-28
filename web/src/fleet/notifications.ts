@@ -5,6 +5,8 @@ export interface FleetNotification {
   target: { section: Section; chat: string; lifetime?: 'Persistent' | 'Temporary'; task?: string };
   title: string;
   messageId?: string;
+  cursor?: number;
+  sessionId?: string;
   read: boolean;
   resolved: boolean;
   permissionId?: string;
@@ -14,7 +16,7 @@ export interface FleetNotification {
 }
 export const isPending = (n: FleetNotification) => n.kind === 'request' ? !n.resolved : !n.read;
 export function ancestors(n: FleetNotification): string[] {
-  return ['root', n.target.section, `chat:${n.target.chat}`, ...(n.target.lifetime ? [`lifetime:${n.target.lifetime}`] : []), ...(n.target.task ? [`task:${n.target.task}`] : [])];
+  return ['root', n.target.section, `chat:${n.target.chat}`, ...(n.target.lifetime ? [`lifetime:${n.target.lifetime}`] : []), ...(n.target.task ? ['tasks', `task:${n.target.task}`] : []), ...(n.target.section === 'work' && !n.target.chat.startsWith('room-') ? ['agents'] : [])];
 }
 export function countAt(items: FleetNotification[], node: string): number {
   return new Set(items.filter(n => isPending(n) && ancestors(n).includes(node)).map(n => n.id)).size;
