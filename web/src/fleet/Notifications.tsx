@@ -2,7 +2,8 @@ import { createContext, useContext, useState, useEffect, useRef, type ReactNode 
 import { countAt, isPending, markTargetRead, resolveRequest, seedNotifications, type FleetNotification } from './notifications';
 import { fleet, messenger } from './live-api';
 import { roleNotifications, roomTarget, notificationIsRead, retainedOfflineMessages } from './live-notifications';
-import { Button, Row } from './components';
+import { MessageCircle, ShieldQuestion } from 'lucide-react';
+import { Button, MenuAction } from './components';
 const READ_KEY='fleet-acp-read-v1';
 function storedReads():Record<string,number>{try{const v=JSON.parse(localStorage.getItem(READ_KEY)??'{}');return v && typeof v==='object'&&!Array.isArray(v)?v:{};}catch{return {};}}
 const Context = createContext({ items: [] as FleetNotification[], live: false, error: '', read: (_chat: string, _cursor?:number, _sessionId?:string) => {}, resolve: async (_id: string, _decision = 'approved') => {} });
@@ -74,5 +75,5 @@ export function AgentRequests({ chat }: { chat: string }) {
 export function NotificationPanel({open}:{open:(target:FleetNotification['target'])=>void}) {
  const {items,error}=useNotifications();
  const pending=items.filter(isPending);
- return <div className="fleet-notification-panel">{error && <p role="alert">Cannot check notifications: {error}</p>}<p>{pending.length ? 'Unread messages and requests needing your decision.' : 'You’re all caught up.'}</p>{pending.map(n=><Row key={n.id} title={n.title} subtitle={`${n.kind==='request'?'Decision needed':'Unread message'} · ${n.target.section==='messenger'?'External':'Workspace'}`} onClick={()=>open(n.target)} />)}</div>;
+ return <div className="fleet-notification-panel">{error && <p role="alert">Cannot check notifications: {error}</p>}<p>{pending.length ? 'Unread messages and requests needing your decision.' : 'You’re all caught up.'}</p>{pending.map(n=><MenuAction key={n.id} icon={n.kind==='request'?ShieldQuestion:MessageCircle} title={n.title} description={`${n.kind==='request'?'Decision needed':'Unread message'} · ${n.target.section==='messenger'?'External':'Workspace'}`} onClick={()=>open(n.target)} />)}</div>;
 }

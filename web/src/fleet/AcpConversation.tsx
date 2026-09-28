@@ -5,7 +5,9 @@ import '@acp-components/react/styles.css';
 import { fleet } from './live-api';
 import { acpMessages } from './acp-adapter';
 import { AgentRequests, useNotifications } from './Notifications';
-import { Button } from './components';
+import { Button, BackButton } from './components';
+import { IconButton } from '../ui/Button';
+import { ArrowUp, MoreHorizontal } from 'lucide-react';
 import './acp.css';
 export function AcpConversation({ id, name, active, dark, back, actions }: { id:string; name:string; active:boolean; dark:boolean; back:()=>void; actions:()=>void }) {
   const notifications=useNotifications(); const read=useRef(notifications.read);read.current=notifications.read;
@@ -45,7 +47,7 @@ export function AcpConversation({ id, name, active, dark, back, actions }: { id:
   const state=sending?'Sending…':pending?'Waiting for your approval':!online?'Connecting to agent…':running?(receipt?.state==='queued'?'Message queued · Agent is working':'Agent is thinking…'):'Ready';
   const send=async()=>{if(!text.trim()||sending)return;const prompt=text;setSending(true);setError('');follow.current=true;try{const result=await fleet(`/roles/${encodeURIComponent(id)}/input`,{text:prompt,commandId:crypto.randomUUID()});setReceipt(result);setMessages(m=>[...m,{id:result.promptId,role:'user',timestamp:Date.now(),parts:[{type:'content',content:[{type:'text',text:prompt}]}]}]);setText('');setRevision(r=>r+1);}catch(e){setError((e as Error).message);}finally{setSending(false);}};
   return <I18nProvider defaultLocale="en-US"><div className="fleet-acp" data-acp-theme={dark?'dark':'light'}>
-    <header className="fleet-acp-header"><Button onClick={back}>‹ Chats</Button><div><strong>{name}</strong><small>{model} · Agent session</small></div><Button aria-label="Agent actions" onClick={actions}>⋯</Button></header>
+    <header className="fleet-acp-header"><BackButton onClick={back} label="Back to chats" /><div><strong>{name}</strong><small>{model} · Agent session</small></div><IconButton aria-label="Agent actions" onClick={actions}><MoreHorizontal size={22}/></IconButton></header>
     <div ref={scroll} className="fleet-acp-scroll" onWheel={()=>{userScroll.current=Date.now();}} onTouchMove={()=>{userScroll.current=Date.now();}} onPointerDown={()=>{userScroll.current=Date.now();}} onScroll={e=>{const el=e.currentTarget;if(Date.now()-userScroll.current<500)follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<100;if(follow.current&&active&&latest.current&&document.visibilityState==='visible')read.current(id,latest.current.cursor,latest.current.sessionId);}}>
       <div className="fleet-acp-thread">{messages.length===0 && <div className="fleet-acp-empty"><h2>What would you like to work on?</h2><p>Send a message to {name}.</p></div>}
       {groups.map(group=><article key={group[0].id} className={'fleet-acp-message '+group[0].role} aria-label={group[0].role==='user'?'You':'Agent'}><small>{group[0].role==='user'?'You':name}</small><MessageBubble messages={group} /></article>)}
@@ -54,7 +56,7 @@ export function AcpConversation({ id, name, active, dark, back, actions }: { id:
     <form className="fleet-acp-composer" onSubmit={e=>{e.preventDefault();void send();}}>
       <div className="fleet-acp-state" role="status">{(running||sending)&&!pending&&<StreamingIndicator/>}<span>{state}</span>{running&&online&&<Button onClick={()=>{void fleet(`/roles/${encodeURIComponent(id)}/interrupt`,{commandId:crypto.randomUUID()}).then(()=>setRevision(r=>r+1)).catch(e=>setError(e.message));}}>Stop</Button>}</div>
       {error&&<p role="alert">{error}</p>}
-      <div className="fleet-acp-input"><textarea aria-label="Message agent" placeholder="Message your agent…" value={text} rows={2} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send();}}}/><Button primary type="submit" disabled={sending||!online||!text.trim()}>{sending?'Sending…':'Send'}</Button></div>
+      <div className="fleet-acp-input"><textarea aria-label="Message agent" placeholder="Message your agent…" value={text} rows={1} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send();}}}/><Button primary className="fleet-acp-send" aria-label="Send" title="Send" type="submit" disabled={sending||!online||!text.trim()}><ArrowUp size={20}/></Button></div>
     </form>
   </div></I18nProvider>;
 }

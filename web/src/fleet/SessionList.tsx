@@ -4,7 +4,7 @@ import { LayoutGroup } from 'framer-motion';
 import { SearchInput } from '../ui/SearchInput';
 import { ChatList, ContactRow } from '../ui/Chats';
 import type { ContactVM } from '../ui/viewmodel';
-import { Button } from './components';
+import { BackButton, Button } from './components';
 import { contact, type Agent, type Task } from './model';
 import { NotificationBadge, useNotifications } from './Notifications';
 import { countAt } from './notifications';
@@ -65,7 +65,7 @@ export function SessionList(p: Props) {
   const count = (showAgents ? visibleAgents.length : 0) + (showTasks ? visibleTasks.length : 0) + (showExternal ? visibleContacts.length : 0);
   return <LayoutGroup id="fleet-sessions"><div className="listcol">
     <div className="listcol-head fleet-session-head">
-      {p.task ? <div className="fleet-session-context"><div className="fleet-task-toolbar"><Button onClick={p.leaveTask}>‹ Back to chats</Button><Button onClick={() => p.taskMenu(p.task!.id)}>Task ⋯</Button></div><div className="fleet-task-summary"><h2>{p.task.name}</h2><p className="muted">{p.task.status} · {p.task.agents.length} agents<NotificationBadge node={`task:${p.task.id}`} /></p></div></div> : <>
+      {p.task ? <div className="fleet-session-context"><div className="fleet-task-toolbar"><BackButton onClick={p.leaveTask} label="Back to chats" /><Button onClick={() => p.taskMenu(p.task!.id)}>Task ⋯</Button></div><div className="fleet-task-summary"><h2>{p.task.name}</h2><p className="muted">{p.task.status} · {p.task.agents.length} agents<NotificationBadge node={`task:${p.task.id}`} /></p></div></div> : <>
         <Filters label="Chat source" choices={['All', 'Agents', 'Tasks', 'External']} value={p.scope === 'Workspace' ? p.workspaceView === 'Tasks' ? 'Tasks' : 'Agents' : p.scope} nodes={{All:'root',Agents:'agents',Tasks:'tasks',External:'messenger'}} change={value => { p.setScope(value === 'Agents' || value === 'Tasks' ? 'Workspace' : value); p.setWorkspaceView(value === 'Tasks' ? 'Tasks' : value === 'Agents' ? 'Agents' : 'All work'); }} />
         {agentsOnly && <Filters label="Agent lifetime" choices={['All agents', 'Persistent', 'Temporary']} value={p.lifetime} change={p.setLifetime} nodes={{Persistent:'lifetime:Persistent',Temporary:'lifetime:Temporary'}} />}
 
