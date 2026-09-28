@@ -4,7 +4,7 @@ import { ChevronDown } from 'lucide-react';
 import { LayoutGroup } from 'framer-motion';
 import { SearchInput } from '../ui/SearchInput';
 import { ChatList, ContactRow } from '../ui/Chats';
-import type { ContactVM } from '../ui/viewmodel';
+import { fmtWhen, type ContactVM } from '../ui/viewmodel';
 import { BackButton, Button } from './components';
 import { contact, type Agent, type Task } from './model';
 import { NotificationBadge, useNotifications } from './Notifications';
@@ -43,7 +43,7 @@ function FilterSelect<T extends string>({ label, choices, value, change }: { lab
 }
 
 export function SessionList(p: Props) {
-  const { items } = useNotifications();
+  const { items, previews } = useNotifications();
   const scroll = useRef<HTMLDivElement>(null);
   const positions = useRef(new Map<string, number>());
   const scrollKey = p.task?.id ?? `${p.scope}:${p.workspaceView}:${p.lifetime}`;
@@ -52,13 +52,18 @@ export function SessionList(p: Props) {
     if(element) element.scrollTop = positions.current.get(scrollKey) ?? 0;
   }, [scrollKey]);
   const matches = (name: string) => name.toLowerCase().includes(p.search.toLowerCase());
-  const row = (id: string, name: string, last: string, onClick: () => void, unread = countAt(items, `chat:${id}`)) => <ContactRow key={id} c={{ ...contact(id, name), last, when: '', unread }} active={p.selected === id} onClick={onClick} />;
+  const preview = (id: string) => {
+    const value = previews[id];
+    if (!value && id.startsWith('room-') && !p.tasks.find(t => `room-${t.id}` === id)?.roomCid) return {last:'No room messages yet',when:'',activityAt:''};
+    return { last: value ? `${value.text}${value.unavailable ? ' · Unable to refresh' : ''}` : 'Loading…', when: value?.at ? fmtWhen(value.at) : '', activityAt: value?.at ?? '' };
+  };
+  const row = (id: string, name: string, category: string, onClick: () => void, unread = countAt(items, `chat:${id}`), previewId = id) => <ContactRow hideAvatar category={category} key={id} c={{ ...contact(id, name), ...preview(previewId), unread }} active={p.selected === id} onClick={onClick} />;
   const showWorkspace = p.scope !== 'External';
   const agentsOnly = p.scope === 'Workspace' && p.workspaceView === 'Agents';
   const visibleAgents = p.agents.filter(a => (agentsOnly || !a.taskId) && (!agentsOnly || a.lifetime === p.lifetime) && matches(a.name));
   const visibleTasks = p.tasks.filter(t => ['Active', 'Review'].includes(t.status) && matches(t.name));
   const taskRooms = new Set(p.tasks.map(t => t.roomCid).filter(Boolean));
-  const externalContacts = p.contacts.filter(c => !taskRooms.has(c.id));
+  const externalContacts = p.contacts.filter(c => !taskRooms.has(c.id)).map(c => ({...c,...(c.status === 'pending' ? {last:'Awaiting approval',when:'',activityAt:''} : preview(c.id))}));
   const visibleContacts = externalContacts.filter(c => !c.id.startsWith('messenger-') && matches(c.name));
   const showAgents = showWorkspace && (p.scope === 'All' || p.workspaceView !== 'Tasks');
   const showTasks = showWorkspace && (p.scope === 'All' || p.workspaceView !== 'Agents');
@@ -73,16 +78,16 @@ export function SessionList(p: Props) {
       </>}
     </div>
     <div className="fleet-external-list" hidden={p.scope !== 'External' || !!p.task}>
-      <ChatList contacts={externalContacts.map(c => ({ ...c, id: c.status === 'pending' ? `pending:${c.id}` : c.id, unread: countAt(items, `chat:${c.id}`) }))} roots={{}} selected={p.selected} onSelect={p.openExternal} onInvite={p.invite} onSettings={p.settings} onApprovePending={p.approve} onRejectPending={p.reject} />
+      <ChatList hideAvatars category="External" contacts={externalContacts.map(c => ({ ...c, id: c.status === 'pending' ? `pending:${c.id}` : c.id, unread: countAt(items, `chat:${c.id}`) }))} roots={{}} selected={p.selected} onSelect={p.openExternal} onInvite={p.invite} onSettings={p.settings} onApprovePending={p.approve} onRejectPending={p.reject} />
     </div>
     <div ref={scroll} onScroll={event => positions.current.set(scrollKey, event.currentTarget.scrollTop)} className="listcol-scroll" hidden={p.scope === 'External' && !p.task} aria-label={p.task ? `${p.task.name} conversations` : 'Chats'}>
       {p.task ? <div className="conversation-group">
-        {matches('Room') && row(`room-${p.task.id}`, 'Room', 'Shared chat', () => p.openRoom(p.task!.id))}
-        {p.task.agents.map(id => p.agents.find(a => a.id === id)).filter((a): a is Agent => !!a && matches(a.name)).map(a => row(a.id, a.name, `Direct agent chat · ${a.state}`, () => p.openChat(a.id)))}
+        {matches('Room') && row(`room-${p.task.id}`, 'Room', 'Room', () => p.openRoom(p.task!.id))}
+        {p.task.agents.map(id => p.agents.find(a => a.id === id)).filter((a): a is Agent => !!a && matches(a.name)).map(a => row(a.id, a.name, 'Agent', () => p.openChat(a.id)))}
       </div> : <div className="conversation-group">
-        {showAgents && visibleAgents.map(a => row(a.id, a.name, `${a.lifetime} · ${a.state}`, () => p.openChat(a.id)))}
-        {showTasks && visibleTasks.map(t => row(t.id, t.name, `Task · ${t.agents.length} agents · ${t.status}`, () => p.openRoom(t.id, false), countAt(items, `task:${t.id}`)))}
-        {showExternal && visibleContacts.map(c => <ContactRow key={c.id} c={{ ...c, last: 'External', unread: countAt(items, `chat:${c.id}`) }} active={p.selected === c.id} onClick={() => p.openExternal(c.id)} onApprove={() => p.approve(c.id)} onReject={() => p.reject(c.id)} />)}
+        {showAgents && visibleAgents.map(a => row(a.id, a.name, 'Agent', () => p.openChat(a.id)))}
+        {showTasks && visibleTasks.map(t => row(t.id, t.name, 'Task', () => p.openRoom(t.id, false), countAt(items, `task:${t.id}`), `room-${t.id}`))}
+        {showExternal && visibleContacts.map(c => <ContactRow hideAvatar category="External" key={c.id} c={{ ...c, unread: countAt(items, `chat:${c.id}`) }} active={p.selected === c.id} onClick={() => p.openExternal(c.id)} onApprove={() => p.approve(c.id)} onReject={() => p.reject(c.id)} />)}
         {!count && <p className="fleet-session-context muted">No chats match these filters.</p>}
       </div>}
     </div>

@@ -42,6 +42,8 @@ export function ContactRow(props: {
   c: ContactVM;
   active: boolean;
   grouped?: boolean;
+  hideAvatar?: boolean;
+  category?: string;
   onClick: () => void;
   onApprove?: () => Promise<boolean>;
   onReject?: () => Promise<boolean>;
@@ -62,10 +64,11 @@ export function ContactRow(props: {
     }
   };
   const contents = <>
-    <span className="contact-avatar" aria-hidden>{c.initials}</span>
+    {!props.hideAvatar && <span className="contact-avatar" aria-hidden>{c.initials}</span>}
     <span className="contact-copy">
       <span className="contact-row-topline">
         <span className="contact-name">{c.name}</span>
+        {props.category && <span className="contact-category">{props.category}</span>}
         {c.when && <span className="contact-time">{c.when}</span>}
       </span>
       <span className="contact-row-bottomline">
@@ -88,6 +91,7 @@ export function ContactRow(props: {
     <motion.button
       type="button"
       className={className}
+      aria-current={active || undefined}
       onClick={props.onClick}
     >
       {contents}
@@ -98,6 +102,8 @@ export function ContactRow(props: {
 export function ChatList(props: {
   contacts: ContactVM[];
   roots: Record<string, RootMetaVM>;
+  hideAvatars?: boolean;
+  category?: string;
   selected: string | null;
   onSelect: (id: string) => void;
   onInvite: () => void;
@@ -169,7 +175,7 @@ export function ChatList(props: {
         {listMode === 'recent' && recent.length > 0 && (
           <div className="conversation-group">
             {recent.map((c) => (
-              <ContactRow key={c.id} c={c} active={selected === c.id} onClick={() => props.onSelect(c.id)} />
+              <ContactRow hideAvatar={props.hideAvatars} category={props.category} key={c.id} c={c} active={selected === c.id} onClick={() => props.onSelect(c.id)} />
             ))}
           </div>
         )}
@@ -183,7 +189,7 @@ export function ChatList(props: {
             </div>
             <div className="conversation-group">
               {group.contacts.map((c) => (
-                <ContactRow
+                <ContactRow hideAvatar={props.hideAvatars} category={props.category}
                   key={c.id}
                   c={c}
                   grouped={group.rootId !== null}
@@ -202,7 +208,7 @@ export function ChatList(props: {
             </div>
             <div className="conversation-group">
               {pending.map((c) => (
-                <ContactRow
+                <ContactRow hideAvatar={props.hideAvatars} category={props.category}
                   key={c.id}
                   c={c}
                   active={false}
