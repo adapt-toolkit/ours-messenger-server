@@ -536,13 +536,16 @@ try {
         await settleAnimations(listPage);
         // WebKit may register the :active color transition after the animation snapshot.
         // Observe the settled pressed state before comparing its exact material roles.
-        await listPage.waitForFunction(({ background, iconColor }) => {
+        const pressedSample = await listPage.waitForFunction(({ background, iconColor }) => {
           const button = document.querySelector('.composer .btn.primary');
-          return button?.matches(':active')
-            && getComputedStyle(button).backgroundColor === background
-            && getComputedStyle(button.querySelector('.ic')).color === iconColor;
+          if (!button?.matches(':active')) return false;
+          const sample = { background: getComputedStyle(button).backgroundColor, iconColor: getComputedStyle(button.querySelector('.ic')).color };
+          return sample.background === background && sample.iconColor === iconColor ? sample : false;
         }, { background: conversationMaterials.actionPressed, iconColor: conversationMaterials.actionInk }, { timeout: 5_000 });
-        const pressedSend = await listPage.locator('.composer .btn.primary').evaluate((node) => ({ background: getComputedStyle(node).backgroundColor, iconColor: getComputedStyle(node.querySelector('.ic')).color }));
+        // Keep the exact observation that satisfied the wait. A second protocol
+        // round trip can sample a later WebKit transition frame instead.
+        const pressedSend = await pressedSample.jsonValue();
+        await pressedSample.dispose();
         assert.deepEqual(pressedSend, { background: conversationMaterials.actionPressed, iconColor: conversationMaterials.actionInk }, `${engineName} pressed resolves action-pressed and action-ink roles`);
         await listPage.mouse.up();
         await listPage.locator('.composer .btn.primary').evaluate((node) => { node.disabled = true; });
