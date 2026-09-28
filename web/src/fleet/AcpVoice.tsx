@@ -52,9 +52,9 @@ export function AcpVoice({ active, disabled, sessionGeneration, onTranscript, on
   };
   return <>
     {active && <VoiceComposer disabled={disabled || !!clip || transcribing} onReady={att => { setClip(att); setError(''); }} onError={setError} onActiveChange={value => { if (value && !recordingActive.current) takeGeneration.current = sessionGeneration; recordingActive.current = value; setRecording(value); }}/>}
-    <Button type="button" className="fleet-acp-send" aria-label="Live voice mode" title="Live voice mode" onClick={() => setLive(true)}><AudioLines size={20}/></Button>
+    <Button type="button" className="fleet-acp-send fleet-live-voice-trigger" aria-label="Live voice mode" title="Live voice mode" onClick={() => setLive(true)}><AudioLines size={20}/></Button>
     {(clip || error) && active && <div className="fleet-voice-panel" aria-label="Voice message">
-      {clip && <AttachPreview att={clip} sending={transcribing} actionLabel="Add transcription" busyLabel="Recognizing speech…" allowDiscardWhileBusy onSend={() => void recognize()} onDiscard={discard}/>}
+      {clip && <AttachPreview compact att={clip} sending={transcribing} actionLabel="Add transcription" busyLabel="Recognizing speech…" allowDiscardWhileBusy onSend={() => void recognize()} onDiscard={discard}/>}
       {error && <p role="alert">{error}</p>}
     </div>}
     {live && <DialogShell title="Live voice" description="Talk with your agent" onClose={() => setLive(false)}>

@@ -394,15 +394,35 @@ export function AttachPreview(props: {
   actionLabel?: string;
   busyLabel?: string;
   allowDiscardWhileBusy?: boolean;
+  compact?: boolean;
 }) {
   const { att } = props;
+  const audio = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(parseVoiceDuration(att.mime) ?? 0);
+  const [playbackError, setPlaybackError] = useState('');
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     const type = playableMime({ mime: att.mime, filename: att.filename });
     const u = URL.createObjectURL(new Blob([att.bytes as BlobPart], { type }));
     setUrl(u);
-    return () => URL.revokeObjectURL(u);
+    setPlaying(false);
+    setPosition(0);
+    setDuration(parseVoiceDuration(att.mime) ?? 0);
+    setPlaybackError('');
+    const player = audio.current;
+    return () => { player?.pause(); URL.revokeObjectURL(u); };
   }, [att]);
+
+  if (props.compact && att.voice) return <div className="attach-preview attach-preview-compact" role="group" aria-label="Recording preview">
+    <audio ref={audio} src={url ?? undefined} preload="metadata" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)} onLoadedMetadata={() => { const d=audio.current?.duration; if(d && Number.isFinite(d))setDuration(d); }} onError={() => setPlaybackError('Preview unavailable. You can still transcribe this recording.')} />
+    <button type="button" className="icon-btn voice-preview-play" aria-label={playing ? 'Pause recording' : 'Play recording'} onClick={() => { const player=audio.current;if(!player)return;if(playing)player.pause();else void player.play().catch(()=>setPlaybackError('Unable to play this recording.')); }}><Icon name={playing ? 'pause' : 'play'} size={18}/></button>
+    <div className="voice-preview-timeline"><input type="range" aria-label="Recording position" aria-valuetext={`${fmtClock(position)} of ${fmtClock(duration)}`} min={0} max={duration || 1} step={0.1} value={Math.min(position,duration || 1)} disabled={!duration} onChange={e=>{const time=Number(e.target.value);if(audio.current)audio.current.currentTime=time;setPosition(time);}}/><span aria-hidden="true">{fmtClock(playing || position ? position : duration)}</span></div>
+    <button type="button" className="voice-preview-add" aria-label={props.sending ? (props.busyLabel ?? 'Sending…') : (props.actionLabel ?? 'Send')} disabled={props.sending} onClick={props.onSend}>{props.sending ? 'Recognizing…' : 'Add text'}</button>
+    <button type="button" className="icon-btn" title="Discard" disabled={props.sending && !props.allowDiscardWhileBusy} onClick={props.onDiscard}><Icon name="close" size={18}/></button>
+    {playbackError && <p className="voice-preview-error" role="status">{playbackError}</p>}
+  </div>;
 
   return (
     <div className="attach-preview">
