@@ -753,6 +753,7 @@ export function Conversation(props: {
   onLoadEarlier?: () => void;
   onBack: () => void;
   onOpenContact?: () => void;
+  hideContactAvatar?: boolean;
   /** Resolves with the canonical wire id of the delivered message when it has one. */
   onSend: (text: string, replyToWireId?: string, signal?: AbortSignal) => Promise<string | void>;
   onLoadCommands?: (contactCid: string, signal?: AbortSignal) => Promise<CommandCatalog>;
@@ -1308,9 +1309,9 @@ export function Conversation(props: {
             )}
             {!props.syncing && <span className="conv-contact-status"><Icon name="lock" size={11} />Encrypted connection</span>}
           </div>
-          <button type="button" className="conv-contact-trigger conv-contact-avatar" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
+          {!props.hideContactAvatar && <button type="button" className="conv-contact-trigger conv-contact-avatar" data-contact-trigger onClick={props.onOpenContact} disabled={!props.onOpenContact} aria-label={`Open contact details for ${contact.name}`}>
             <span className="conv-contact-initials" aria-hidden>{contact.initials}</span>
-          </button>
+          </button>}
           {props.headerActions}
         </div>
       </div>
