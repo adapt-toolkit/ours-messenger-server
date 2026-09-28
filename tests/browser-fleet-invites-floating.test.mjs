@@ -5,6 +5,7 @@ const server=createFleetPreviewServer();await new Promise(r=>server.listen(0,'12
 const browser=await chromium.launch({executablePath:process.env.FLEET_CHROMIUM_EXECUTABLE});
 try {
  const p=await browser.newPage({viewport:{width:360,height:800}});const calls=[],errors=[];p.on('pageerror',e=>errors.push(e.message));
+ await p.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedInvite=text;if(window.failCopy)throw Error('denied');}}}));
  const role={role:{id:'fixture-agent',lifetime:'temporary',config:{name:'Fixture agent',harness:'codex'}},status:{overall:'ready',session:{reachability:'online',readiness:'idle',sessionId:'fixture-session'}},capabilities:{}};
  await p.route('**/fleet/api/v1/**',async r=>{const path=new URL(r.request().url()).pathname;let data;
  if(path.includes('/auth/'))data={csrfToken:'fixture'};
@@ -23,6 +24,12 @@ try {
   await p.getByLabel('Invitation type',{exact:true}).selectOption(mode);
   await p.getByRole('button',{name:`Generate ${mode==='one_time'?'one-time':'reusable'} invite`,exact:true}).click();
   await p.getByLabel('Invitation code',{exact:true}).waitFor();
+  await p.getByRole('button',{name:'Copy invitation',exact:true}).click();
+  assert.equal(await p.evaluate(()=>window.copiedInvite),`fixture-${target}-code`);
+  await p.getByText('Copied',{exact:true}).waitFor();
+  await p.evaluate(()=>window.failCopy=true);
+  await p.getByRole('button',{name:'Copy invitation',exact:true}).click();
+  await p.getByRole('alert').filter({hasText:'Could not copy'}).waitFor();
   const call=calls.at(-1);assert.deepEqual(call.body,target==='agent'?{tool:'generate_invite',arguments:{mode}}:{mode});
   assert.equal(call.path,target==='agent'?'/fleet/api/v1/roles/fixture-agent/ours/call':'/messenger/api/invites');
   assert.equal(await p.getByLabel('Invitation type',{exact:true}).isDisabled(),true);
