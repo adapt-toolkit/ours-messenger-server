@@ -1,7 +1,7 @@
 import { SegmentedSwitch } from './SegmentedSwitch';
 // Chats section — grouped contact list + conversation. Ported from the design
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
-import { memo, ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, ReactNode, type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
 import { Button, IconButton } from './Button';
 import { SearchInput } from './SearchInput';
@@ -490,12 +490,13 @@ const TimelineRows = memo(function TimelineRows(props: {
   contactCid: string;
   contactName: string;
   onStartReply: (reply: ReplyDraft) => void;
+  onRevealMessage: (wireId: string) => void;
   onPreview: (record: FileRecord) => void;
   onFetchFile?: (wireId: string) => Promise<void>;
 }) {
   const {
     messages, optimisticSend, sentKeys, hiddenEarlier, unreadWireId,
-    roomLines, contactCid, contactName, onStartReply, onPreview, onFetchFile,
+    roomLines, contactCid, contactName, onStartReply, onRevealMessage, onPreview, onFetchFile,
   } = props;
   const byWireId = new Map<string, ChatMessage>();
   for (const message of messages) if (message.wireId) byWireId.set(message.wireId, message);
@@ -561,6 +562,14 @@ const TimelineRows = memo(function TimelineRows(props: {
             <Icon name="reply" size={15} />
           </button>
         ) : null;
+        const quote = quoteFor(message);
+        const quotePreview = quote && message.replyTo ? (
+          <button type="button" className="quote" aria-label={`Show original message${quote.author ? ` from ${quote.author}` : ''}`}
+            onClick={() => onRevealMessage(message.replyTo!.wireId)}>
+            {quote.author && <span className="quote-author">{quote.author}</span>}
+            <span className="quote-text">{quote.text}</span>
+          </button>
+        ) : null;
         const unreadDivider = message.wireId === unreadWireId
           ? <div id={`unread-${domId}`} className="unread-divider" role="separator"><span>Unread messages</span></div>
           : null;
@@ -579,6 +588,7 @@ const TimelineRows = memo(function TimelineRows(props: {
             >
               {unreadDivider}
               <div className={`room-system room-${presentation}-card`} role="note">
+                {quotePreview}
                 {room.label && <span className="room-system-label">{room.label}</span>}
                 {room.roomName && <strong className="room-card-name">{room.roomName}</strong>}
                 <MessageMarkdown text={room.text} className="room-system-text message-markdown" />
@@ -624,6 +634,7 @@ const TimelineRows = memo(function TimelineRows(props: {
                 after={replyButton}
               >
                 <div className={`ours-message ours-message-file ours-message--${message.dir}`}>
+                  {quotePreview}
                   <FileBubble
                     rec={record}
                     receipt={message.receipt}
@@ -683,6 +694,7 @@ const TimelineRows = memo(function TimelineRows(props: {
                 after={replyButton}
               >
                 <div className={`ours-message typed-message ours-message--${message.dir}`}>
+                  {quotePreview}
                   <div className="typed-message-kind">{message.typed.kind === 'command' ? 'Command' : message.typed.kind === 'command_result' ? 'Result' : 'Typed message'}</div>
                   <strong>{title}</strong>
                   <div className="typed-message-state" role="status">{state}</div>
@@ -694,7 +706,6 @@ const TimelineRows = memo(function TimelineRows(props: {
           );
         }
 
-        const quote = quoteFor(message);
         return (
           <motion.div
             className="message-motion"
@@ -714,12 +725,7 @@ const TimelineRows = memo(function TimelineRows(props: {
               after={replyButton}
             >
               <div className={`ours-message ours-message--${message.dir}`}>
-                {quote && (
-                  <div className="quote">
-                    {quote.author && <span className="quote-author">{quote.author}</span>}
-                    <span className="quote-text">{quote.text}</span>
-                  </div>
-                )}
+                {quotePreview}
                 {room && !continuedAbove && (
                   <>
                     {room.roomName && <div className="room-message-room">{room.roomName}</div>}
@@ -751,6 +757,7 @@ export function Conversation(props: {
   unreadOpen?: { wireId: string; count: number } | null;
   hiddenEarlier?: number;
   onLoadEarlier?: () => void;
+  onRevealMessage?: (wireId: string, signal: AbortSignal) => Promise<'found' | 'unavailable' | 'limit'>;
   onBack: () => void;
   onOpenContact?: () => void;
   hideContactAvatar?: boolean;
@@ -803,6 +810,24 @@ export function Conversation(props: {
   const [commandCatalog, setCommandCatalog] = useState<CommandCatalog | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [slashSelection, setSlashSelection] = useState<{ key: string; name: string } | null>(null);
+  const [slashPress, setSlashPress] = useState<{ key: string; name: string; pointer: number; x: number; y: number } | null>(null);
+  const slashActivationRef = useRef<{ key: string; name: string } | null>(null);
+  const slashCaretRef = useRef<number | null>(null);
+  const slashListRef = useRef<HTMLDivElement>(null);
+  const scopedCatalog = commandCatalog?.recipient_cid === contact?.id ? commandCatalog : null;
+  const slashToken = /^\/[^\s/]*$/.test(draft);
+  const discoverSlash = slashToken && composerFocused && !commandOpen && !composing && !slashDismissed;
+  const slashCommands = discoverSlash && props.onSendCommand
+    ? scopedCatalog?.commands.filter((entry) => entry.name.toLowerCase().startsWith(draft.slice(1).toLowerCase())) ?? [] : [];
+  // A selection belongs to exactly this draft and catalog revision. An update
+  // never silently changes the command an Enter press would choose.
+  const slashKey = JSON.stringify([contact?.id, scopedCatalog?.fingerprint, draft]);
+  const activeSlash = slashSelection?.key === slashKey
+    ? slashCommands.findIndex((entry) => entry.name === slashSelection.name) : -1;
   const commandLoadRef = useRef<AbortController | null>(null);
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -832,6 +857,99 @@ export function Conversation(props: {
   const followTopRef = useRef<number | null>(null);
   const messageCountRef = useRef(0);
   const newestMessageRef = useRef<string | null>(null);
+  const replyNavigationRef = useRef<AbortController | null>(null);
+  const replyHighlightRef = useRef<HTMLElement | null>(null);
+  const replyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [replyTarget, setReplyTarget] = useState<{ wireId: string; controller: AbortController } | null>(null);
+  const [replyNotice, setReplyNotice] = useState('');
+  const cancelReplyNavigation = useCallback(() => {
+    replyNavigationRef.current?.abort();
+    replyNavigationRef.current = null;
+    if (replyTimerRef.current !== null) clearTimeout(replyTimerRef.current);
+    replyTimerRef.current = null;
+    replyHighlightRef.current?.classList.remove('reply-highlight');
+    replyHighlightRef.current = null;
+    setReplyTarget(null);
+    setReplyNotice('');
+  }, []);
+  useLayoutEffect(() => {
+    cancelReplyNavigation();
+    return cancelReplyNavigation;
+  }, [contact?.id, cancelReplyNavigation]);
+  const revealOriginal = useCallback(async (wireId: string) => {
+    cancelReplyNavigation();
+    const controller = new AbortController();
+    replyNavigationRef.current = controller;
+    const scroller = messageScrollRef.current;
+    followTargetRef.current = null;
+    followTopRef.current = null;
+    pinnedToBottomRef.current = false;
+    unreadPlacedRef.current = true;
+    prependScrollRef.current = null;
+    // Stop an in-flight bottom-follow before giving the reply target ownership.
+    if (scroller) scroller.scrollTo({ top: scroller.scrollTop, behavior: 'instant' });
+    if (window.location.hash.startsWith('#chat-message-')) {
+      window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
+    }
+    const timeout = setTimeout(() => {
+      controller.abort();
+      setReplyNotice('Could not load the original message. Please try again.');
+    }, 10000);
+    try {
+      let result: 'found' | 'unavailable' | 'limit' = 'found';
+      const mounted = document.getElementById(timelineMessageId(wireId));
+      if (!mounted || !scroller?.contains(mounted)) {
+        setReplyNotice('Finding original message…');
+        result = await props.onRevealMessage?.(wireId, controller.signal) ?? 'unavailable';
+      }
+      if (controller.signal.aborted) return;
+      if (result !== 'found') {
+        setReplyNotice(result === 'limit'
+          ? 'Original message is beyond the search limit. Load earlier messages and try again.'
+          : 'Original message is unavailable.');
+        return;
+      }
+      setReplyNotice('');
+      setReplyTarget({ wireId, controller });
+    } catch {
+      if (!controller.signal.aborted) setReplyNotice('Could not load the original message. Please try again.');
+    } finally { clearTimeout(timeout); }
+  }, [cancelReplyNavigation, props.onRevealMessage]);
+  useLayoutEffect(() => {
+    if (!replyTarget) return;
+    // Motion mounts newly loaded rows after the parent's layout effects.
+    const frame = requestAnimationFrame(() => {
+      if (replyTarget.controller.signal.aborted) return;
+      const target = document.getElementById(timelineMessageId(replyTarget.wireId));
+      const scroller = messageScrollRef.current;
+      if (!target || !scroller?.contains(target)) {
+        setReplyNotice('Original message is unavailable.');
+        setReplyTarget(null);
+        return;
+      }
+      prependScrollRef.current = null;
+      pinnedToBottomRef.current = false;
+      const rect = target.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      // Keep tall originals readable from their start; center ordinary bubbles.
+      const offset = Math.max(16, (scroller.clientHeight - rect.height) / 2);
+      scroller.scrollTo({ top: scroller.scrollTop + rect.top - viewport.top - offset, behavior: 'instant' });
+      target.classList.remove('reply-highlight');
+      void target.offsetWidth;
+      target.classList.add('reply-highlight');
+      replyHighlightRef.current = target;
+      target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+      replyTimerRef.current = setTimeout(() => {
+        target.classList.remove('reply-highlight');
+        replyHighlightRef.current = null;
+        replyTimerRef.current = null;
+      }, 1500);
+      setReplyTarget(null);
+      measureJumpLatest();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [replyTarget]);
   const measuredDraftRef = useRef('');
   useLayoutEffect(() => {
     const detail = detailRef.current;
@@ -889,6 +1007,9 @@ export function Conversation(props: {
     setCommandCatalog(null);
     setCommandOpen(false);
     setCommandBusy(false);
+    setSlashSelection(null);
+    setSlashDismissed(false);
+    setComposing(false);
     sentKeysRef.current.clear();
     followTargetRef.current = null;
     followTopRef.current = null;
@@ -900,7 +1021,7 @@ export function Conversation(props: {
     const controller = new AbortController();
     commandLoadRef.current = controller;
     setCommandBusy(true);
-    setError(null);
+    if (reportFailure) setError(null);
     try {
       const catalog = await props.onLoadCommands(contact.id, controller.signal);
       if (!controller.signal.aborted && catalog.recipient_cid === contact.id) {
@@ -938,6 +1059,46 @@ export function Conversation(props: {
   const closeCommandPanel = () => {
     setCommandOpen(false);
     commandTriggerRef.current?.focus();
+  };
+  const loadCommandsRef = useRef(loadCommands);
+  loadCommandsRef.current = loadCommands;
+  useEffect(() => {
+    if (!discoverSlash || !props.onLoadCommands) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // No catalog-change event exists. Refresh only during active discovery,
+    // including empty catalogs, with one request at a time and no render polling.
+    const refresh = async () => {
+      await loadCommandsRef.current(false, false);
+      if (!stopped) timer = setTimeout(refresh, 2000);
+    };
+    void refresh();
+    return () => { stopped = true; clearTimeout(timer); commandLoadRef.current?.abort(); };
+  }, [discoverSlash, contact?.id]);
+  useEffect(() => {
+    slashListRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }, [activeSlash, slashKey]);
+  const cancelSlashPress = () => {
+    slashActivationRef.current = null;
+    setSlashPress(null);
+  };
+  useLayoutEffect(cancelSlashPress, [discoverSlash, slashKey]);
+  useLayoutEffect(() => {
+    if (slashCaretRef.current === null) return;
+    composerInputRef.current?.setSelectionRange(slashCaretRef.current, slashCaretRef.current);
+    slashCaretRef.current = null;
+  }, [draft]);
+  const chooseSlash = (name: string) => {
+    if (!discoverSlash || !slashCommands.some((entry) => entry.name === name)) return;
+    // Discovery only edits a standalone leading command token. Keep literal
+    // sends and the separate typed-command form on their existing paths.
+    const completed = `/${name} `;
+    slashCaretRef.current = completed.length;
+    setDraft(completed);
+    setSlashSelection(null);
+    setSlashDismissed(true);
+    cancelSlashPress();
+    composerInputRef.current?.focus({ preventScroll: true });
   };
 
   useEffect(() => {
@@ -1347,9 +1508,12 @@ export function Conversation(props: {
         }}
         // Any deliberate gesture hands scrolling back to the reader, even
         // mid-animation, so an interrupted follow can never latch.
-        onPointerDown={() => { followTargetRef.current = null; followTopRef.current = null; }}
-        onTouchStart={() => { followTargetRef.current = null; followTopRef.current = null; }}
-        onWheel={() => { followTargetRef.current = null; followTopRef.current = null; }}
+        onPointerDown={() => { cancelReplyNavigation(); followTargetRef.current = null; followTopRef.current = null; }}
+        onTouchStart={() => { cancelReplyNavigation(); followTargetRef.current = null; followTopRef.current = null; }}
+        onWheel={() => { cancelReplyNavigation(); followTargetRef.current = null; followTopRef.current = null; }}
+        onKeyDown={(event) => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Escape'].includes(event.key)) cancelReplyNavigation();
+        }}
         onDragOver={(e) => { if (props.onSendFile) e.preventDefault(); }}
         onDrop={(e) => {
           if (!props.onSendFile) return;
@@ -1393,6 +1557,7 @@ export function Conversation(props: {
             contactCid={contact.id}
             contactName={contact.name}
             onStartReply={setReplyTo}
+            onRevealMessage={revealOriginal}
             onPreview={setPreviewRec}
             onFetchFile={props.onFetchFile}
           />
@@ -1407,6 +1572,7 @@ export function Conversation(props: {
           aria-label={newSinceAway ? `Jump to latest, ${newSinceAway} new messages` : 'Jump to latest'}
           onClick={(event) => {
             const restoreFocus = event.currentTarget === document.activeElement;
+            cancelReplyNavigation();
             setNewSinceAway(0);
             followBottom(true);
             if (restoreFocus) requestAnimationFrame(() => messageScrollRef.current?.focus({ preventScroll: true }));
@@ -1416,6 +1582,7 @@ export function Conversation(props: {
           {!!newSinceAway && <span className="jump-latest-count" aria-live="polite">{newSinceAway}</span>}
         </button>
       )}
+      {replyNotice && <div className="banner" role="status">{replyNotice}</div>}
       {error && (
         <div className="banner error" role="alert">
           {error}
@@ -1429,21 +1596,57 @@ export function Conversation(props: {
         </div>
       )}
       <div className="composer-wrap" ref={composerWrapRef}>
-        {commandBusy && !commandOpen && <div className="command-status pending" data-state="pending" role="status" aria-live="polite">Loading commands for {contact.name}…</div>}
-        {commandOpen && commandCatalog && props.onSendCommand && (
+        {commandOpen && scopedCatalog && props.onSendCommand && (
           <CommandPanel
-            key={`${commandCatalog.recipient_cid}:${commandCatalog.fingerprint}`}
-            catalog={commandCatalog}
+            key={`${scopedCatalog.recipient_cid}:${scopedCatalog.fingerprint}`}
+            catalog={scopedCatalog}
             recipientName={contact.name}
             busy={commandBusy}
             onRefresh={() => void loadCommands(true, true)}
             onClose={closeCommandPanel}
             onSend={async (command: CommandDefinition, args, invocationId, catalogFingerprint) => {
-              if (!contact || contact.id !== commandCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
+              if (!contact || contact.id !== scopedCatalog.recipient_cid) throw new Error('Recipient changed; refresh commands');
               return props.onSendCommand!(contact.id, command.name, args, invocationId, catalogFingerprint);
             }}
           />
         )}
+        {slashCommands.length > 0 && <div ref={slashListRef} id="composer-command-suggestions"
+          className="command-suggestions" role="listbox" aria-label="Suggested contact commands" onScroll={cancelSlashPress}>
+          {slashCommands.map((entry, index) => <div key={`${slashKey}:${entry.name}`}
+            id={`composer-command-option-${index}`} role="option" aria-selected={index === activeSlash}
+            className="command-suggestion" data-pressed={slashPress?.key === slashKey && slashPress.name === entry.name || undefined}
+            onMouseDown={(event) => {
+              // Preserve focus without suppressing WebKit's touch-generated click.
+              if (event.button === 0) event.preventDefault();
+            }}
+            onPointerDown={(event) => {
+              if (!event.isPrimary || event.button !== 0) return;
+              // Native pan-y owns scrolling; click alone commits selection.
+              slashActivationRef.current = { key: slashKey, name: entry.name };
+              setSlashPress({ key: slashKey, name: entry.name, pointer: event.pointerId, x: event.clientX, y: event.clientY });
+            }}
+            onPointerMove={(event) => {
+              if (slashPress?.pointer === event.pointerId
+                && Math.hypot(event.clientX - slashPress.x, event.clientY - slashPress.y) > 10) cancelSlashPress();
+            }}
+            onPointerUp={() => setSlashPress(null)}
+            onPointerCancel={cancelSlashPress}
+            onPointerLeave={(event) => {
+              // Touch releases implicit capture before its click; that departure
+              // is not a drag cancellation. Only cancel a still-held pointer.
+              if (event.buttons !== 0) cancelSlashPress();
+            }}
+            onClick={(event) => {
+              const activation = slashActivationRef.current;
+              cancelSlashPress();
+              if (event.detail === 0 || (activation?.key === slashKey && activation.name === entry.name)) {
+                chooseSlash(entry.name);
+              }
+            }}>
+            <strong>/{entry.name}</strong>
+            {entry.description && <span>{entry.description}</span>}
+          </div>)}
+        </div>}
         {replyTo && (
           <div className="reply-bar">
             <div className="reply-bar-line" />
@@ -1470,10 +1673,13 @@ export function Conversation(props: {
           </div>
         )}
         <div className={'composer' + (voiceActive ? ' recording' : '')}>
-          {props.onLoadCommands && commandCatalog && commandCatalog.commands.length > 0 && (
+          {props.onLoadCommands && scopedCatalog && scopedCatalog.commands.length > 0 && (
             <button ref={commandTriggerRef} type="button" className="icon-btn composer-tool command-trigger" title="Recipient commands"
               aria-label="Recipient commands" aria-expanded={commandOpen}
-              disabled={commandBusy} onClick={() => commandOpen ? closeCommandPanel() : setCommandOpen(true)}>
+              disabled={commandBusy} onClick={() => {
+                if (commandOpen) closeCommandPanel();
+                else setCommandOpen(true);
+              }}>
               <Icon name="menu" size={19} />
             </button>
           )}
@@ -1506,8 +1712,31 @@ export function Conversation(props: {
             placeholder={(replyTo ? 'Reply to ' + replyTo.author : 'Message ' + contact.name) + '…'}
             value={draft}
             aria-busy={sending}
-            onChange={(e) => setDraft(e.target.value)}
+            aria-autocomplete={slashCommands.length ? 'list' : undefined}
+            aria-controls={slashCommands.length ? 'composer-command-suggestions' : undefined}
+            aria-activedescendant={activeSlash >= 0 ? `composer-command-option-${activeSlash}` : undefined}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => { setComposerFocused(false); setSlashSelection(null); }}
+            onCompositionStart={() => { setComposing(true); setSlashSelection(null); }}
+            onCompositionEnd={() => setComposing(false)}
+            onChange={(e) => { setDraft(e.target.value); setSlashSelection(null); setSlashDismissed(false); }}
             onKeyDown={(e) => {
+              if (composing || e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (slashCommands.length && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const index = activeSlash < 0 ? (e.key === 'ArrowDown' ? 0 : slashCommands.length - 1)
+                    : (activeSlash + (e.key === 'ArrowDown' ? 1 : -1) + slashCommands.length) % slashCommands.length;
+                  setSlashSelection({ key: slashKey, name: slashCommands[index].name });
+                  return;
+                }
+                if ((e.key === 'Enter' || e.key === 'Tab') && activeSlash >= 0) {
+                  e.preventDefault(); chooseSlash(slashCommands[activeSlash].name); return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault(); setSlashDismissed(true); setSlashSelection(null); return;
+                }
+              }
               if (e.key === 'Enter') {
                 const mobileComposer = window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 860;
                 if (!mobileComposer && !e.shiftKey) {

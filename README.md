@@ -12,12 +12,31 @@ invalidations; the browser rebuilds durable truth from REST snapshots.
 
 ## Shared daemon and identity
 
-`start()` calls the SDK's client-only `attachOursClient`, using the standard
-`OURS_CONFIG`, `OURS_STATE_DIR`, `OURS_PORT`, endpoint, and API-token selection.
-The SDK verifies that the endpoint belongs to the expected state directory
-before sending credentials. Messenger then calls `chooseIdentity` for exactly
-`OURS_MESSENGER_IDENTITY`; it never creates an identity or chooses one
-implicitly.
+For V1, set all three variables: `OURS_DAEMON_URL` (HTTP endpoint),
+`OURS_DAEMON_ID` (expected daemon instance ID), and
+`OURS_DAEMON_CREDENTIAL_PATH` (protected current API-token file).
+The same SDK client handles identity operations and complete notification pages.
+It checks daemon selection, refuses redirects and rereads the token file on
+each request, including after an official CLI token update. Partial selection
+fails before attachment; API errors never activate legacy selection.
+
+One opaque process owner survives ordinary reconnect and daemon restart.
+Messenger binds exactly `OURS_MESSENGER_IDENTITY`, preserving its existing
+permanent identity; it never implicitly provisions or forces takeover.
+When all three V1 inputs are absent, the existing SDK local configuration
+selection remains temporary compatibility. Its removal is post-V1 work.
+
+Example against an already provisioned V1 daemon (use the endpoint, instance ID
+and protected credential path supplied by your deployment):
+
+```bash
+OURS_DAEMON_URL=http://127.0.0.1:38351 \
+OURS_DAEMON_ID='<daemon-instance-id>' \
+OURS_DAEMON_CREDENTIAL_PATH=/srv/messenger/daemon-token \
+OURS_MESSENGER_IDENTITY='Ada@server' \
+OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
+node dist/cli.js serve
+```
 
 The shared daemon owns identity keys, MUFL protocol state, message/file history,
 and file blobs. Messenger owns only its public HTTP server and application state
@@ -28,20 +47,24 @@ but does not stop the daemon.
 Startup is transactional: a daemon-attach, identity-bind, application-store,
 watcher, or listener failure closes the public server if present, stops the
 watcher, releases the lease, and preserves existing state. Normal `close()` is
-idempotent and follows the same ordered path.
+idempotent and follows the same ordered path. It waits for admitted HTTP work,
+notification watching and delivery before retiring the owner and closing the
+SDK transport. An incomplete owner release rejects close and makes CLI shutdown
+exit unsuccessfully; repeated close calls retain that result.
 
 ## Running
 
-Install and start the shared daemon with `@ours.network/cli`, create the identity
-there, then start messenger with the same daemon selection:
+Install and start the shared daemon with `@ours.network/daemon`, create the identity
+there, then start messenger with the same daemon selection. The following
+example uses the temporary local configuration path:
 
 ```bash
 npm install
 npm run build
 
-# One-time host setup. These commands come from @ours.network/cli.
-ours config setup --port 3070 --state-dir /srv/ours
-ours daemon start
+# One-time host setup: daemon lifecycle is separate from API client commands.
+ours-daemon config setup --port 3070 --state-dir /srv/ours
+ours-daemon start
 ours identity create-root --name 'Ada@server'
 
 OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
@@ -136,14 +159,33 @@ before calling the SDK. Every command requires an explicit confirmation. The
 Messenger server never registers handlers or executes recipient code locally.
 
 The generated form deliberately supports a bounded JSON Schema subset:
-`type`, `title`, `description`, `default`, `enum`, `minimum`, `maximum`,
-`minLength`, `maxLength`, `properties`, `required`, `items`, `minItems`, and
-`maxItems`; supported values are object, array, string, number, integer,
-boolean, and null. Catalogs are capped at 64 commands, schemas/arguments at 64
-KiB, JSON nesting at 12 levels, and rendered controls at 64. Unsupported
-keywords or ambiguous schemas are refused visibly rather than guessed. Names,
-documentation, values, errors, and results render only as escaped React text or
-JSON.
+`type`, `title`, `description`, `default`, `enum`, `const`, `minimum`, `maximum`,
+`minLength`, `maxLength`, `pattern`, `properties`, `required`, `items`,
+`minItems`, `maxItems`, `uniqueItems`, `additionalProperties: false`, and `anyOf`.
+Supported types are object, array, string, number, integer, boolean, and null.
+Every `anyOf` branch must be supported; validation requires at least one matching
+branch **and** all sibling constraints. Homogeneous scalar unions use ordinary
+controls; mixed or object unions use a JSON editor that preserves invalid source
+and blocks submission until corrected. `uniqueItems` compares JSON values
+structurally, and string length counts Unicode code points.
+
+Patterns use a bounded interpreter over Unicode ECMAScript syntax parsed by
+`@eslint-community/regexpp`, never native execution of the advertised expression.
+Character atoms are tested against one code point; sequences, alternatives,
+groups, forward lookahead, and repetitions share a 100,000-operation budget
+across one complete argument validation, including all `anyOf` branches and
+array items. Patterns require textual `^`/`$` anchors, at most 256 characters,
+at most 256 for explicit repetition bounds, and an AST depth of at most 24.
+Backreferences and lookbehind are unsupported. Exhausting the work budget is an
+explicit validation-safety error, distinct from a format mismatch; even a valid
+input can exceed this limit. No schema constraints are removed or weakened.
+
+Catalogs are capped at 64 commands, schemas/arguments at 64 KiB, argument JSON
+nesting at 12 levels and 2,048 values, and schema traversal at depth 6 and 64 nodes
+(including union branches). Type-specific constraints require an explicit type;
+boolean schemas and type arrays remain unsupported. Unsupported keywords or
+shapes are refused visibly. Names, documentation, values, errors, and results
+render only as escaped React text or JSON.
 
 Invocation reservations are written atomically under
 `OURS_MESSENGER_STATE_DIR` before network transmission. Repeating an identical
@@ -282,6 +324,79 @@ Messenger imports only the public client surface of `@ours.network/sdk`.
 Bundle-contract tests reject daemon/native/MUFL artifacts and embedded-runtime
 imports. Process signals stop the messenger HTTP application and release its
 identity lease; daemon lifecycle remains exclusively under the ours CLI.
+
+### Retained messenger session
+
+With complete V1 selection and the available Linux activation primitive, messenger
+retains one logical owner in private
+`owner-session.json` and holds the stable `owner-session.lock` descriptor for its
+entire active lifetime. The existing `flock` utility must support this filesystem;
+a competing activation refuses before daemon attachment. Foreground/container
+restart with the same state continues the nonterminal owner and permanent identity.
+The lock is not process-death evidence, and restart does not replay ambiguous sends.
+
+After existing work drains, normal shutdown saves terminal intent before the
+official bounded SDK release. Incomplete acknowledgement preserves that same
+intent; ordinary startup completes it before creating a fresh logical owner.
+Changed daemon/credential-path/identity selection cannot retarget saved state.
+Corrupt or unsafe state is preserved and refused. Keep the lock file and its inode.
+
+This recovery is qualified initially for the tested Linux Docker local-volume
+profile. Existing legacy/non-Linux entrypoints without retained V1 state keep their prior
+behavior. On Linux, an absent `flock` executable also preserves the original
+process-session behavior only when no owner record exists; V1 daemon selection
+stays unchanged. Contention, invalid state and other activation errors refuse;
+there is no unlocked resume or fallback after a daemon/API failure.
+A saved V1 owner cannot resume through an unqualified or legacy path. Native,
+bind-mount and other runtime conformance remains required; no utility is installed
+automatically. The state contains owner/selection/terminal metadata, not API-token
+bytes. Existing push/VAPID/cursor state and live-push requirements remain unchanged.
+
+## Container-runtime checks
+
+After the normal build, `npm run test:offline` includes the existing owner-session
+and V1 runtime tests. They exercise lifecycle, explicit selection and notification
+behavior with temporary fixtures. For the built server plus installed selected CLI/SDK and local development broker,
+run `node tests/v1-messenger.integration.mjs lifecycle` (also supports `crash` and
+`incomplete`). `node tests/v1-live-push.integration.mjs` additionally requires
+Playwright Firefox and public HTTPS/WSS access to Mozilla Autopush; keep it outside
+offline checks. `MESSENGER_V1_DIST` selects an alternative prepared build directory.
+Package test results alone do not establish complete Compose or live push acceptance.
+
+### Build with selected SDK and CLI archives
+
+Run in the build container with Node 22+, npm and tar available:
+
+```sh
+node scripts/build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tgz --cli /artifacts/ours.network-cli-2.7.2.tgz --out-dir /artifacts/consumer
+```
+
+The recipe validates package names, installs and builds in disposable staging,
+then writes one complete portable npm archive. Stdout is a JSON object with its
+actual `filename`; build/npm logs go to stderr. Normal source manifests, locks
+and installed dependencies are preserved. The installer must install the same
+selected SDK and CLI archives alongside this package; its final dependency
+versions come from those archives. Existing bundling choices are unchanged.
+
+Git source provenance is captured before staging. For source-only input, supply
+`OURS_MESSENGER_BUILD_SHA` (full source commit) and truthful
+`OURS_MESSENGER_BUILD_CLEAN=1` for a clean snapshot, as required by `build.mjs`.
+`OURS_MESSENGER_RELEASE_BUILD=1` retains the existing clean-source gate.
+
+Focused build/install verification (two real builds, including changed bytes
+under identical input names and versions, plus a missing-vendor negative check):
+
+```sh
+node scripts/check-build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tgz --cli /artifacts/ours.network-cli-2.7.2.tgz
+```
+
+For development against the selected, unpublished SDK/CLI sources, see [selected-source development](docs/selected-source-development.md).
+
+### Gateway mount path
+
+Set `OURS_MESSENGER_BASE_PATH=/base/messenger/` when a reverse proxy strips that prefix before forwarding to Messenger. `OURS_MESSENGER_PUBLIC_ORIGIN` remains the exact external origin, for example `https://ours.example`, with no path. Assets, API requests, browser routes, service-worker scope and presence WebSockets retain the configured mount. `ours-messenger-server capabilities` reports `messenger.gateway-prefix-v1`.
+
+Messenger still has no application authentication. Use the installer's loopback gateway or an authenticated external proxy/tunnel. A shared gateway origin trusts every hosted application; path prefixes and Cowork's separate server-token prompt do not isolate or authenticate Messenger. Keep backend ports private and use the installer documentation's browser-authenticated entry configuration.
 
 ### Fleet mock product
 

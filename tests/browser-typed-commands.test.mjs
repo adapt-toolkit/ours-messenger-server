@@ -21,6 +21,52 @@ assert.ok(address && typeof address === 'object');
 const origin = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch({ headless: true });
 
+const rgb = (value) => {
+  const channels = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  assert.equal(channels?.length, 3, `expected a computed RGB color, received ${value}`);
+  return channels;
+};
+const relativeLuminance = (value) => rgb(value)
+  .map((channel) => channel / 255)
+  .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+  .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+const contrastRatio = (foreground, background) => {
+  const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].sort((a, b) => b - a);
+  return (lighter + 0.05) / (darker + 0.05);
+};
+
+async function outgoingMetadataContrast(page, dark) {
+  await page.evaluate((enabled) => document.documentElement.classList.toggle('theme-dark', enabled), dark);
+  const bubble = page.locator('#chat-message-COMMAND-PENDING .typed-message.ours-message--out');
+  const styles = await bubble.evaluate((element) => {
+    const bubbleStyle = getComputedStyle(element);
+    const read = (selector) => {
+      const child = element.querySelector(selector);
+      if (!child) throw new Error(`missing typed-message metadata ${selector}`);
+      const style = getComputedStyle(child);
+      return { color: style.color, opacity: style.opacity };
+    };
+    return {
+      backgroundColor: bubbleStyle.backgroundColor,
+      backgroundImage: bubbleStyle.backgroundImage,
+      metadata: {
+        eyebrow: read('.typed-message-kind'),
+        state: read('.typed-message-state'),
+        timestamp: read('.bubble-at'),
+        receipt: read('.ticks'),
+      },
+    };
+  });
+  const backgrounds = styles.backgroundImage === 'none'
+    ? [styles.backgroundColor]
+    : [...styles.backgroundImage.matchAll(/rgba?\([^)]*\)/g)].map(([color]) => color);
+  assert.ok(backgrounds.length > 0, `expected a computed bubble background, received ${JSON.stringify(styles)}`);
+  return Object.fromEntries(Object.entries(styles.metadata).map(([name, metadata]) => {
+    assert.equal(metadata.opacity, '1', `${name} is not attenuated by opacity in the ${dark ? 'dark' : 'light'} theme`);
+    return [name, Math.min(...backgrounds.map((background) => contrastRatio(metadata.color, background)))];
+  }));
+}
+
 try {
   const sends = [];
   const sendModes = [];
@@ -28,6 +74,7 @@ try {
   const messages = [
     { dir: 'out', text: '', date: '2026-09-03T00:00:00Z', read: true, wire_id: 'COMMAND-OLD', peer_cid: 'PEER', receipt: 'delivered', reply_to: null, message_kind: 'command', typed: { kind: 'command', command: 'old.command', arguments: {} } },
     { dir: 'in', text: '', date: '2026-09-03T00:00:01Z', read: true, wire_id: 'RESULT-GOOD', peer_cid: 'PEER', receipt: null, reply_to: { wire_id: 'COMMAND-OLD' }, message_kind: 'command_result', typed: { kind: 'command_result', outcome: { ok: true, result: 0 } } },
+    { dir: 'out', text: '', date: '2026-09-03T00:00:01.500Z', read: true, wire_id: 'COMMAND-PENDING', peer_cid: 'PEER', receipt: 'read', reply_to: null, message_kind: 'command', typed: { kind: 'command', command: 'list-members', arguments: {} } },
     { dir: 'in', text: '', date: '2026-09-03T00:00:02Z', read: true, wire_id: 'RESULT-BAD-PEER', peer_cid: 'OTHER', receipt: null, reply_to: { wire_id: 'COMMAND-OLD' }, message_kind: 'command_result', typed: { kind: 'command_result', outcome: { ok: true, result: 1 } } },
     { dir: 'in', text: 'ordinary', date: '2026-09-03T00:00:03Z', read: true, wire_id: 'TEXT', peer_cid: 'PEER', receipt: null, reply_to: null, message_kind: 'text', typed: null },
     { dir: 'in', text: '', date: '2026-09-03T00:00:04Z', read: true, wire_id: 'RESULT-WRONG-TARGET', peer_cid: 'PEER', receipt: null, reply_to: { wire_id: 'TEXT' }, message_kind: 'command_result', typed: { kind: 'command_result', outcome: { ok: true, result: 2 } } },
@@ -59,6 +106,7 @@ try {
   };
   let advertisedCatalog = catalog;
   let catalogLoads = 0;
+  let heldCatalogRead = null;
   const installRoutes = (targetContext) => targetContext.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -71,6 +119,9 @@ try {
     if (path === '/api/conversations/PEER/files') return json({ contact: 'PEER', files: [] });
     if (path === '/api/contacts/PEER/commands') {
       catalogLoads++;
+      const heldRead = heldCatalogRead;
+      heldCatalogRead = null;
+      if (heldRead) await heldRead;
       return json(advertisedCatalog);
     }
     if (path === '/api/commands/send') {
@@ -96,6 +147,36 @@ try {
   await commandTrigger.waitFor();
   await page.waitForTimeout(50);
   assert.equal(catalogLoads, 1, 'opening a selected chat performs one bounded catalog read, not render-driven polling');
+  await page.locator('#chat-message-COMMAND-PENDING').getByText('Accepted · pending result', { exact: true }).waitFor();
+  const outgoingContrast = {};
+  for (const dark of [true, false]) {
+    const ratios = await outgoingMetadataContrast(page, dark);
+    outgoingContrast[dark ? 'dark' : 'light'] = Object.fromEntries(
+      Object.entries(ratios).map(([name, ratio]) => [name, Number(ratio.toFixed(2))]),
+    );
+    for (const [name, ratio] of Object.entries(ratios)) {
+      assert.ok(ratio >= 4.5,
+        `${name} meets WCAG AA contrast in the ${dark ? 'dark' : 'light'} outgoing typed-command bubble (measured ${ratio.toFixed(2)}:1)`);
+    }
+  }
+  assert.equal(await page.locator('#chat-message-COMMAND-PENDING .ticks').getAttribute('aria-label'), 'Message read',
+    'the higher-contrast receipt preserves its accessible read label');
+  const screenshotBubble = await page.locator('#chat-message-COMMAND-PENDING .typed-message').boundingBox();
+  assert.ok(screenshotBubble && screenshotBubble.x >= 0 && screenshotBubble.x + screenshotBubble.width <= 390,
+    'the screenshot command bubble remains contained in the narrow mobile viewport');
+  await page.evaluate(() => document.documentElement.classList.add('theme-dark'));
+
+  const screenshotContext = await browser.newContext({ viewport: { width: 339, height: 288 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  await installRoutes(screenshotContext);
+  const screenshotPage = await screenshotContext.newPage();
+  await screenshotPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  await screenshotPage.locator('#chat-message-COMMAND-PENDING .typed-message-state').waitFor();
+  const screenshotRatios = await outgoingMetadataContrast(screenshotPage, true);
+  const screenshotSizeBubble = await screenshotPage.locator('#chat-message-COMMAND-PENDING .typed-message').boundingBox();
+  assert.ok(Object.values(screenshotRatios).every((ratio) => ratio >= 4.5)
+    && screenshotSizeBubble && screenshotSizeBubble.x >= 0 && screenshotSizeBubble.x + screenshotSizeBubble.width <= 339,
+  'metadata stays AA-legible and horizontally contained at the authoritative screenshot size');
+  await screenshotContext.close();
   assert.equal((await commandTrigger.innerText()).trim(), '', 'the compact command affordance has no truncating text label');
   assert.equal(await commandTrigger.locator('svg').count(), 1, 'the compact command affordance renders one menu icon');
   const triggerBox = await commandTrigger.boundingBox();
@@ -240,6 +321,9 @@ try {
   await installRoutes(desktopContext);
   const desktopPage = await desktopContext.newPage();
   await desktopPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  const desktopContrast = await outgoingMetadataContrast(desktopPage, true);
+  assert.ok(Object.values(desktopContrast).every((ratio) => ratio >= 4.5),
+    'outgoing typed-command metadata retains AA contrast in the desktop layout');
   await desktopPage.getByRole('button', { name: 'Recipient commands' }).click();
   const desktopPanel = desktopPage.getByRole('form', { name: 'Send a typed command' });
   await desktopPanel.waitFor();
@@ -283,9 +367,12 @@ try {
   const refreshedEmpty = availabilityPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/contacts/PEER/commands');
   await availabilityPage.getByRole('button', { name: 'Refresh' }).click();
   await refreshedEmpty;
+  await availabilityPage.getByRole('button', { name: 'Recipient commands' }).waitFor({ state: 'hidden' });
   assert.equal(await availabilityPage.getByRole('button', { name: 'Recipient commands' }).count(), 0,
     'refreshing an open panel hides its trigger when the canonical catalog becomes empty');
-  assert.equal(await availabilityPage.locator('textarea').evaluate((element) => document.activeElement === element), true,
+  const composerInput = availabilityPage.locator('.composer textarea');
+  await availabilityPage.locator('.composer textarea:focus').waitFor({ timeout: 1_000 });
+  assert.equal(await composerInput.evaluate((element) => document.activeElement === element), true,
     'removing the focused command surface restores focus to the stable composer input');
   await availabilityPage.getByRole('button', { name: 'Back to conversations' }).click();
   advertisedCatalog = catalog;
@@ -302,7 +389,126 @@ try {
     'reopening hides the command control after the canonical catalog becomes empty');
   await availabilityContext.close();
 
-  console.log('browser-typed-commands OK — conditional open-time menu, repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility');
+  let releaseCatalogRead;
+  heldCatalogRead = new Promise((resolve) => { releaseCatalogRead = resolve; });
+  advertisedCatalog = catalog;
+  const silentContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  await installRoutes(silentContext);
+  const silentPage = await silentContext.newPage();
+  const heldRequest = silentPage.waitForRequest((request) => new URL(request.url()).pathname === '/api/contacts/PEER/commands');
+  await silentPage.goto(`${origin}/chats/PEER`, { waitUntil: 'domcontentloaded' });
+  await heldRequest;
+  await silentPage.locator('.composer').waitFor();
+  await silentPage.waitForTimeout(50);
+  assert.equal(await silentPage.locator('.composer-wrap > .command-status').count(), 0,
+    'automatic command discovery stays silent while the open-time catalog request is pending');
+  releaseCatalogRead();
+  await silentPage.getByRole('button', { name: 'Recipient commands' }).waitFor();
+  await silentContext.close();
+
+  // Exact producer schemas are captured from Cowork registration, not UI-specific substitutes.
+  const coworkFixture = JSON.parse(readFileSync(new URL('../web/tests/fixtures/cowork-command-schemas.json', import.meta.url), 'utf8'));
+  advertisedCatalog = { ...catalog, commands: [ ...coworkFixture.commands,
+    {name:'mixed.union',input_schema:{anyOf:[{type:'string'},{type:'integer'}]}},
+    {name:'mixed.other',input_schema:{anyOf:[{type:'string'},{type:'boolean'}]}},
+    {name:'object.union',input_schema:{anyOf:[{type:'object',required:['a'],properties:{a:{type:'integer'}},additionalProperties:false},{type:'object',required:['b'],properties:{b:{type:'string'}},additionalProperties:false}]}},
+    {name:'bounded.pattern',input_schema:{type:'string',pattern:'^(a+)+$'}},
+    {name:'unsupported.union',input_schema:{anyOf:[{type:'string'},{type:'object',oneOf:[]}]}}
+  ] };
+  const schemaContext = await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+  await installRoutes(schemaContext);
+  const schemaPage = await schemaContext.newPage();
+  await schemaPage.goto(`${origin}/chats/PEER`, {waitUntil:'domcontentloaded'});
+  await schemaPage.getByRole('button',{name:'Recipient commands'}).click();
+  const schemaPanel = schemaPage.getByRole('form',{name:'Send a typed command'});
+  const schemaSelect = schemaPanel.getByRole('combobox').first();
+  const schemaSend = schemaPanel.getByRole('button',{name:'Send command'});
+  await schemaSelect.selectOption('room.command.grant');
+  assert.equal(await schemaPanel.getByText(/Cannot render this command safely/).count(),0);
+  const caller = schemaPanel.getByRole('textbox',{name:/^caller_cid/});
+  const grantCommand = schemaPanel.getByRole('textbox',{name:/^command/});
+  for (const command of ['list-members','consumer.example','*','room.*']) {
+    await caller.fill('A'.repeat(64));
+    await grantCommand.fill(command);
+    assert.equal(await schemaSend.isDisabled(),false, `valid grant alternative ${command}`);
+    const before = sends.length;
+    await schemaSend.click();
+    await schemaPanel.getByText(/room.command.grant sent/).waitFor();
+    assert.equal(sends.length,before+1);
+    assert.deepEqual(sends.at(-1).arguments,{caller_cid:'A'.repeat(64),command});
+  }
+  await caller.fill('A'.repeat(64));
+  await grantCommand.fill('room.*.bad');
+  assert.equal(await schemaSend.isDisabled(),true,'invalid grant alternative blocks send');
+  const beforeInvalid = sends.length;
+  await schemaPanel.evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  assert.equal(sends.length,beforeInvalid,'submit handler independently rejects invalid union');
+
+  await schemaSelect.selectOption('start_thread');
+  const topic = schemaPanel.getByRole('textbox',{name:/^topic/});
+  const participants = schemaPanel.getByRole('textbox',{name:/^participant_ids/});
+  const idempotency = schemaPanel.getByRole('textbox',{name:/^idempotency_key/});
+  const participant = '01jd7q4h9m2v8xk3znbc5regty';
+  await participants.fill(JSON.stringify([participant]));
+  await idempotency.fill('review:1');
+  for (const invalid of [' ', '\u00a0', 'text\u200b']) {
+    await topic.fill(invalid);
+    assert.equal(await schemaSend.isDisabled(),true,'blank/format-character topic is invalid');
+  }
+  await topic.fill('😀'.repeat(120));
+  assert.equal(await topic.inputValue(),'😀'.repeat(120),'native UTF-16 maxlength does not truncate code-point-valid topic');
+  assert.equal(await schemaSend.isDisabled(),false);
+  await participants.fill(JSON.stringify([participant,participant]));
+  assert.equal(await schemaSend.isDisabled(),true,'duplicate participants are denied');
+  await participants.fill('[');
+  assert.equal(await participants.inputValue(),'[');
+  assert.equal(await schemaSend.isDisabled(),true,'malformed raw JSON blocks stale valid arguments');
+  await participants.fill(JSON.stringify([participant]));
+  await schemaSend.click();
+  await schemaPanel.getByText(/start_thread sent/).waitFor();
+  assert.deepEqual(sends.at(-1).arguments,{topic:'😀'.repeat(120),participant_ids:[participant],idempotency_key:'review:1'});
+
+  await schemaSelect.selectOption('mixed.union');
+  const union = schemaPanel.getByRole('textbox',{name:/^Arguments/});
+  for (const value of ['"hello"','42']) {
+    await union.fill(value);
+    assert.equal(await schemaSend.isDisabled(),false);
+    await schemaSend.click();
+    await schemaPanel.getByText(/mixed.union sent/).waitFor();
+    assert.equal(sends.at(-1).arguments,JSON.parse(value));
+  }
+  await union.fill('true');
+  assert.equal(await schemaSend.isDisabled(),true);
+  await union.fill('42');
+  await union.fill('[');
+  assert.equal(await schemaSend.isDisabled(),true);
+  const beforeMalformed = sends.length;
+  await schemaPanel.evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  assert.equal(sends.length,beforeMalformed,'raw parse error also blocks direct submission');
+  await union.fill('""');
+  await union.fill('[');
+  await schemaSelect.selectOption('mixed.other');
+  assert.equal(await union.inputValue(),'""','changing commands discards malformed raw source even when parsed initial values coincide');
+  assert.equal(await schemaSend.isDisabled(),false);
+  await schemaSelect.selectOption('object.union');
+  await union.fill('{"b":"second branch"}');
+  await schemaSend.click();
+  await schemaPanel.getByText(/object.union sent/).waitFor();
+  assert.deepEqual(sends.at(-1).arguments,{b:'second branch'});
+  await union.fill('{"a":"invalid"}');
+  assert.equal(await schemaSend.isDisabled(),true);
+  await union.fill('{"a":5}');
+  assert.equal(await schemaSend.isDisabled(),false,'object union recovers after invalid input');
+  await schemaSelect.selectOption('bounded.pattern');
+  await schemaPanel.getByRole('textbox',{name:/^Arguments/}).fill('a'.repeat(400)+'!');
+  await schemaPanel.getByRole('alert').getByText(/work limit exceeded/).waitFor();
+  assert.equal(await schemaSend.isDisabled(),true);
+  await schemaSelect.selectOption('unsupported.union');
+  await schemaPanel.getByRole('alert').getByText(/anyOf\[1\]: Unsupported JSON Schema keyword: oneOf/).waitFor();
+  assert.equal(await schemaSend.isDisabled(),true);
+  await schemaContext.close();
+
+  console.log(`browser-typed-commands OK — outgoing metadata contrast ${JSON.stringify(outgoingContrast)}, silent discovery, conditional open-time menu, repeated/switching sends, pattern validation, reset, chronology, desktop/mobile/accessibility, actual Cowork grant/thread schemas, mixed/object unions and bounded hostile patterns`);
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

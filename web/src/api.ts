@@ -1,3 +1,4 @@
+import { appPath } from './basePath.js';
 import type {
   BuildInfoView, CommandCatalog, ContactsResponse, ConversationPage, CreatedInvite, DialogFiles, IdentityTreeRow, IdentityView, InviteView,
   JsonValue, PushPreviewMode, SendCommandResult, SendMessageResult,
@@ -24,7 +25,7 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const method = (init?.method ?? 'GET').toUpperCase();
     const mutating = method !== 'GET' && method !== 'HEAD';
-    const res = await fetcher(path, {
+    const res = await fetcher(appPath(path), {
       ...init,
       cache: 'no-store',
       credentials: 'same-origin',
@@ -106,7 +107,7 @@ export function createApi(fetcher: Fetcher = globalThis.fetch.bind(globalThis)) 
     fetchFiles: (wireIds: string[]) => request<unknown>('/api/files/fetch', {
       method: 'POST', body: JSON.stringify({ wire_ids: wireIds }),
     }),
-    mediaUrl: (wireId: string) => `/api/media/${encodeURIComponent(wireId)}`,
+    mediaUrl: (wireId: string) => appPath(`/api/media/${encodeURIComponent(wireId)}`),
     createInvite: (mode: 'one_time' | 'public' = 'one_time', name?: string) =>
       request<CreatedInvite>('/api/invites', { method: 'POST', body: JSON.stringify({ mode, ...(name ? { name } : {}) }) }),
     addContact: (invite: string, name?: string) =>

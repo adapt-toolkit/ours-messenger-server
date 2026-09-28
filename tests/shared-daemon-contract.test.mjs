@@ -23,7 +23,8 @@ let released = 0;
 const chosen = [];
 const client = {
   version: async () => ({ version: '3.0.2', compat: '3', stateDir: '/shared/ours' }),
-  releaseLease: async () => { released++; },
+  releaseLease: async () => { released++; return { released: [], closed: [], attempted: 0, notified: 0, failed: 0 }; },
+  close() {},
   chooseIdentity: async (input) => {
     chosen.push(input);
     return { name: input.name, cid: 'CID-MESSENGER' };
@@ -40,6 +41,32 @@ assert.equal(runtime.stateDir, '/shared/ours');
 assert.equal(Object.hasOwn(runtime.described, 'brokerUrl'), false, 'daemon credentials are not messenger state');
 assert.deepEqual(await bindIdentity(runtime, CONFIG), { name: 'Messenger', cid: 'CID-MESSENGER' });
 assert.deepEqual(chosen, [{ name: 'Messenger', force: false }], 'messenger leases only its configured existing identity');
+
+// The public daemon notification route classifies `kinds=inbound` narrowly as
+// message/file arrivals. Delivery/read receipts are deliberately a different
+// event kind. Messenger needs both on the same cursor, otherwise the receipt is
+// persisted in history but never reaches the already-open browser over SSE.
+// Both ordinary peers and Cowork rooms use this exact subscription path.
+const peerReceipt = {
+  event: 'receipt_received', sender_id: 'CID-PEER', kind: 'delivered',
+  wire_ids: ['WIRE-PEER'], date: '2026-09-04T10:00:00.000Z',
+};
+const roomReceipt = {
+  event: 'receipt_received', sender_id: 'CID-ROOM', kind: 'read',
+  wire_ids: ['WIRE-ROOM'], date: '2026-09-04T10:00:01.000Z',
+};
+const unrelatedLifecycleEvent = { event: 'contact_removed', cid: 'CID-UNRELATED', by: 'peer' };
+let notificationRequest;
+client.readNotificationPage = async (identity, options) => {
+  notificationRequest = { identity, ...options };
+  return { cursor: 42, events: [peerReceipt, unrelatedLifecycleEvent, roomReceipt] };
+};
+const notificationSignal = new AbortController().signal;
+const notificationPage = await runtime.readNotificationPage('Messenger', 17, notificationSignal);
+assert.deepEqual(notificationRequest, { identity: 'Messenger', since: 17, signal: notificationSignal },
+  'same SDK client reads the unfiltered page without the receipt-dropping inbound selector');
+assert.deepEqual(notificationPage, { cursor: 42, events: [peerReceipt, roomReceipt] },
+  'one raw notification cursor preserves ordinary-chat and Cowork-room receipts without lifecycle invalidation');
 await assert.rejects(
   bindIdentity({ client: { chooseIdentity: async () => { throw Object.assign(new Error('missing'), { code: 'NO_SUCH_IDENTITY' }); } } }, CONFIG),
   (error) => error instanceof ConfigurationError && error.message.includes('create it with the ours CLI'),

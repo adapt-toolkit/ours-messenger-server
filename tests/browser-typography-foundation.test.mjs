@@ -8,7 +8,10 @@ const repo = resolve(new URL('..', import.meta.url).pathname);
 const webRoot = join(repo, 'dist/web');
 assert.ok(existsSync(join(webRoot, 'index.html')), 'run npm run build before the typography browser gate');
 const removed = /Hanken Grotesk|Inter Variable|Fraunces Variable|fonts\.googleapis\.com|fonts\.gstatic\.com/i;
-for (const source of ['web/src/main.tsx', 'web/src/theme.css', 'web/src/redesign.css', 'package.json', 'package-lock.json']) {
+// Selected-source development has no repository lock; inspect it when present.
+const sources = ['web/src/main.tsx', 'web/src/theme.css', 'web/src/redesign.css', 'package.json'];
+if (existsSync(join(repo, 'package-lock.json'))) sources.push('package-lock.json');
+for (const source of sources) {
   assert.doesNotMatch(readFileSync(join(repo, source), 'utf8'), removed, `${source} contains no removed UI-font family/import`);
 }
 const builtFiles = readdirSync(join(webRoot, 'assets'));

@@ -4,6 +4,7 @@
 // message and file state belong to the one shared ours daemon selected through
 // the standard OURS_* SDK configuration.
 
+import { normalizeBasePath } from './base-path.js';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ConfigurationError } from './security.js';
@@ -15,6 +16,7 @@ export interface MessengerConfig {
 
   /** Exact externally visible origin accepted for every browser mutation. */
   readonly publicOrigin: string;
+  readonly basePath?: string;
 
   /** The ours identity this server acts as. */
   readonly identity: string;
@@ -86,6 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MessengerConfi
     host: env.OURS_MESSENGER_HOST ?? '127.0.0.1',
     port: intOrUndefined(env.OURS_MESSENGER_PORT, 'OURS_MESSENGER_PORT') ?? DEFAULT_HTTP_PORT,
     publicOrigin: validatePublicOrigin(env.OURS_MESSENGER_PUBLIC_ORIGIN),
+    ...(env.OURS_MESSENGER_BASE_PATH ? {basePath: normalizeBasePath(env.OURS_MESSENGER_BASE_PATH)} : {}),
     identity,
     force: boolOrUndefined(env.OURS_MESSENGER_FORCE, 'OURS_MESSENGER_FORCE') ?? false,
     stateDir: resolveOwnStateDir(env),

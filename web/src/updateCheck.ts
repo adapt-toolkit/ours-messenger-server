@@ -1,3 +1,4 @@
+import { appPath } from './basePath.js';
 // Deployment-independent update check and last-resort recovery. It remains
 // useful even when the service worker is the broken component because
 // version.json is always fetched with no-store.
@@ -29,7 +30,7 @@ const assessUpdate = assessUpdateJs as (
 
 async function fetchRemote(): Promise<RemoteVersion | null> {
   try {
-    const response = await fetch('/version.json', { cache: 'no-store' });
+    const response = await fetch(appPath('/version.json'), { cache: 'no-store' });
     if (!response.ok) return null;
     return await response.json() as RemoteVersion;
   } catch {

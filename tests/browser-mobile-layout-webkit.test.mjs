@@ -512,6 +512,14 @@ try {
         const sendBox = await listPage.locator('.composer .btn.primary').boundingBox(); assert.ok(sendBox);
         await listPage.mouse.move(sendBox.x + sendBox.width / 2, sendBox.y + sendBox.height / 2); await listPage.mouse.down();
         await settleAnimations(listPage);
+        // WebKit may register the :active color transition after the animation snapshot.
+        // Observe the settled pressed state before comparing its exact material roles.
+        await listPage.waitForFunction(({ background, iconColor }) => {
+          const button = document.querySelector('.composer .btn.primary');
+          return button?.matches(':active')
+            && getComputedStyle(button).backgroundColor === background
+            && getComputedStyle(button.querySelector('.ic')).color === iconColor;
+        }, { background: conversationMaterials.actionPressed, iconColor: conversationMaterials.actionInk }, { timeout: 5_000 });
         const pressedSend = await listPage.locator('.composer .btn.primary').evaluate((node) => ({ background: getComputedStyle(node).backgroundColor, iconColor: getComputedStyle(node.querySelector('.ic')).color }));
         assert.deepEqual(pressedSend, { background: conversationMaterials.actionPressed, iconColor: conversationMaterials.actionInk }, `${engineName} pressed resolves action-pressed and action-ink roles`);
         await listPage.mouse.up();

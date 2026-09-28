@@ -7,9 +7,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, prerelease]
   pull_request:
-    branches: [main]
+    branches: [main, prerelease]
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +27,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - run: node --test tests/release-channel.test.mjs
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run typecheck
@@ -80,7 +81,31 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run build
+      - name: Verify stable channel
+        run: bash .github/workflows/scripts/publish-guard.sh stable package.json latest
       - name: Publish @ours.network/messenger-server
-        run: npm publish --access public
+        run: npm publish --tag latest --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  nightly-publish:
+    needs: gates
+    if: github.event_name == 'push' && github.ref == 'refs/heads/prerelease'
+    runs-on: ubuntu-latest
+    name: Publish nightly to npm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Compute ephemeral nightly version
+        run: bash .github/workflows/scripts/bump-nightly.sh
+      - run: npm run build
+      - name: Publish guarded nightly
+        run: bash .github/workflows/scripts/publish-nightly.sh
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
