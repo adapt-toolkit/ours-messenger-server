@@ -24,13 +24,14 @@ try {
   class Recorder {static isTypeSupported(m){return m==='audio/mp4';}state='inactive';start(){this.state='recording';}stop(){this.state='inactive';queueMicrotask(()=>{this.ondataavailable?.({data:new Blob([Uint8Array.from(atob(wav),c=>c.charCodeAt(0))],{type:'audio/wav'})});this.onstop?.();});}}
   window.MediaRecorder=Recorder;
  },wav);
+ await p.route('**/daemon/voice/transcribe',r=>r.fulfill({status:503,json:{error:{message:'Fixture transcription failure'}}}));
  await p.goto(base+'/fleet/chats?chat=fixture-chat&detail=1');
  await p.getByText('First message received',{exact:true}).waitFor();
  await p.waitForFunction(()=>!document.querySelector('button[aria-label="Record voice message"]').disabled);
  // Representative long conversation with harmless fixture content.
  await p.evaluate(()=>{const thread=document.querySelector('.fleet-acp-thread');for(let i=0;i<12;i++){const article=document.createElement('article');article.className='fleet-acp-message '+(i%2?'user':'agent');article.textContent=i%2?'Проверь запись перед отправкой.':'Запись можно прослушать, преобразовать в текст и отредактировать перед отправкой.';thread.append(article);}});
  const mic=p.getByRole('button',{name:'Record voice message',exact:true});const box=await mic.boundingBox();
- await p.mouse.move(box.x+22,box.y+22);await p.mouse.down();await p.locator('.voice-rec-overlay[data-mode="recording"]').waitFor({timeout:5000}).catch(async e=>{if(process.env.FLEET_VISUAL_SCREENSHOT)await p.screenshot({path:process.env.FLEET_VISUAL_SCREENSHOT+'-failure.png'});console.log(await p.locator('body').innerText());throw e;});await p.mouse.move(box.x+22,box.y-110);await p.locator('.voice-rec-overlay[data-mode="locked"]').waitFor();await p.mouse.up();await p.getByRole('button',{name:'Stop',exact:true}).click();await p.getByRole('button',{name:'Add transcription',exact:true}).waitFor();
+ await p.mouse.move(box.x+22,box.y+22);await p.mouse.down();await p.locator('.voice-rec-overlay[data-mode="recording"]').waitFor({timeout:5000}).catch(async e=>{if(process.env.FLEET_VISUAL_SCREENSHOT)await p.screenshot({path:process.env.FLEET_VISUAL_SCREENSHOT+'-failure.png'});console.log(await p.locator('body').innerText());throw e;});await p.mouse.move(box.x+22,box.y-110);await p.locator('.voice-rec-overlay[data-mode="locked"]').waitFor();await p.mouse.up();await p.getByRole('button',{name:'Stop',exact:true}).click();await p.getByRole('button',{name:'Retry',exact:true}).waitFor();
  await p.getByLabel('Message agent',{exact:true}).fill('Можно исправить текст перед отправкой');
  await p.waitForTimeout(300);
  if(process.env.FLEET_VISUAL_SCREENSHOT)await p.screenshot({path:process.env.FLEET_VISUAL_SCREENSHOT+'-full.png'});

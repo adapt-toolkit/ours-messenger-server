@@ -32,29 +32,29 @@ export function AcpVoice({ active, disabled, sessionGeneration, onTranscript, on
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current++; request.current?.abort(); }; }, []);
   useEffect(() => {
     if (active) return;
-    operation.current++; request.current?.abort(); setTranscribing(false); recordingActive.current = false; setRecording(false); setLive(false);
+    operation.current++; request.current?.abort(); request.current = undefined; setTranscribing(false); recordingActive.current = false; setRecording(false); setLive(false);
   }, [active]);
-  const discard = () => { operation.current++; request.current?.abort(); setTranscribing(false); setClip(null); setError(''); };
-  const recognize = async () => {
-    if (!clip || transcribing || disabled || !active) return;
-    if (clip.bytes.length > 5 * 1024 * 1024) { setError('Recording exceeds 5 MiB. Discard and record a shorter message.'); return; }
+  const discard = () => { operation.current++; request.current?.abort(); request.current = undefined; setTranscribing(false); setClip(null); setError(''); };
+  const recognize = async (take = clip) => {
+    if (!take || request.current || disabled || !currentActive.current) return;
+    if (take.bytes.length > 5 * 1024 * 1024) { setError('Recording exceeds 5 MiB. Discard and record a shorter message.'); return; }
     const token = ++operation.current; const controller = new AbortController(); request.current = controller;
     const timeout = setTimeout(() => controller.abort(), 95_000);
     setError(''); setTranscribing(true);
     try {
-      const text = await transcribeAudio(new Blob([clip.bytes as BlobPart], { type: clip.mime.split(';')[0] }), parseVoiceDuration(clip.mime), controller.signal);
+      const text = await transcribeAudio(new Blob([take.bytes as BlobPart], { type: take.mime.split(';')[0] }), parseVoiceDuration(take.mime), controller.signal);
       if (!mounted.current || token !== operation.current || !currentActive.current) return;
       if (takeGeneration.current !== currentGeneration.current) throw new Error("Agent session changed. Discard this recording and record again in the current session.");
       add.current(text, takeGeneration.current); setClip(null);
     } catch (e) {
       if (mounted.current && token === operation.current) setError((e as Error).name === 'AbortError' ? 'Transcription timed out. Your recording is kept for retry.' : (e as Error).message);
-    } finally { clearTimeout(timeout); if (mounted.current && token === operation.current) setTranscribing(false); }
+    } finally { clearTimeout(timeout); if (token === operation.current) { request.current = undefined; if (mounted.current) setTranscribing(false); } }
   };
   return <>
-    {active && <VoiceComposer disabled={disabled || !!clip || transcribing} onReady={att => { setClip(att); setError(''); }} onError={setError} onActiveChange={value => { if (value && !recordingActive.current) takeGeneration.current = sessionGeneration; recordingActive.current = value; setRecording(value); }}/>}
+    {active && <VoiceComposer disabled={disabled || !!clip || transcribing} onReady={att => { if (!mounted.current || !currentActive.current) return; setClip(att); setError(''); void recognize(att); }} onError={setError} onActiveChange={value => { if (value && !recordingActive.current) takeGeneration.current = sessionGeneration; recordingActive.current = value; setRecording(value); }}/>}
     <Button type="button" className="fleet-acp-send fleet-live-voice-trigger" aria-label="Live voice mode" title="Live voice mode" onClick={() => setLive(true)}><AudioLines size={20}/></Button>
     {(clip || error) && active && <div className="fleet-voice-panel" aria-label="Voice message">
-      {clip && <AttachPreview compact att={clip} sending={transcribing} actionLabel="Add transcription" busyLabel="Recognizing speech…" allowDiscardWhileBusy onSend={() => void recognize()} onDiscard={discard}/>}
+      {clip && <AttachPreview compact att={clip} sending={transcribing} actionLabel="Retry" busyLabel="Recognizing speech…" allowDiscardWhileBusy onSend={() => void recognize()} onDiscard={discard}/>}
       {error && <p role="alert">{error}</p>}
     </div>}
     {live && <DialogShell title="Live voice" description="Talk with your agent" onClose={() => setLive(false)}>
