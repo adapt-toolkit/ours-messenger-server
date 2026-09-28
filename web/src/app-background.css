@@ -29,3 +29,17 @@
 }
 :is(html, html.theme-dark) .app::before, :is(html, html.theme-dark) .app::after { background: none; }
 :is(html, html.theme-dark) .fleet-acp[data-acp-theme] { --acp-color-bg-primary: var(--app-background); }
+/* Nested chat panes and floating dialogs override legacy dark gradients. */
+:is(html, html.theme-dark) .fleet-app .listcol,
+:is(html, html.theme-dark) .fleet-app .listcol-scroll,
+:is(html, html.theme-dark) .fleet-app .conversation-group,
+:is(html, html.theme-dark) .fleet-app .fleet-external-list,
+:is(html, html.theme-dark) .fleet-app .list-bottom-chrome,
+:is(html, html.theme-dark) .signal-stage > .listcol {
+  background: var(--app-background);
+}
+:is(html, html.theme-dark) .modal,
+:is(html, html.theme-dark) .modal.modal-wide,
+:is(html, html.theme-dark) .modal.modal-floating {
+  background: var(--surface);
+}
