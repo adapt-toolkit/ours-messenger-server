@@ -490,6 +490,8 @@ export function VoiceComposer(props: {
   const modeRef = useRef<Mode>('idle');
   const mountedRef = useRef(true);
   const finishingRef = useRef(false);
+  const controlPointer = useRef('');
+  const touchControl = useRef<{ id: number; button: HTMLButtonElement } | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -540,6 +542,26 @@ export function VoiceComposer(props: {
     if (rec && rec.state !== 'inactive') { finishingRef.current = true; rec.stop(); } // onstop fires onReady
     else afterStop(); // no recorder yet (arming) — just reset
     removeWinListeners();
+  };
+
+  // Touch browsers can omit the compatibility click after a recording gesture.
+  // Accept a release inside the control; pointer cancellation/dragging away does nothing.
+  const controlDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!e.isPrimary) return;
+    controlPointer.current = e.pointerType;
+    touchControl.current = e.pointerType === 'touch' ? { id: e.pointerId, button: e.currentTarget } : null;
+    e.preventDefault();
+  };
+  const cancelControl = (e: React.PointerEvent<HTMLButtonElement>) => { if (touchControl.current?.id === e.pointerId) touchControl.current = null; };
+  const finishClick = (e: React.MouseEvent<HTMLButtonElement>, discard: boolean) => {
+    if (e.detail !== 0 && controlPointer.current === 'touch') return;
+    finish(discard);
+  };
+  const finishTouch = (e: React.PointerEvent<HTMLButtonElement>, discard: boolean) => {
+    if (e.pointerType !== 'touch' || !e.isPrimary || touchControl.current?.id !== e.pointerId || touchControl.current.button !== e.currentTarget) return;
+    touchControl.current = null;
+    const box = e.currentTarget.getBoundingClientRect();
+    if (e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom) finish(discard);
   };
 
   const afterStop = () => {
@@ -743,10 +765,10 @@ export function VoiceComposer(props: {
           {mode === 'locked' ? (
             <>
               {wave}
-              <button type="button" className="icon-btn vr-trash" title="Cancel" onPointerDown={e => e.preventDefault()} onClick={() => finish(true)}>
+              <button type="button" className="icon-btn vr-trash" title="Cancel" onPointerDown={controlDown} onPointerCancel={cancelControl} onLostPointerCapture={cancelControl} onPointerUp={e => finishTouch(e, true)} onClick={e => finishClick(e, true)}>
                 <Icon name="trash" size={16} />
               </button>
-              <button type="button" className="btn primary sm vr-stop" onPointerDown={e => e.preventDefault()} onClick={() => finish(false)}>
+              <button type="button" className="btn primary sm vr-stop" onPointerDown={controlDown} onPointerCancel={cancelControl} onLostPointerCapture={cancelControl} onPointerUp={e => finishTouch(e, false)} onClick={e => finishClick(e, false)}>
                 <Icon name="check" size={13} />
                 Stop
               </button>
