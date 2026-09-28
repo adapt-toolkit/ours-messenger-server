@@ -4,7 +4,7 @@ import {createFleetPreviewServer} from '../scripts/fleet-preview-server.mjs';
 const server=createFleetPreviewServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({executablePath:process.env.FLEET_CHROMIUM_EXECUTABLE});
 try {
- const p=await browser.newPage({viewport:{width:360,height:800}});let created=false;let running=false;let interrupted=0;let historyCalls=[];const mutations=[];let failInput=true;let sttFail=true;let sttCalls=0;let generation='voice-session';let holdStt=false;let releaseStt;let request;const errors=[];p.on('pageerror',e=>errors.push(e.message));
+ const p=await browser.newPage({viewport:{width:360,height:800}});let created=false;let running=false;let interrupted=0;let historyCalls=[];const mutations=[];let failInput=true;let sttFail=true;let sttCalls=0;let generation='voice-session';let holdConversation=false;let releaseConversation;let conversationWaiting;let holdStt=false;let releaseStt;let request;const errors=[];p.on('pageerror',e=>errors.push(e.message));
  const role={role:{id:'fixture-chat',lifetime:'temporary',config:{name:'fixture-chat',harness:'codex'}},status:{overall:'ready',session:{reachability:'online',readiness:'idle',sessionId:'fixture-session'}},capabilities:{}};
  await p.route('**/fleet/api/v1/**',async r=>{const path=new URL(r.request().url()).pathname;const method=r.request().method();let data;
  if(method==='POST'&&!path.includes('/auth/'))mutations.push({path,body:r.request().postDataJSON()});
@@ -21,7 +21,7 @@ try {
  else if(path.endsWith('/roles/fixture-chat/remove')){created=false;data={removed:true};}
  else if(path.endsWith('/roles/fixture-chat/input')){if(failInput){failInput=false;await r.abort('failed');return;}data={promptId:'first-message',state:'queued'};}
  else if(path.endsWith('/roles/fixture-chat'))data=role;
- else if(path.endsWith('/conversation'))data={events:[{kind:'message.replace',eventId:'reply',messageId:'reply',seq:1,at:new Date().toISOString(),payload:{role:'assistant',content:{type:'text',text:'First message received'}}}],snapshot:{sessionGeneration:generation,readiness:running?'running':'idle',pendingPermissionIds:[],queueDepth:running?1:0},nextCursor:'1',hasMore:false};
+ else if(path.endsWith('/conversation')){if(holdConversation)await conversationWaiting;data={events:[{kind:'message.replace',eventId:'reply',messageId:'reply',seq:1,at:new Date().toISOString(),payload:{role:'assistant',content:{type:'text',text:'First message received'}}}],snapshot:{sessionGeneration:generation,readiness:running?'running':'idle',pendingPermissionIds:[],queueDepth:running?1:0},nextCursor:'1',hasMore:false};}
  else if(path.endsWith('/tasks'))data={tasks:[]};else if(path.endsWith('/task-lists'))data={lists:[{name:'default'}]};else throw new Error('Unexpected '+path);
  await r.fulfill({json:data});});
  await p.route('**/messenger/api/**',r=>r.fulfill({json:{contacts:[],pending:[],files:[],messages:[]}}));
@@ -55,6 +55,13 @@ try {
  generation='new-session';await p.waitForTimeout(2300);await p.getByRole('button',{name:'Send voice message',exact:true}).click();await p.getByText('Agent session changed. Cancel and record a new message.',{exact:true}).waitFor();assert.equal(sttCalls,2);await p.getByRole('button',{name:'Cancel voice message',exact:true}).click();
  holdStt=true;await p.getByRole('button',{name:'Record voice message',exact:true}).click();await p.getByRole('button',{name:'Stop recording',exact:true}).click();await p.getByRole('button',{name:'Send voice message',exact:true}).click();await p.getByText('Recognizing speech…',{exact:true}).waitFor();
  await p.getByRole('button',{name:'Back to chats',exact:true}).click();await p.waitForTimeout(100);releaseStt();await p.waitForTimeout(100);assert.equal(mutations.filter(x=>x.path.endsWith('/input')).length,2);
+ holdConversation=true;conversationWaiting=new Promise(resolve=>{releaseConversation=resolve;});
+ await p.goto(base+'/fleet/chats?chat=fixture-chat&detail=1');
+ const record=p.getByRole('button',{name:'Record voice message',exact:true});await record.waitFor();
+ await p.waitForTimeout(150);assert.equal(await record.isDisabled(),true);assert.equal(await p.evaluate(()=>window.micCalls),0);
+ holdConversation=false;releaseConversation();await p.waitForFunction(()=>!document.querySelector('button[aria-label="Record voice message"]')?.disabled);
+ assert.equal(await p.evaluate(()=>window.micCalls),0);
+ console.log('Existing chat: delayed initial conversation snapshot prevents recording until session generation is known PASS');
  console.log('Existing ACP: changed session rejects before transcription; switching away cancels pending STT without prompt admission PASS');
  console.log('ACP voice: live stub without microphone, late permission cancellation, recording preview, STT failure retained, draft creation and exact input retry PASS');
 }finally{await browser.close();await new Promise(r=>server.close(r));}
