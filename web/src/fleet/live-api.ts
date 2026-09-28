@@ -13,7 +13,7 @@ export async function fleet<T = any>(path: string, body?: unknown, method = body
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/auth/')) dispatchEvent(new Event('fleet-session-expired'));
-    throw new Error(data?.error?.message ?? `HTTP ${response.status}`);
+    throw Object.assign(new Error(data?.error?.message ?? `HTTP ${response.status}`),{status:response.status,code:data?.error?.code,accepted:data?.accepted});
   }
   return data as T;
 }
