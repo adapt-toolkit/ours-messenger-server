@@ -39,3 +39,23 @@ assert.equal(notificationIsRead(notices[0],{'agent1:session':6},new Set()),true)
 assert.equal(retainedOfflineMessages(notices,[{role:{id:'agent1'},status:{session:{reachability:'offline'}}}]).length,1);
 assert.equal(retainedOfflineMessages(notices,[]).length,0);
 console.log('Unread regression: later chunk unread despite same message ID; offline preserves unread, deleted role removes it PASS');
+
+const toolDetails=acpMessages([
+ event('tool.upsert',{toolCallId:'args',title:'Command',rawInput:{json:{command:'echo visible'},bytes:20}}),
+ event('tool.upsert',{toolCallId:'args',status:'completed',rawOutput:{json:{output:'done'},bytes:20}}),
+ event('tool.upsert',{toolCallId:'redact',title:'Protected command',rawInput:{json:{password:'never-show'},redacted:true,bytes:20}}),
+]);
+assert.ok(JSON.stringify(toolDetails).includes('echo visible'));
+assert.ok(JSON.stringify(toolDetails).includes('done'));
+assert.ok(!JSON.stringify(toolDetails).includes('never-show'));
+assert.ok((toolDetails[1].parts[0] as any).toolCalls[0].content.length>0);
+console.log('Tool details retain input across updates, include available output, and omit redacted JSON PASS');
+
+const streamedTool=acpMessages([
+ event('tool.upsert',{toolCallId:'stream',title:'Edit',content:[{type:'diff',path:'/file',oldText:{text:'before'},newText:{text:'after'}}]}),
+ event('tool.content_chunk',{toolCallId:'stream',content:{type:'text',text:'streamed output'}}),
+]);
+assert.ok(JSON.stringify(streamedTool).includes('before'));
+assert.ok(JSON.stringify(streamedTool).includes('after'));
+assert.ok(JSON.stringify(streamedTool).includes('streamed output'));
+console.log('Tool diff and streamed content details PASS');

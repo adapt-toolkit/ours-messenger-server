@@ -1,3 +1,4 @@
+import { LifetimeSwitch } from './LifetimeSwitch';
 import { useLayoutEffect, useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { LayoutGroup } from 'framer-motion';
@@ -54,7 +55,7 @@ export function SessionList(p: Props) {
   const row = (id: string, name: string, last: string, onClick: () => void, unread = countAt(items, `chat:${id}`)) => <ContactRow key={id} c={{ ...contact(id, name), last, when: '', unread }} active={p.selected === id} onClick={onClick} />;
   const showWorkspace = p.scope !== 'External';
   const agentsOnly = p.scope === 'Workspace' && p.workspaceView === 'Agents';
-  const visibleAgents = p.agents.filter(a => (agentsOnly || !a.taskId) && (!agentsOnly || p.lifetime === 'All agents' || a.lifetime === p.lifetime) && matches(a.name));
+  const visibleAgents = p.agents.filter(a => (agentsOnly || !a.taskId) && (!agentsOnly || a.lifetime === p.lifetime) && matches(a.name));
   const visibleTasks = p.tasks.filter(t => ['Active', 'Review'].includes(t.status) && matches(t.name));
   const taskRooms = new Set(p.tasks.map(t => t.roomCid).filter(Boolean));
   const externalContacts = p.contacts.filter(c => !taskRooms.has(c.id));
@@ -67,7 +68,7 @@ export function SessionList(p: Props) {
     <div className="listcol-head fleet-session-head">
       {p.task ? <div className="fleet-session-context"><div className="fleet-task-toolbar"><BackButton onClick={p.leaveTask} label="Back to chats" /><Button onClick={() => p.taskMenu(p.task!.id)}>Task ⋯</Button></div><div className="fleet-task-summary"><h2>{p.task.name}</h2><p className="muted">{p.task.status} · {p.task.agents.length} agents<NotificationBadge node={`task:${p.task.id}`} /></p></div></div> : <>
         <Filters label="Chat source" choices={['All', 'Agents', 'Tasks', 'External']} value={p.scope === 'Workspace' ? p.workspaceView === 'Tasks' ? 'Tasks' : 'Agents' : p.scope} nodes={{All:'root',Agents:'agents',Tasks:'tasks',External:'messenger'}} change={value => { p.setScope(value === 'Agents' || value === 'Tasks' ? 'Workspace' : value); p.setWorkspaceView(value === 'Tasks' ? 'Tasks' : value === 'Agents' ? 'Agents' : 'All work'); }} />
-        {agentsOnly && <Filters label="Agent lifetime" choices={['All agents', 'Persistent', 'Temporary']} value={p.lifetime} change={p.setLifetime} nodes={{Persistent:'lifetime:Persistent',Temporary:'lifetime:Temporary'}} />}
+        {agentsOnly && <LifetimeSwitch value={p.lifetime} change={p.setLifetime} />}
 
       </>}
     </div>
@@ -81,7 +82,7 @@ export function SessionList(p: Props) {
       </div> : <div className="conversation-group">
         {showAgents && visibleAgents.map(a => row(a.id, a.name, `${a.lifetime} · ${a.state}`, () => p.openChat(a.id)))}
         {showTasks && visibleTasks.map(t => row(t.id, t.name, `Task · ${t.agents.length} agents · ${t.status}`, () => p.openRoom(t.id, false), countAt(items, `task:${t.id}`)))}
-        {showExternal && visibleContacts.map(c => <ContactRow key={c.id} c={{ ...c, last: `External · ${c.kind === 'person' ? 'Person' : 'Agent'}`, unread: countAt(items, `chat:${c.id}`) }} active={p.selected === c.id} onClick={() => p.openExternal(c.id)} onApprove={() => p.approve(c.id)} onReject={() => p.reject(c.id)} />)}
+        {showExternal && visibleContacts.map(c => <ContactRow key={c.id} c={{ ...c, last: 'External', unread: countAt(items, `chat:${c.id}`) }} active={p.selected === c.id} onClick={() => p.openExternal(c.id)} onApprove={() => p.approve(c.id)} onReject={() => p.reject(c.id)} />)}
         {!count && <p className="fleet-session-context muted">No chats match these filters.</p>}
       </div>}
     </div>

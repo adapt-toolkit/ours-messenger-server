@@ -1,3 +1,4 @@
+import { SegmentedSwitch } from './SegmentedSwitch';
 // Chats section — grouped contact list + conversation. Ported from the design
 // prototype (app/Chats.jsx) and wired to MessengerHost data via the view model.
 import { memo, ReactNode, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -126,64 +127,6 @@ export function ChatList(props: {
     { id: 'recent', label: 'Recent' },
     { id: 'identity', label: 'By identity' },
   ];
-  const modeControlRef = useRef<HTMLDivElement>(null);
-  const modeGestureRef = useRef({ id: -1, x0: 0, y0: 0, mode: 'idle' as 'idle' | 'pending' | 'drag' });
-  const suppressModeClickRef = useRef(false);
-  const clearModeGesture = (pointerId: number, commit: boolean) => {
-    const gesture = modeGestureRef.current;
-    if (gesture.id !== pointerId) return;
-    const control = modeControlRef.current;
-    if (commit && gesture.mode === 'drag' && control) {
-      const offset = parseFloat(control.style.getPropertyValue('--mode-drag-x')) || 0;
-      const endpoint = Math.max(0, (control.clientWidth - 8) / 2);
-      chooseMode(offset >= endpoint / 2 ? 'identity' : 'recent');
-      suppressModeClickRef.current = true;
-      window.setTimeout(() => { suppressModeClickRef.current = false; }, 0);
-    }
-    modeGestureRef.current = { id: -1, x0: 0, y0: 0, mode: 'idle' };
-    if (control?.hasPointerCapture?.(pointerId)) control.releasePointerCapture(pointerId);
-    control?.classList.remove('dragging');
-    control?.style.removeProperty('--mode-drag-x');
-  };
-  const onModePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || modeGestureRef.current.id !== -1) return;
-    modeGestureRef.current = { id: event.pointerId, x0: event.clientX, y0: event.clientY, mode: 'pending' };
-  };
-  const onModePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = modeGestureRef.current;
-    if (gesture.id !== event.pointerId || gesture.mode === 'idle') return;
-    const dx = event.clientX - gesture.x0; const dy = event.clientY - gesture.y0;
-    if (gesture.mode === 'pending') {
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
-      if (Math.abs(dy) > Math.abs(dx)) { clearModeGesture(event.pointerId, false); return; }
-      gesture.mode = 'drag';
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      event.currentTarget.classList.add('dragging');
-    }
-    event.preventDefault();
-    const endpoint = Math.max(0, (event.currentTarget.clientWidth - 8) / 2);
-    const start = listMode === 'identity' ? endpoint : 0;
-    event.currentTarget.style.setProperty('--mode-drag-x', `${Math.min(endpoint, Math.max(0, start + dx))}px`);
-  };
-  const moveModeFocus = (
-    event: KeyboardEvent<HTMLButtonElement>,
-    current: ConversationListMode,
-  ) => {
-    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
-    if (!keys.includes(event.key)) return;
-    event.preventDefault();
-    const next =
-      event.key === 'Home'
-        ? 'recent'
-        : event.key === 'End'
-          ? 'identity'
-          : current === 'recent'
-            ? 'identity'
-            : 'recent';
-    chooseMode(next);
-    document.getElementById(`conversation-list-${next}`)?.focus();
-  };
-
   useLayoutEffect(() => {
     const root = listRootRef.current;
     const chrome = bottomChromeRef.current;
@@ -215,38 +158,7 @@ export function ChatList(props: {
             </IconButton>
           </div>
         </div>
-        <div
-          ref={modeControlRef}
-          className="conversation-list-modes"
-          role="tablist"
-          aria-label="Conversation list layout"
-          data-mode={listMode}
-          onPointerDown={onModePointerDown}
-          onPointerMove={onModePointerMove}
-          onPointerUp={(event) => clearModeGesture(event.pointerId, true)}
-          onPointerCancel={(event) => clearModeGesture(event.pointerId, false)}
-          onLostPointerCapture={(event) => clearModeGesture(event.pointerId, false)}
-        >
-          {modeOptions.map((option) => (
-            <button
-              key={option.id}
-              id={`conversation-list-${option.id}`}
-              type="button"
-              role="tab"
-              aria-selected={listMode === option.id}
-              aria-controls="conversation-list-panel"
-              tabIndex={listMode === option.id ? 0 : -1}
-              className={listMode === option.id ? 'active' : ''}
-              onClick={(event) => {
-                if (suppressModeClickRef.current) { event.preventDefault(); return; }
-                chooseMode(option.id);
-              }}
-              onKeyDown={(event) => moveModeFocus(event, option.id)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedSwitch label="Conversation list layout" value={listMode} options={modeOptions} onChange={mode=>chooseMode(mode as ConversationListMode)} />
       </div>
       <div
         id="conversation-list-panel"

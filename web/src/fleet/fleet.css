@@ -376,3 +376,18 @@
 .fleet-app .fleet-back:hover{background:var(--accent-soft);color:var(--text)}
 .fleet-page-heading>div:first-child{min-width:0}.fleet-page-heading:has(.fleet-back)>div:first-child{display:grid;grid-template-columns:44px minmax(0,1fr);column-gap:6px;align-items:center}.fleet-page-heading .fleet-back{grid-row:1 / 3}.fleet-page-heading h1{overflow-wrap:anywhere}.fleet-page-heading:has(.fleet-back) h1{margin:4px 0}.fleet-page-heading:has(.fleet-back) p{grid-column:2;margin:0}
 .fleet-property{display:grid;grid-template-columns:minmax(100px,1fr) minmax(0,2fr);gap:16px;padding:12px 0;margin:0;border-bottom:1px solid var(--line);text-align:left}.fleet-property dt{color:var(--text-2);font-size:13px}.fleet-property dd{margin:0;overflow-wrap:anywhere;font-size:14px}
+
+.fleet-app .fleet-external-list .listcol-head{padding:0;background:transparent;border:0}.fleet-app .fleet-session-head:has(.shared-segmented-switch){padding-bottom:0}
+
+/* Shared floating glass chrome for live external conversations. */
+.fleet-app .signal-stage .detail-chat{position:relative;isolation:isolate}
+.fleet-app .signal-stage .detail-head{position:absolute;z-index:4;top:max(8px,env(safe-area-inset-top));left:12px;right:12px;width:auto;min-height:52px;padding:4px 8px;border:0;border-radius:28px;background:color-mix(in srgb,var(--surface) 68%,transparent);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);box-shadow:0 4px 20px #00000012,inset 0 1px 0 color-mix(in srgb,var(--text) 12%,transparent),inset 0 0 0 .5px color-mix(in srgb,var(--text) 12%,transparent)}
+.fleet-app .signal-stage .detail-head .conv-peer{min-height:44px;gap:8px;width:100%}
+.fleet-app .signal-stage .detail-head .icon-btn{height:44px;width:44px;min-width:44px;padding:0;background:transparent;border:0;box-shadow:none}
+.fleet-app .signal-stage .detail-chat .messages{padding-top:calc(var(--conversation-head-height,52px) + 20px);scroll-padding-top:calc(var(--conversation-head-height,52px) + 20px)}
+.fleet-app .signal-stage .detail-head .conv-peer-name{font-size:14px}
+.fleet-app .signal-stage .detail-head .conv-contact-status{font-size:12px}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.fleet-app .signal-stage .detail-head{background:var(--surface);backdrop-filter:none;-webkit-backdrop-filter:none}}
+.fleet-app .signal-stage .detail-head .conv-peer-status{border:0;background:transparent;box-shadow:none;backdrop-filter:none;justify-items:start;padding-inline:0}
+.fleet-app .signal-stage .detail-chat .messages{padding-top:0}
+.fleet-app .signal-stage .detail-chat .messages-inner{padding-top:calc(var(--conversation-head-height,52px) + max(8px,env(safe-area-inset-top)) + 12px)}
