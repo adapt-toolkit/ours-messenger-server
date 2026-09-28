@@ -134,7 +134,7 @@ const fireNativeModeDrag = async (page, fromRatio, toRatio, vertical = false) =>
   await control.evaluate((node) => {
     globalThis.__nativeModeEvents = [];
     for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture']) node.addEventListener(type, (event) => {
-      globalThis.__nativeModeEvents.push({ type, pointerType: event.pointerType, button: event.button });
+      globalThis.__nativeModeEvents.push({ type, pointerType: event.pointerType, button: event.button, primary:event.isPrimary, target:event.target.tagName, x:event.clientX, inline:node.querySelector('.shared-segmented-thumb').style.transform });
     });
   });
   const session = await page.context().newCDPSession(page);
@@ -145,7 +145,12 @@ const fireNativeModeDrag = async (page, fromRatio, toRatio, vertical = false) =>
     const y = vertical ? y0 + 70 * ratio : y0;
     await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(x, y) });
   }
-  const mid = await control.evaluate((node) => ({ dragging: node.classList.contains('dragging'), offset: node.style.getPropertyValue('--mode-drag-x') }));
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  const mid = await control.evaluate((node) => {
+    const thumb = node.querySelector('.shared-segmented-thumb');
+    const transform = getComputedStyle(thumb).transform;
+    return { offset: transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41 };
+  });
   await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await session.detach();
   return { mid, events: await page.evaluate(() => globalThis.__nativeModeEvents) };
@@ -410,15 +415,15 @@ try {
         assert.equal(await listPage.locator('.conversation-list-modes').evaluate((node) => node.classList.contains('dragging')), false, `${engineName} vertical intent leaves no drag state`);
         if (engineName === 'chromium') {
           const nativeForward = await fireNativeModeDrag(listPage, 0.25, 0.82);
-          assert.ok(nativeForward.mid.dragging && nativeForward.mid.offset, `native segmented hold-drag moves lens before release ${JSON.stringify(nativeForward)}`);
+          assert.ok(nativeForward.mid.offset > 10, `native segmented hold-drag moves lens before release ${JSON.stringify(nativeForward)}`);
           assert.ok(nativeForward.events.some((event) => event.type === 'pointerup') && !nativeForward.events.some((event) => event.type === 'pointercancel'), `native horizontal segmented drag completes ${JSON.stringify(nativeForward.events)}`);
           assert.equal(await identityTab.getAttribute('aria-selected'), 'true', 'native segmented drag commits By identity');
           const nativeReverse = await fireNativeModeDrag(listPage, 0.75, 0.18);
-          assert.ok(nativeReverse.mid.dragging, `native reverse drag moves lens ${JSON.stringify(nativeReverse)}`);
+          assert.ok(nativeReverse.mid.offset < 10, `native reverse drag moves lens ${JSON.stringify(nativeReverse)}`);
           assert.equal(await recentTab.getAttribute('aria-selected'), 'true', 'native reverse drag commits Recent');
           const nativeVertical = await fireNativeModeDrag(listPage, 0.25, 0.25, true);
           assert.equal(await recentTab.getAttribute('aria-selected'), 'true', 'native vertical intent does not change segment');
-          assert.equal(nativeVertical.mid.dragging, false, `native vertical intent never owns lens ${JSON.stringify(nativeVertical)}`);
+          assert.ok(Math.abs(nativeVertical.mid.offset) < 1, `native vertical intent never owns lens ${JSON.stringify(nativeVertical)}`);
         }
         const bottomInvite = listPage.getByRole('button', { name: 'Invite' });
         await bottomInvite.click();
@@ -431,7 +436,7 @@ try {
         const contrastMaterials = await listPage.evaluate(() => {
           const read = (node, pseudo) => { const style = getComputedStyle(node, pseudo); return { border: style.borderTopColor, color: style.color, shadow: style.boxShadow, outline: style.outlineColor, outlineWidth: parseFloat(style.outlineWidth) }; };
           const modes = document.querySelector('.conversation-list-modes');
-          return [read(document.querySelector('.adaptive-search')), read(document.querySelector('.list-bottom-invite')), read(modes), read(modes, '::before')];
+          return [read(document.querySelector('.adaptive-search')), read(document.querySelector('.list-bottom-invite')), read(modes), read(modes.querySelector('.shared-segmented-thumb'))];
         });
         assert.ok(contrastMaterials.every((item) => item.shadow === 'none' && item.outline === item.color && item.outlineWidth >= 1), `${engineName} increased-contrast list materials use currentColor boundaries without soft shadows ${JSON.stringify(contrastMaterials)}`);
         await listPage.emulateMedia({ contrast: 'no-preference' });
@@ -439,7 +444,7 @@ try {
           const probe = (value) => { const node = document.createElement('i'); node.style.background = value; document.body.append(node); const result = getComputedStyle(node).backgroundColor; node.remove(); return result; };
           const read = (selector, pseudo) => { const style = getComputedStyle(document.querySelector(selector), pseudo); const background = style.backgroundColor; const slash = background.match(/\/\s*([\d.]+)/); const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)/); return { background, alpha: Number(slash?.[1] ?? rgba?.[1] ?? 1), filter: style.backdropFilter, webkitFilter: style.webkitBackdropFilter }; };
           return { regular: probe('var(--material-floating)'), accent: probe('var(--material-floating-accent)'),
-            search: read('.adaptive-search'), modes: read('.conversation-list-modes'), lens: read('.conversation-list-modes', '::before'), invite: read('.list-bottom-invite') };
+            search: read('.adaptive-search'), modes: read('.conversation-list-modes'), lens: read('.shared-segmented-thumb'), invite: read('.list-bottom-invite') };
         });
         for (const item of [listMaterials.search, listMaterials.modes, listMaterials.lens]) {
           assert.equal(item.background, listMaterials.regular, `${engineName} list glass resolves the floating role ${JSON.stringify(listMaterials)}`);

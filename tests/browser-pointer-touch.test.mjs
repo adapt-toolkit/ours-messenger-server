@@ -282,6 +282,9 @@ try {
 
   await page.getByRole('button', { name: /Open contact details/ }).click();
   await page.getByRole('button', { name: /Shared photos, files, and links/ }).click();
+  await page.getByRole('dialog').evaluate(async node => {
+    await Promise.all(node.getAnimations({ subtree: true }).map(animation => animation.finished));
+  });
   const sharedTabs = page.getByRole('tablist', { name: 'Shared media type' }).getByRole('tab');
   assert.equal(await sharedTabs.count(), 3);
   for (const tab of await sharedTabs.all()) {
@@ -324,6 +327,9 @@ try {
     assert.ok(box && box.width >= 43.9 && box.height >= 43.9, `pending action is at least 44x44 (${box?.width}x${box?.height})`);
   }
   await page.getByRole('button', { name: 'Invite' }).click();
+  await page.getByRole('dialog').evaluate(async node => {
+    await Promise.all(node.getAnimations({ subtree: true }).map(animation => animation.finished));
+  });
   const inviteTabs = page.getByRole('tablist', { name: 'Invite mode' }).getByRole('tab');
   assert.equal(await inviteTabs.count(), 2);
   for (const tab of await inviteTabs.all()) {
