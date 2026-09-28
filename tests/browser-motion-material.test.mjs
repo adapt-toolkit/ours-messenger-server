@@ -78,7 +78,9 @@ try {
   const mobile = await openPage(coarse); await mobile.locator('.detail-back').click(); await mobile.locator('.listcol-head').getByRole('button', { name: 'Settings' }).click();
   await mobile.locator('.modal').evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const sheetOrigin = await mobile.locator('.modal').evaluate((node) => ({ origin: getComputedStyle(node).transformOrigin.split(' ').map(parseFloat), box: [node.getBoundingClientRect().width, node.getBoundingClientRect().height] }));
-  assert.ok(Math.abs(sheetOrigin.origin[0] - sheetOrigin.box[0] / 2) < 1 && Math.abs(sheetOrigin.origin[1] - sheetOrigin.box[1]) < 1, 'mobile sheet originates at its bottom edge');
+  assert.ok(Math.abs(sheetOrigin.origin[0] - sheetOrigin.box[0] / 2) < 1 && Math.abs(sheetOrigin.origin[1] - sheetOrigin.box[1] / 2) < 1, 'mobile floating dialog originates at its center');
+  const floatingBox = await mobile.locator('.modal').boundingBox();
+  assert.ok(floatingBox.x >= 15 && floatingBox.y >= 19 && floatingBox.x + floatingBox.width <= 375 && floatingBox.y + floatingBox.height <= 741, 'mobile floating dialog stays detached from every viewport edge');
   await coarse.close();
 
   const reduced = await browser.newContext({ viewport: { width: 1000, height: 760 }, reducedMotion: 'reduce', serviceWorkers: 'block' });

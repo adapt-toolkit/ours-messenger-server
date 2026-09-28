@@ -127,6 +127,21 @@ const fireNativeTouch = async (page, selector, direction) => {
   await session.detach();
   return page.evaluate(() => globalThis.__nativeSwipeEvents);
 };
+const assertModeSettleBounds = async (page) => {
+  const samples = await page.locator('.conversation-list-modes').evaluate(async node => {
+    const thumb = node.querySelector('.shared-segmented-thumb');
+    const end = performance.now() + 600;
+    const offsets = [];
+    do {
+      await new Promise(requestAnimationFrame);
+      const controlBox = node.getBoundingClientRect(), thumbBox = thumb.getBoundingClientRect();
+      offsets.push({ left: thumbBox.left - controlBox.left, right: controlBox.right - thumbBox.right });
+    } while (performance.now() < end);
+    return offsets;
+  });
+  assert.ok(samples.length > 1 && samples.every(p => p.left >= 3 && p.right >= 3),
+    `segmented thumb stays inside track throughout release/settle ${JSON.stringify(samples)}`);
+};
 const fireNativeModeDrag = async (page, fromRatio, toRatio, vertical = false) => {
   const control = page.locator('.conversation-list-modes');
   const box = await control.boundingBox(); assert.ok(box, 'segmented control has native-touch geometry');
@@ -153,6 +168,7 @@ const fireNativeModeDrag = async (page, fromRatio, toRatio, vertical = false) =>
   });
   await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await session.detach();
+  await assertModeSettleBounds(page);
   return { mid, events: await page.evaluate(() => globalThis.__nativeModeEvents) };
 };
 
@@ -402,6 +418,7 @@ try {
           fire(node, 'pointerup', box.left + 30, box.top + box.height / 2);
           return down;
         });
+        await assertModeSettleBounds(listPage);
         assert.deepEqual(dragObserved, { button: -1, pointerType: 'touch' }, `${engineName} segmented drag receives iOS touch semantics`);
         assert.equal(await recentTab.getAttribute('aria-selected'), 'true', `${engineName} horizontal drag commits nearest segment`);
         await listPage.locator('.conversation-list-modes').evaluate((node) => {
