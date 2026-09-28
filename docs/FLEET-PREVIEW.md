@@ -1,4 +1,15 @@
-# Fleet product preview
+# Fleet web application
+
+`/fleet` now runs the live local application and requires the Fleet gateway's password/session authentication. Build this repository, then configure the companion `ours-fleet` local gateway with this repository's `dist/web` as its static root and a private Messenger backend under `/messenger`. See `ours-fleet/docs/local-gateway.md` for setup and transport boundaries.
+
+`npm run test:fleet` runs selector checks and the current `test:fleet-live` isolated browser fixtures. The fixture server supplies static files; tests intercept Fleet/Messenger APIs explicitly. It does not bypass authentication in the product. The older mock-only browser tests remain as historical design references and are not the current gate.
+
+The live UI includes task/agent navigation, draft-first chats, correspondence, invitations and participants, session controls, task description editing, and typed task-created receipts. Notifications retain browser-local read state; the separate service migration is deferred. Real task-created receipt qualification still requires the updated supervisor and an authorized live creation.
+
+## Historical mock design reference
+
+The material below describes the earlier mock branch, before live integration. Its in-memory walkthrough, sample data, and public-preview instructions are historical and do not describe the current authenticated application.
+
 
 Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Messenger remains at `/chats`. The preview is also included in the normal production build and supports direct URL reloads through the existing SPA fallback.
 

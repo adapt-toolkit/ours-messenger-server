@@ -1,6 +1,5 @@
 import {useLayoutEffect,useRef,type ReactNode} from 'react';
 import {animate,motion,useMotionValue,useReducedMotion} from 'framer-motion';
-import './SegmentedSwitch.css';
 export function SegmentedSwitch({label,options,value,onChange}:{label:string;options:{id:string;label:string;badge?:ReactNode}[];value:string;onChange:(id:string)=>void}){
  const ref=useRef<HTMLDivElement>(null),x=useMotionValue(0),reduce=useReducedMotion();const selected=useRef(value);selected.current=value;
  const animation=useRef<ReturnType<typeof animate>>();const gesture=useRef({id:-1,x:0,y:0,start:0,active:false,samples:[] as {x:number,t:number}[]});const suppress=useRef(false);

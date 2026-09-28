@@ -11,6 +11,9 @@ import './onboarding.css';
 import './redesign.css';
 import './dark-v3.css';
 import './layout-v4.css';
+import './ui/SegmentedSwitch.css';
+import './ui/MenuAction.css';
+import './ui/floating-dialog.css';
 import './app-background.css';
 import { stripRecoveryParam } from './updateCheck.js';
 

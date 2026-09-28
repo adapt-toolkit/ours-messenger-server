@@ -1,7 +1,6 @@
 import { useId, type ButtonHTMLAttributes } from 'react';
 import { ChevronRight, type LucideIcon } from 'lucide-react';
 import { Button } from './Button';
-import './MenuAction.css';
 
 type Props = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'children'> & {
   title: string;

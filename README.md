@@ -398,11 +398,10 @@ Set `OURS_MESSENGER_BASE_PATH=/base/messenger/` when a reverse proxy strips that
 
 Messenger still has no application authentication. Use the installer's loopback gateway or an authenticated external proxy/tunnel. A shared gateway origin trusts every hosted application; path prefixes and Cowork's separate server-token prompt do not isolate or authenticate Messenger. Keep backend ports private and use the installer documentation's browser-authenticated entry configuration.
 
-### Fleet mock product
+### Fleet web application
 
-A fully local Fleet click-through preview is available at `/fleet` (for example,
-`http://127.0.0.1:5173/fleet` with `npm run dev`). Live Messenger remains at `/chats`.
-See [Fleet preview flows and verification](docs/FLEET-PREVIEW.md) for the wireframe
-coverage, mock-data boundaries, and `npm run test:fleet` browser gate.
-
-The [Fleet backend API gap inventory](docs/FLEET-BACKEND-API-GAPS.md) maps the mock flows to Fleet, Messenger Server and Cowork APIs, including proposed agent-scoped Fleet invitation endpoints.
+The live local Fleet application is available at `/fleet`; Messenger remains at `/chats`.
+Use the companion Fleet gateway and its local password/session authentication.
+See [Fleet setup and verification](docs/FLEET-PREVIEW.md) for connection requirements,
+current coverage and limitations. `npm run test:fleet` runs the current isolated fixture gates.
+The older mock walkthrough and its browser tests describe an earlier design stage.

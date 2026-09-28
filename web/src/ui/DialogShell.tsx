@@ -1,6 +1,5 @@
 import { ReactNode, useEffect, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import './floating-dialog.css';
 import { Icon } from './icons';
 
 export default function DialogShell(props: {
