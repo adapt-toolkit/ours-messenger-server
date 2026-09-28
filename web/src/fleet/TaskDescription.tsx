@@ -1,3 +1,5 @@
+import { Pencil } from 'lucide-react';
+import { IconButton } from '../ui/Button';
 import { useRef, useState } from 'react';
 import type { Task } from './model';
 import { fleet, taskView } from './live-api';
@@ -19,9 +21,9 @@ export function TaskDescription({ task, onSaved }: { task: Task; onSaved(task: T
     finally { saving.current = false; setBusy(false); }
   }
   return <section aria-label="Task description">
-    <div className="fleet-description-heading"><h2>Description</h2>{!editing && <button onClick={() => {
+    <div className="fleet-description-heading"><h2>Description</h2>{!editing && <IconButton aria-label="Edit description" title="Edit description" onClick={() => {
       setDraft(task.description); setBase(task.description); setError(''); setEditing(true);
-    }}>Edit description</button>}</div>
+    }}><Pencil size={16} aria-hidden="true" /></IconButton>}</div>
     {editing ? <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <textarea aria-label="Description" autoFocus rows={8} maxLength={100000} value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} />
       {error && <p role="alert">{error}</p>}
