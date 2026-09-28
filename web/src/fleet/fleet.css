@@ -367,3 +367,6 @@
 .fleet-task-menu { display: grid; gap: 8px; }
 .fleet-external-list { flex: 1; min-height: 0; display: flex; }
 .fleet-external-list > .listcol { height: 100%; width: 100%; border: 0; }
+.fleet-live-error { position: fixed; bottom: 12px; left: 12px; right: 12px; z-index: 45; padding: 12px; background: var(--surface, #242424); color: var(--text, #fff); border: 1px solid #b88b38; border-radius: 8px; }
+.fleet-config-json { min-height: 50vh; width: 100%; font-family: monospace; }
+.fleet-output { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }

@@ -56,6 +56,7 @@ await build({
   platform: 'node',
   target: 'node20',
   format: 'esm',
+  banner: { js: "import { createRequire as nodeCreateRequire } from 'node:module'; const require = nodeCreateRequire(import.meta.url);" },
   splitting: true,
   define: {
     __MESSENGER_BUILD_INFO__: JSON.stringify(buildInfo),

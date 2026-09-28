@@ -7,6 +7,9 @@ export interface FleetNotification {
   messageId?: string;
   read: boolean;
   resolved: boolean;
+  permissionId?: string;
+  sessionGeneration?: string;
+  options?: Array<{ optionId: string; name: string; kind: string }>;
   decision?: 'approved' | 'declined';
 }
 export const isPending = (n: FleetNotification) => n.kind === 'request' ? !n.resolved : !n.read;

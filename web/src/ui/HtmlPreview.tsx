@@ -99,7 +99,7 @@ export function HtmlPreview(props: { rec: FileRecord; onClose: () => void }) {
               title={`Sandboxed preview of ${rec.filename}`}
               sandbox={HTML_PREVIEW_SANDBOX}
               referrerPolicy="no-referrer"
-              src={`/api/html-preview/${encodeURIComponent(rec.id)}`}
+              src={`${location.pathname.startsWith('/fleet') ? '/messenger' : ''}/api/html-preview/${encodeURIComponent(rec.id)}`}
             />
           )}
         </div>

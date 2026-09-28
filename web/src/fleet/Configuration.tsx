@@ -1,34 +1,51 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { Button, Field, PageHeader, Row, SearchField } from './components';
 import { catalog, effortChoices, initialConfiguration, validateDefinition, type Configuration, type ConfigKind, type Definition } from './configuration';
 import type { Page } from './model';
-const Context = createContext({ data: initialConfiguration(), save: (_kind: ConfigKind, _id: string, _value: Definition) => {} });
-export function ConfigurationProvider({children}: {children: ReactNode}) {
-  const [data,setData] = useState(initialConfiguration);
-  return <Context.Provider value={{data, save: (kind,id,value) => setData(d => ({...d,[kind]:{...d[kind],[id]:structuredClone(value)}}))}}>{children}</Context.Provider>;
+import { fleet } from './live-api';
+const empty = (): Configuration => ({ role: {}, brain: {}, template: {}, tasks: {} });
+const Context = createContext({ data: empty(), live: false, loaded: true, error: '', save: async (_kind: ConfigKind, _id: string, _value: Definition) => {} });
+export const useConfiguration = () => useContext(Context);
+export function ConfigurationProvider({children, live = false}: {children: ReactNode; live?: boolean}) {
+  const [data,setData] = useState<Configuration>(live ? empty : initialConfiguration);
+  const [snapshot,setSnapshot] = useState<any>(null);
+  const [error,setError] = useState('');
+  const adopt = (value: any) => { setSnapshot(value); setData({ role: value.model.roles, brain: value.model.brains, template: value.model.agent_templates, tasks: value.model.room_templates }); };
+  useEffect(() => { if (live) fleet('/configuration?includeDefinitions=true').then(adopt).catch(e => setError(e.message)); }, [live]);
+  const save = async (kind: ConfigKind, id: string, value: Definition) => {
+    if (!live) { setData(d => ({ ...d, [kind]: { ...d[kind], [id]: structuredClone(value) } })); return; }
+    if (!snapshot) throw new Error(error || 'Configuration is still loading.');
+    const key = { role: 'roles', brain: 'brains', template: 'agent_templates', tasks: 'room_templates' }[kind];
+    const model = { ...snapshot.model, [key]: { ...snapshot.model[key], [id]: value } };
+    await fleet('/configuration/save', { revision: snapshot.revision, model });
+    adopt(await fleet('/configuration?includeDefinitions=true')); setError('');
+  };
+  return <Context.Provider value={{data,live,loaded: !live || !!snapshot,error,save}}>{children}</Context.Provider>;
 }
 const titles: Record<ConfigKind,string> = {role:'Roles',brain:'Brains',template:'Agent Templates',tasks:'Room Templates'};
 const singular: Record<ConfigKind,string> = {role:'role',brain:'brain',template:'agent template',tasks:'room template'};
 export function ConfigurationEditor({editor,go}: {editor:string;go:(page:Page)=>void}) {
-  const {data,save}=useContext(Context);
+  const {data,save,live,loaded,error}=useContext(Context);
   const [kindPart,id]=editor.split('/'); const kind=kindPart as ConfigKind;
   const [search,setSearch]=useState('');
   const list=()=>go({kind:'settings',editor:kind});
+  if(!loaded) return <main className="fleet-form-page"><p role={error ? "alert" : "status"}>{error || "Loading configuration…"}</p></main>;
   if(!titles[kind]) return null;
-  if(id) return <DefinitionEditor key={editor} kind={kind} id={id} existing={data[kind][id]} data={data} cancel={list} save={(name,value)=>{save(kind,name,value);list();}} />;
-  return <main className="fleet-form-page"><PageHeader title={titles[kind]} subtitle="Reusable definitions · Changes stay in this preview" onBack={()=>go({kind:'settings'})} actions={<Button primary onClick={()=>go({kind:'settings',editor:kind+'/new'})}>New {singular[kind]}</Button>} /><SearchField value={search} onChange={setSearch} placeholder={`Search ${titles[kind].toLowerCase()}`} /><div className="fleet-config-list">{Object.entries(data[kind]).filter(([name])=>name.toLowerCase().includes(search.toLowerCase())).map(([name,d])=><Row key={name} title={name} subtitle={kind==='brain' ? `${d.harness} · ${d.model ?? 'Harness default'}${d.effort ? ' · '+d.effort : ''}` : kind==='template' ? `${d.role?.ref} · ${d.brain?.ref}` : kind==='tasks' ? `${d.members?.length ?? 0} member slots · v${d.version}` : d.bio || d.mission?.split('\n')[0]} onClick={()=>go({kind:'settings',editor:kind+'/'+encodeURIComponent(name)})} />)}</div></main>;
+  if(id) return <DefinitionEditor key={editor} kind={kind} id={id} existing={data[kind][id]} data={data} cancel={list} save={async (name,value)=>{await save(kind,name,value);list();}} />;
+  return <main className="fleet-form-page"><PageHeader title={titles[kind]} subtitle={live ? "Reusable definitions on this host" : "Reusable definitions · Changes stay in this preview"} onBack={()=>go({kind:'settings'})} actions={<Button primary onClick={()=>go({kind:'settings',editor:kind+'/new'})}>New {singular[kind]}</Button>} />{error && <p role="alert">{error}</p>}<SearchField value={search} onChange={setSearch} placeholder={`Search ${titles[kind].toLowerCase()}`} /><div className="fleet-config-list">{Object.entries(data[kind]).filter(([name])=>name.toLowerCase().includes(search.toLowerCase())).map(([name,d])=><Row key={name} title={name} subtitle={kind==='brain' ? `${d.harness} · ${d.model ?? 'Harness default'}${d.effort ? ' · '+d.effort : ''}` : kind==='template' ? `${d.role?.ref} · ${d.brain?.ref}` : kind==='tasks' ? `${d.members?.length ?? 0} member slots · v${d.version}` : d.bio || d.mission?.split('\n')[0]} onClick={()=>go({kind:'settings',editor:kind+'/'+encodeURIComponent(name)})} />)}</div></main>;
 }
-function DefinitionEditor({kind,id,existing,data,cancel,save}: {kind:ConfigKind;id:string;existing?:Definition;data:Configuration;cancel:()=>void;save:(id:string,d:Definition)=>void}) {
+function DefinitionEditor({kind,id,existing,data,cancel,save}: {kind:ConfigKind;id:string;existing?:Definition;data:Configuration;cancel:()=>void;save:(id:string,d:Definition)=>Promise<void>}) {
  const defaults: Record<ConfigKind,Definition>={role:{mission:'',persona:'',bio:''},brain:{harness:'codex',session:'acp',model:null},template:{role:{ref:''},brain:{ref:''},permissions:{approval:'ask',filesystem:'workspace',unattended:'deny'}},tasks:{version:1,description:'',contract:'',members:[],room:{quiet_membership:false,anonymous:false}}};
  const [name,setName]=useState(id==='new'?'':decodeURIComponent(id));
  const [d,setD]=useState<Definition>(()=>structuredClone(existing ?? defaults[kind]));
  const [error,setError]=useState('');
+ const [busy,setBusy]=useState(false);
  const [custom,setCustom]=useState(!!d.model && !catalog.models.some(m=>m.harness===d.harness && m.model===d.model));
  const set=(patch:Partial<Definition>)=>setD(x=>({...x,...patch}));
  const text=(label:string,key:'mission'|'persona'|'bio'|'briefing_file'|'cwd'|'coordinator'|'description'|'contract',multiline=false)=><Field label={label}>{multiline?<textarea value={d[key]??''} onChange={e=>set({[key]:e.target.value})} rows={5}/>:<input value={d[key]??''} onChange={e=>set({[key]:e.target.value})}/>}</Field>;
  const select=(label:string,value:string,change:(s:string)=>void,values:string[],empty='Select…')=><Field label={label}><select value={value} onChange={e=>change(e.target.value)}><option value="">{empty}</option>{values.map(v=><option key={v} value={v}>{v}</option>)}</select></Field>;
  if(id!=='new' && !existing) return <main className="fleet-form-page"><PageHeader title="Definition not found" onBack={cancel}/></main>;
- return <main className="fleet-form-page"><PageHeader title={`${id==='new'?'New':'Edit'} ${singular[kind]}`} subtitle="Changes apply to definitions; current sessions keep their snapshots." onBack={cancel}/><form className="fleet-config-form" onSubmit={e=>{e.preventDefault();const n=name.trim();if(!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(n)||n==='new'){setError('Use a unique name with letters, numbers, hyphens or underscores.');return;}if(id==='new' && Object.hasOwn(data[kind],n)){setError('This name already exists.');return;}const issue=validateDefinition(kind,d,data);if(issue){setError(issue);return;}save(n,d);}}>
+ return <main className="fleet-form-page"><PageHeader title={`${id==='new'?'New':'Edit'} ${singular[kind]}`} subtitle="Changes apply to definitions; current sessions keep their snapshots." onBack={cancel}/><form className="fleet-config-form" onSubmit={async e=>{e.preventDefault();const n=name.trim();if(!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(n)||n==='new'){setError('Use a unique name with letters, numbers, hyphens or underscores.');return;}if(id==='new' && Object.hasOwn(data[kind],n)){setError('This name already exists.');return;}const issue=validateDefinition(kind,d,data);if(issue){setError(issue);return;}setBusy(true);try { await save(n,d); } catch(e) {setError((e as Error).message);} finally {setBusy(false);} }}>
  <Field label="Definition name"><input required value={name} readOnly={id!=='new'} onChange={e=>setName(e.target.value)}/></Field>
  {kind==='role' && <>{text('Mission','mission',true)}{text('Instructions / persona','persona',true)}{text('Bio','bio',true)}{text('Briefing file','briefing_file')}</>}
  {kind==='brain' && <>
@@ -52,7 +69,7 @@ function DefinitionEditor({kind,id,existing,data,cancel,save}: {kind:ConfigKind;
  {(d.members??[]).map((m,i)=><fieldset className="fleet-config-member" key={i}><legend>Member {i+1}</legend><Field label={`Slot ${i+1}`}><input required value={m.slot} onChange={e=>set({members:d.members!.map((x,j)=>j===i?{...x,slot:e.target.value}:x)})}/></Field><Field label={`Room role ${i+1}`}><input required value={m.role} onChange={e=>set({members:d.members!.map((x,j)=>j===i?{...x,role:e.target.value}:x)})}/></Field>{select(`Agent template ${i+1}`,m.agent_template,v=>set({members:d.members!.map((x,j)=>j===i?{...x,agent_template:v}:x)}),Object.keys(data.template))}<Field label={`Count ${i+1}`}><input required type="number" min="1" value={m.count} onChange={e=>set({members:d.members!.map((x,j)=>j===i?{...x,count:Number(e.target.value)}:x)})}/></Field><Button onClick={()=>set({members:d.members!.filter((_,j)=>j!==i)})}>Remove member {i+1}</Button></fieldset>)}
  <Button onClick={()=>set({members:[...(d.members??[]),{slot:'',role:'',count:1,agent_template:''}]})}>Add member</Button>
  <label className="fleet-check"><input type="checkbox" checked={!!d.room?.anonymous} onChange={e=>set({room:{...d.room,anonymous:e.target.checked}})}/>Anonymous room</label><label className="fleet-check"><input type="checkbox" checked={!!d.room?.quiet_membership} onChange={e=>set({room:{...d.room,quiet_membership:e.target.checked}})}/>Quiet membership</label></>}
- {error && <p role="alert">{error}</p>}<div className="fleet-actions"><Button onClick={cancel}>Cancel</Button><Button primary type="submit">Save {singular[kind]}</Button></div>
+ {error && <p role="alert">{error}</p>}<div className="fleet-actions"><Button onClick={cancel}>Cancel</Button><Button primary type="submit" disabled={busy}>Save {singular[kind]}</Button></div>
  </form></main>;
 }
 function JsonOptions({label,value,onChange}:{label:string;value?:Record<string,unknown>;onChange:(v:Record<string,unknown>)=>void}) {
