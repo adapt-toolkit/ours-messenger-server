@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import './floating-dialog.css';
 import { Icon } from './icons';
 
 export default function DialogShell(props: {
@@ -26,7 +27,7 @@ export default function DialogShell(props: {
     <Dialog.Root open onOpenChange={(open) => { if (!open) props.onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-backdrop" />
-        <Dialog.Content id={props.contentId} className={'modal' + (props.wide ? ' modal-wide' : '') + (props.className ? ` ${props.className}` : '')}>
+        <Dialog.Content id={props.contentId} className={'modal modal-floating' + (props.wide ? ' modal-wide' : '') + (props.className ? ` ${props.className}` : '')}>
           <div className="modal-head">
             <div>
               <Dialog.Title asChild>

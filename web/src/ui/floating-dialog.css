@@ -1,0 +1,26 @@
+/* Shared dialogs remain detached from the viewport on phones and desktops. */
+:root .modal.modal-floating:not(.html-modal-fullscreen) {
+  --dialog-gap: max(16px, env(safe-area-inset-left), env(safe-area-inset-right));
+  position: fixed;
+  top: 50%; left: 50%; right: auto; bottom: auto;
+  width: min(480px, calc(100vw - 2 * var(--dialog-gap)));
+  max-width: calc(100vw - 2 * var(--dialog-gap));
+  max-height: calc(100dvh - 2 * max(20px, env(safe-area-inset-top), env(safe-area-inset-bottom)));
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  animation: floatingDialogShow 160ms ease-out;
+}
+:root .modal.modal-floating.modal-wide:not(.html-modal-fullscreen) {
+  width: min(960px, calc(100vw - 2 * var(--dialog-gap)));
+}
+.modal-floating .modal-body { min-height: 0; overscroll-behavior: contain; }
+.modal-floating .modal-head .icon-btn { min-width: 44px; min-height: 44px; }
+@keyframes floatingDialogShow {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(.98); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root .modal.modal-floating:not(.html-modal-fullscreen) { animation: none; }
+}
