@@ -145,14 +145,17 @@ export async function startVoiceRecording(): Promise<VoiceRecording> {
     throw new Error('This browser exposes no supported OGG/Opus, WebM/Opus, or MP4/AAC recorder.');
   }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const recorder = new MediaRecorder(stream, { mimeType: format.recorderMime });
+  let recorder: MediaRecorder;
+  try { recorder = new MediaRecorder(stream, { mimeType: format.recorderMime }); }
+  catch (error) { stream.getTracks().forEach(track => track.stop()); throw error; }
   const chunks: Blob[] = [];
   let cancelled = false;
   recorder.addEventListener('dataavailable', (event) => {
     if (!cancelled && event.data.size > 0) chunks.push(event.data);
   });
   const closeTracks = () => stream.getTracks().forEach((track) => track.stop());
-  recorder.start(250);
+  recorder.addEventListener('error', closeTracks);
+  try { recorder.start(250); } catch (error) { closeTracks(); throw error; }
 
   return {
     recorder,

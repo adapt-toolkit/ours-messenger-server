@@ -104,3 +104,17 @@ export async function cowork(method:string,params:Record<string,unknown>):Promis
   const response=await fetch('/cowork/browser/rpc',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({version:1,id:crypto.randomUUID(),method,params})});
   const data=await response.json();if(!response.ok||data.error)throw new Error(data.error?.message??`HTTP ${response.status}`);return data.result;
 }
+
+/** Raw audio uses the daemon's authenticated service route through the prefix gateway. */
+export async function transcribeAudio(blob: Blob, seconds: number | null, signal: AbortSignal): Promise<string> {
+  const response = await fetch('/daemon/voice/transcribe', {
+    method: 'POST', credentials: 'same-origin', signal,
+    headers: { 'Content-Type': blob.type, 'X-CSRF-Token': csrf,
+      ...(seconds === null ? {} : { 'X-Voice-Duration': String(seconds) }) }, body: blob,
+  });
+  if (response.status === 401) dispatchEvent(new Event('fleet-session-expired'));
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error?.message ?? 'Voice transcription is unavailable. Please retry.');
+  if (typeof data?.text !== 'string' || !data.text.trim()) throw new Error('No speech was recognized.');
+  return data.text;
+}

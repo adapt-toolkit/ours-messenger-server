@@ -99,3 +99,26 @@ The launcher also contains Notifications, a combined pending inbox. Opening it d
 Chats combines workspace and external conversations through All / Workspace / External filters. Workspace can show All work, Agents, or Tasks; Agents adds All agents / Temporary / Persistent. Opening a task replaces the list with just its room and agents. Back restores the parent filters, search, and list position. External retains the existing Recent / By identity controls. The launcher, conversation UI, creation dialogs, and profile flows retain their existing appearance.
 
 `/fleet/chats` stores filters, focused task, selection, and mobile detail state in query parameters. Legacy `/fleet/work/...` and `/fleet/messenger/...` links remain supported. Run `node tests/browser-fleet-chats.test.mjs` for the split-specific navigation and draft regression checks.
+
+## ACP voice messages
+
+Existing and new draft agent chats can record, preview, cancel and send voice
+messages. Recording stops after 295 seconds; the browser caps uploads at 5 MiB.
+The existing browser recorder supports OGG/Opus, WebM/Opus and MP4/AAC. Missing
+microphone permission and unavailable STT are visible errors. The selected
+recording remains in the mounted chat for retry. Audio is held in browser memory,
+not persisted across page reloads, and is released when the chat is unmounted.
+After successful sending, the conversation stores the recognized text, prefixed
+`Voice message:`; it does not archive the original audio.
+
+The browser uploads raw audio to `/daemon/voice/transcribe` through the existing
+Fleet prefix proxy, then submits recognized text to the selected agent. Requires
+the daemon voice HTTP endpoint and Fleet `submit_voice_prompt` control support;
+older supervisors reject that command. A recording is bound to its initial
+session generation. A new draft creates one agent using the existing frozen
+creation request. Retrying an uncertain input reuses its exact command ID/text;
+recognized `/commands` are sent as text rather than invoked by the composer.
+
+The separate **Live voice mode** button opens a keyboard-accessible dialog
+explaining that conversational calling is not available yet. It requests no
+microphone access or connection. Existing external-chat audio flows remain in use.
