@@ -46,12 +46,13 @@
   },
   "devDependencies": {
     "@ours.network/cli": "2.8.1-nightly.12",
+    "@ours.network/daemon": "3.8.1-nightly.6",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^20.14.0",
     "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.25.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.4",
-    "@ours.network/daemon": "3.8.1-nightly.6"
+    "typescript": "^5.5.4"
   }
 }

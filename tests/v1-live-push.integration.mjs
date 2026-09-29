@@ -11,6 +11,8 @@ import { firefox } from '@playwright/test';
 import { sleep, startProcess, stopProcess, unusedPort, waitFor, waitForPort } from './v1-runtime.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
+const frontendDir = process.env.OURS_MESSENGER_WEB_DIR;
+assert.ok(frontendDir && existsSync(join(frontendDir, 'index.html')), 'set OURS_MESSENGER_WEB_DIR to a built standalone frontend');
 const cli = join(ROOT, process.env.MESSENGER_V1_DIST ?? 'dist', 'cli.js');
 const oursCli = join(ROOT, 'node_modules/@ours.network/daemon/dist/cli.js');
 const state = mkdtempSync(join(tmpdir(), 'messenger-live-push-'));
@@ -43,6 +45,7 @@ const messengerEnv = {
   OURS_DAEMON_CREDENTIAL_PATH: credentialPath,
   OURS_MESSENGER_IDENTITY: 'MessengerLivePush',
   OURS_MESSENGER_STATE_DIR: messengerState,
+  OURS_MESSENGER_WEB_DIR: resolve(frontendDir),
   OURS_MESSENGER_HOST: '127.0.0.1',
   OURS_MESSENGER_PORT: String(messengerPort),
   OURS_MESSENGER_PUBLIC_ORIGIN: origin,

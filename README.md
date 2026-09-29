@@ -95,11 +95,11 @@ OURS_MESSENGER_VAPID_PRIVATE_KEY optional secret; never expose to the browser
 OURS_MESSENGER_VAPID_SUBJECT     default mailto:admin@localhost
 ```
 
-The production build is an installable React 18 + TypeScript PWA emitted by Vite under
-`dist/web`: `index.html` is no-cache, while content-hashed `/assets/*` are served
-immutable with explicit MIME types and `nosniff`. During frontend-only work,
-`npm run dev` starts Vite on loopback and proxies `/api` and `/mcp` to the
-messenger server; use `npm run dev:server` for the backend process.
+The browser application is built in the standalone `ours-web` repository. Set
+`OURS_MESSENGER_WEB_DIR` to its `dist/web` directory if this server should host
+that artifact; without it the API remains available and frontend routes report
+503. Static hosting keeps `index.html` uncached and hashed assets immutable.
+Use `npm run dev:server` for backend development.
 
 Every state-changing HTTP request must carry `Content-Type: application/json`,
 an exact single `Origin` equal to `OURS_MESSENGER_PUBLIC_ORIGIN`, and
@@ -311,10 +311,11 @@ conversation reads, graceful lease release, bundle execution, token redaction,
 `/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
 REST/WebPush encryption and full payloads, reply correlation, immutable media and
 version round-trips, hostile top-level media navigation, exact voice MIME/bytes,
-sandboxed previews, corrupt push-state preservation/recovery, PWA cache
-isolation/installability/offline launch in Chromium, SSE backpressure and
-reconnect, cursor paging with stable scroll anchoring, invite-dialog reopen,
-focused-client contracts and the exact-dialog read gate.
+sandboxed preview responses, corrupt push-state preservation/recovery and SSE
+backpressure. UI, PWA, browser layout, and client read-gate tests live in `ours-web`.
+The optional `tests/v1-live-push.integration.mjs` service integration requires
+Firefox, public Autopush egress, and an explicit `OURS_MESSENGER_WEB_DIR` pointing
+to a separately built frontend; it is outside the default local test suite.
 
 ## SDK lifecycle boundary
 
