@@ -95,11 +95,11 @@ OURS_MESSENGER_VAPID_PRIVATE_KEY optional secret; never expose to the browser
 OURS_MESSENGER_VAPID_SUBJECT     default mailto:admin@localhost
 ```
 
-The production build is an installable React 18 + TypeScript PWA emitted by Vite under
-`dist/web`: `index.html` is no-cache, while content-hashed `/assets/*` are served
-immutable with explicit MIME types and `nosniff`. During frontend-only work,
-`npm run dev` starts Vite on loopback and proxies `/api` and `/mcp` to the
-messenger server; use `npm run dev:server` for the backend process.
+The browser application is built in the standalone `ours-web` repository. Set
+`OURS_MESSENGER_WEB_DIR` to its `dist/web` directory if this server should host
+that artifact; without it the API remains available and frontend routes report
+503. Static hosting keeps `index.html` uncached and hashed assets immutable.
+Use `npm run dev:server` for backend development.
 
 Every state-changing HTTP request must carry `Content-Type: application/json`,
 an exact single `Origin` equal to `OURS_MESSENGER_PUBLIC_ORIGIN`, and
@@ -134,9 +134,7 @@ The focused client does not persist messages, identities, receipts, or API
 responses in browser storage. Its service worker caches only the application
 shell and static assets for offline launch; all `/api/*` requests bypass it.
 
-The web UI and its same-origin transport adapter are maintained together in
-this repository; their presentation scope and transport exclusions are recorded
-in `web/src/CANONICAL_UI_PROVENANCE.md`. The interface
+The web UI and its same-origin transport adapter now live in the standalone `ours-web` repository. This repository builds only the Messenger backend. To optionally serve a separately built frontend, set `OURS_MESSENGER_WEB_DIR` to its `dist/web` directory; otherwise deploy the API behind the same-origin frontend gateway. The interface
 includes grouped identity-root contacts; contact add, approval, rename and
 removal; one-time/public invite creation and revocation; public bio editing;
 message and attachment replies; drag/drop/paste and picker uploads with bounded
@@ -313,10 +311,11 @@ conversation reads, graceful lease release, bundle execution, token redaction,
 `/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
 REST/WebPush encryption and full payloads, reply correlation, immutable media and
 version round-trips, hostile top-level media navigation, exact voice MIME/bytes,
-sandboxed previews, corrupt push-state preservation/recovery, PWA cache
-isolation/installability/offline launch in Chromium, SSE backpressure and
-reconnect, cursor paging with stable scroll anchoring, invite-dialog reopen,
-focused-client contracts and the exact-dialog read gate.
+sandboxed preview responses, corrupt push-state preservation/recovery and SSE
+backpressure. UI, PWA, browser layout, and client read-gate tests live in `ours-web`.
+The optional `tests/v1-live-push.integration.mjs` service integration requires
+Firefox, public Autopush egress, and an explicit `OURS_MESSENGER_WEB_DIR` pointing
+to a separately built frontend; it is outside the default local test suite.
 
 ## SDK lifecycle boundary
 
@@ -397,3 +396,11 @@ For development against the selected, unpublished SDK/CLI sources, see [selected
 Set `OURS_MESSENGER_BASE_PATH=/base/messenger/` when a reverse proxy strips that prefix before forwarding to Messenger. `OURS_MESSENGER_PUBLIC_ORIGIN` remains the exact external origin, for example `https://ours.example`, with no path. Assets, API requests, browser routes, service-worker scope and presence WebSockets retain the configured mount. `ours-messenger-server capabilities` reports `messenger.gateway-prefix-v1`.
 
 Messenger still has no application authentication. Use the installer's loopback gateway or an authenticated external proxy/tunnel. A shared gateway origin trusts every hosted application; path prefixes and Cowork's separate server-token prompt do not isolate or authenticate Messenger. Keep backend ports private and use the installer documentation's browser-authenticated entry configuration.
+
+### Fleet web application
+
+The live local Fleet application is available at `/fleet`; Messenger remains at `/chats`.
+Use the companion Fleet gateway and its local password/session authentication.
+See [Fleet setup and verification](docs/FLEET-PREVIEW.md) for connection requirements,
+current coverage and limitations. `npm run test:fleet` runs the current isolated fixture gates.
+The older mock walkthrough and its browser tests describe an earlier design stage.

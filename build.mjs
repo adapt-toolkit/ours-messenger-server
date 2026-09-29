@@ -2,7 +2,6 @@
 // Outputs:
 //   dist/cli.js       ← the entrypoint (bin: ours-messenger-server)
 //   dist/chunks/*     ← lazily loaded server/SDK graph (`--help` stays light)
-//   dist/web/*        ← the focused same-origin messenger client
 //
 // Run via `npm run build`.
 //
@@ -12,8 +11,7 @@
 
 import { buildTimestamp } from './scripts/build-epoch.mjs';
 import { build } from 'esbuild';
-import { build as viteBuild } from 'vite';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -70,26 +68,3 @@ await build({
   chunkNames: 'chunks/[name]-[hash]',
   logLevel: 'info',
 });
-
-await viteBuild({
-  configFile: resolve(root, 'vite.config.ts'),
-  define: { __MESSENGER_WEB_BUILD_SHA__: JSON.stringify(sha) },
-});
-
-// Keep the shipped document usable on root-level SPA deep links. Runtime
-// prefixDocument rewrites these entry URLs for a configured nested mount; Vite's
-// relative module/CSS references remain relocatable under that entry path.
-const indexPath = resolve(dist, 'web', 'index.html');
-await writeFile(indexPath, (await readFile(indexPath, 'utf8')).replace(/((?:src|href)=")\.\//g, '$1/'));
-
-const serviceWorkerPath = resolve(dist, 'web', 'sw.js');
-const serviceWorkerPlaceholder = '__MESSENGER_BUILD_SHA__';
-const serviceWorker = await readFile(serviceWorkerPath, 'utf8');
-if (serviceWorker.split(serviceWorkerPlaceholder).length !== 2) {
-  throw new Error('service worker must contain exactly one build SHA placeholder');
-}
-await writeFile(serviceWorkerPath, serviceWorker.replace(serviceWorkerPlaceholder, sha));
-await writeFile(
-  resolve(dist, 'web', 'version.json'),
-  JSON.stringify({ sha, time: versionTime }) + '\n',
-);

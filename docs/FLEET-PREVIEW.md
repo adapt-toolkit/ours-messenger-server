@@ -1,0 +1,124 @@
+# Fleet web application
+
+`/fleet` now runs the live local application and requires the Fleet gateway's password/session authentication. Build this repository, then configure the companion `ours-fleet` local gateway with this repository's `dist/web` as its static root and a private Messenger backend under `/messenger`. See `ours-fleet/docs/local-gateway.md` for setup and transport boundaries.
+
+`npm run test:fleet` runs selector checks and the current `test:fleet-live` isolated browser fixtures. The fixture server supplies static files; tests intercept Fleet/Messenger APIs explicitly. It does not bypass authentication in the product. The older mock-only browser tests remain as historical design references and are not the current gate.
+
+The live UI includes task/agent navigation, draft-first chats, correspondence, invitations and participants, session controls, task description editing, and typed task-created receipts. Notifications retain browser-local read state; the separate service migration is deferred. Real task-created receipt qualification still requires the updated supervisor and an authorized live creation.
+
+## Historical mock design reference
+
+The material below describes the earlier mock branch, before live integration. Its in-memory walkthrough, sample data, and public-preview instructions are historical and do not describe the current authenticated application.
+
+
+Run `npm run dev` and open **http://127.0.0.1:5173/fleet**. The existing live Messenger remains at `/chats`. The preview is also included in the normal production build and supports direct URL reloads through the existing SPA fallback.
+
+This implements the 64-step `ours-fleet/fleet_wireframes.pen` interaction map, inspected through pen.dev MCP. It uses the existing final liquid-glass CSS cascade, system typography, `Conversation`, `ChatList`, and Radix `DialogShell`. A shared Navigation surface describes Chats and Tasks, with a current-section marker. Its 3×3 launcher is available in the outer desktop and mobile navigation. On phones, leave a conversation with Back before opening the launcher. Phones show global navigation on the list; opening a chat fills the screen, and Back restores the list. Agent and room actions share the existing conversation header. Light/dark themes and reduced motion/transparency are supported.
+
+## Shareable first-run walkthrough
+
+Start at `/fleet/account/signup`: mock registration → preview email confirmation → five visual introduction slides → Coordinator chat. The slides lead with practical benefits: you own your agents and rooms, any two agents in the ours network can communicate by invitation, each task has a visible team conversation, anyone in the network can be invited into your rooms without a shared organization, and closing the task room ends access through that room. Agent communication means exchanging messages. A website example connects the scenes. Example fields are prefilled; the test name personalizes the greeting. The greeting explains Chats, Workspace, External, Tasks and Settings. Skip also opens Coordinator. Close conversation returns to the list without deleting the chat or draft.
+
+Every full entry URL visit/reload starts a fresh, independent in-memory mock session. Separate tabs and people do not share account, messages or mutations. Only theme preference persists. Returning to a chat inside the same visit preserves messages and drafts and does not duplicate the greeting. No real registration, email or agent backend is involved.
+
+For public testing, build then run `node scripts/fleet-preview-server.mjs` (loopback port 5180; override with `FLEET_PREVIEW_PORT`). Run `cloudflared tunnel --url http://127.0.0.1:5180 --no-autoupdate` and share its HTTPS URL with `/fleet/account/signup`. The static origin permits only `/fleet` routes and built assets; `/api`, `/chats`, service workers and non-read methods return 404. The temporary tunnel lasts while its process and this host stay running.
+
+## Data and boundaries
+
+The `Preview` badge identifies the local demonstration. Seed data includes Coordinator, Research assistant, Developer, Critic, Writer, tasks in all seven board columns, people, external agents and a shared room. No preview flow calls live REST APIs, creates Fleet identities, executes commands, or generates real invitations. Invite codes use `ours://preview-invite/`. Account confirmation and room admission have explicit preview continuation buttons.
+
+Agent/task/list mutations, messages, permissions and definitions live in React state and reset on reload; theme preference persists. Existing seed identities/tasks support reloadable deep links. New session IDs intentionally last only for this preview session. Opened chats remain mounted to retain independent drafts, reply state and scroll during navigation. Mock Messenger and direct-agent conversations use different IDs/histories for the same agent.
+
+## Screen and flow coverage
+
+| Wireframe steps | Reachable path |
+| --- | --- |
+| 01–04 Account | Account profile → Account; `/fleet/account/login`, Create account → confirmation → welcome |
+| 05 Empty Work | Account profile → Getting started |
+| 06 Navigation | Navigate → Chats / Tasks / My profile / Settings |
+| 07–11 Work and direct agents | Chats → Workspace → Agents → Persistent / Temporary → agent; Developer → tool output, Allow/Deny, Agent actions |
+| 12 Add | Global + → invitation, new agent, new task, task-local agent |
+| 13–20 Agent creation | New chat → editable name/role/brain → More options/folder → first Send creates and locks temporary agent; + → New persistent agent for durable agents |
+| 21–22 Agent lifecycle | Agent actions → Delete temporary session / Stop persistent agent |
+| 23 Task board | Tasks; search and list filter; all seven columns |
+| 24–26 Task creation | + New task → single/pair/team/custom → provisioning or empty room → task / agent |
+| 27–31 Task detail and actions | Task card → status menu → Move / Block / Finish; Back restores the source screen |
+| 32–33 Nested Work | Chats → task → focused Room and agent list, then direct agent rows; agent context retains room unread badge |
+| 34–37 Membership and closure | Task or nested Work → + Agent; task detail → Remove; Task actions → Close / Delete with repeated task ID |
+| 38–39 Lists | Tasks → Manage lists → New list / Delete, with destination list |
+| 40 Messenger | Chats → External → seeded contacts → unchanged Conversation; same-agent Messenger from Agent actions |
+| 41–43 Accept | Global + → Accept as yourself → optional agent picker; pasted code survives actor selection |
+| 44–47 Generate | Global or room member invitation → choose type → explicit Generate → Copy; opening or changing type does not generate |
+| 48–50 Room | Room → Members → pending member/admission → information; external participants open external profiles |
+| 51–54 Profiles | Account → Human → Workspace → own/external agent; back restores parent; avatar in chat opens identity |
+| 55–58 Agent connections | Own-agent profile → Contacts & invitations → Generate / Accept with locked actor |
+| 59–63 Configuration | Settings → template / role / brain / permission profile; host and task templates also navigable |
+| 64 Feedback | Settings → Preview notification; common top notification clears after four seconds |
+
+## Implementation
+
+- `model.ts`: typed seed agents, tasks, contacts, chat histories and navigation states.
+- `FleetApp.tsx`: preview state, section routing and Work/Tasks composition. Production entry is a lazy `/fleet` gate in `main.tsx`.
+- `components.tsx`: reusable identity rows, fields, search, buttons and page headings.
+- `pages.tsx`: profile hierarchy, configuration and account journeys.
+- `ChatSetup.tsx`, `FolderPicker.tsx`, `Navigation.tsx`: reusable draft setup, folder selection and descriptive navigation.
+- `Onboarding.tsx`: five capability slides with accessible focus, Back/Skip, and Coordinator handoff.
+- `scripts/fleet-preview-server.mjs`: isolated static origin for public mock testing.
+- `FleetDialogs.tsx`: one persistent shared modal shell whose content changes; folder selection and creation stay inside the same shell.
+- `fleet.css`: selectors scoped to `.fleet-*`, with a small scoped layout seam around reused chat components. Loaded only with the preview chunk.
+
+`Conversation` adds optional `headerActions` and `timelineFooter` slots for its peer header and scrollable timeline. Fleet supplies compact contextual controls and agent activity; live Messenger omits the slot. Reply, message, voice, command, composer, and modal behavior remain unchanged. Profile browsing and its invitation steps share one dismissible shell; outside click, Escape, and Close return to the original screen and preserve its chat draft.
+
+The approved pen.dev refinements are implemented: compact invitation menus, a hierarchical folder picker, separate Temporary tasks/chats, and draft-first New chat. ChatSetup keeps editable configuration local until first Send creates exactly one mock agent and locks its settings; closing/reopening retains the draft. Phone chat setup is a compact, subdued form beside the composer; desktop setup retains its full layout. Agent profiles show a linked owner → workspace → agent hierarchy, including the correct external owner. Contacts have one Back returning to the source profile. Folder selection commits only on Select folder. Navigation dismissals, task Back and Settings Back preserve the source conversation.
+
+## Verification
+
+Run `npm run build && npm run test:fleet`. The browser gate verifies independent drafts, section navigation, explicit invite generation, locked actors, invite text retention, modal focus return, task moves, deletion confirmation, agent/task/folder creation, account/configuration, room and identity deep links, mobile composer bounds, first-run onboarding, personalized single greeting, close/reopen retention, fresh entry visits, tab isolation, static-origin rejection checks and zero live API requests. Screenshots are written to `/tmp/ours-fleet-evidence`.
+
+Additional production preservation gates: `npm run test:mobile`, `npm run test:swipe`, `node tests/browser-composer-focus.test.mjs`, `node tests/browser-pointer-touch.test.mjs`, `node tests/browser-accessibility-controls.test.mjs`, and `node tests/browser-room-envelope-matrix.test.mjs`.
+
+
+Fleet lists share Messenger’s `ContactRow`, `SearchInput` and list/tab material styles. The shared `Button` / `IconButton` primitives preserve Messenger’s existing class cascade; Fleet menus, navigation and task-template choices use those controls, and `Field` applies the existing `.field` style. Fleet-specific control colors, shadows and radii were removed. `DialogShell` remains the shared modal shell. The compact inline chat setup remains intentionally distinct from full forms.
+
+Only the outer header provides list creation: New chat, persistent agent, task, invitations, and context-sensitive “Add to this task” all live under +. Fleet hides the embedded Messenger titlebar and invite shortcut with scoped CSS; the standalone Messenger retains them. Current section + chevron and the nine-square launcher open the same navigation dialog. Phone conversations show neither control until Back returns to the list.
+
+Validation: `node tests/browser-fleet-consistency.test.mjs` checks shared computed styles, section controls, search retention and task-context creation at 320/390/1280px in both themes (uses `FLEET_PREVIEW_ORIGIN`, otherwise starts an isolated local preview server).
+
+Control geometry is shared across themes: `--r-control` is 14px for standard buttons and fields; `--r-icon-control` is 13px for icon buttons, matching the requested dark-theme roundness. Dialog sizing/position comes entirely from Messenger’s responsive `DialogShell` styles (full-width phone sheet, centered desktop dialog; Profile uses the standard `wide` variant).
+
+Configuration now has browsable Roles, Brains, Agent Templates and Room Templates with create/edit/cancel/save/reopen. Public seed definitions and model choices are snapshots of ours-fleet/presets (catalog revision 1); they contain no host configuration or credentials. Agent templates require existing role and brain references; room members require existing agent templates. Harness changes reset model/effort/backend; custom model IDs are explicit. Changes survive navigation in the current preview session and reset on reload. No host configuration is written.
+
+Notifications use typed events with target IDs and derived ancestor counts (`notifications.ts`), shared through a provider. Seed data includes two Messenger messages and three agent decisions. Explicit chat entry reads message events; requests remain actionable until approved or declined. The header shows one total on the launcher, followed by section, lifetime, task and chat counts; phone Back exposes remaining attention when the header is hidden. The textual section switcher and modal Close buttons have no badges. IDs deduplicate counts. Standalone Messenger receives no adornments and retains its behavior.
+
+Additional verification: `node --import tsx web/tests/fleet-config.test.ts`, `node --import tsx web/tests/fleet-notifications.test.ts`, `node tests/browser-fleet-config.test.mjs`, and `node tests/browser-fleet-notifications.test.mjs`. Browser tests accept `FLEET_PREVIEW_ORIGIN`; otherwise they serve the built preview.
+
+The launcher also contains Notifications, a combined pending inbox. Opening it does not mark anything read; selecting a row opens its target chat. Resolved decisions record approval or decline and leave the pending inbox. Empty state appears when all seeded attention has been handled. There is no additional header button.
+
+## Chats and Tasks navigation
+
+Chats combines workspace and external conversations through All / Workspace / External filters. Workspace can show All work, Agents, or Tasks; Agents adds All agents / Temporary / Persistent. Opening a task replaces the list with just its room and agents. Back restores the parent filters, search, and list position. External retains the existing Recent / By identity controls. The launcher, conversation UI, creation dialogs, and profile flows retain their existing appearance.
+
+`/fleet/chats` stores filters, focused task, selection, and mobile detail state in query parameters. Legacy `/fleet/work/...` and `/fleet/messenger/...` links remain supported. Run `node tests/browser-fleet-chats.test.mjs` for the split-specific navigation and draft regression checks.
+
+## ACP voice messages
+
+Existing and new draft agent chats can record, preview, cancel and send voice
+messages. Recording stops after 295 seconds; the browser caps uploads at 5 MiB.
+The existing browser recorder supports OGG/Opus, WebM/Opus and MP4/AAC. Missing
+microphone permission and unavailable STT are visible errors. The selected
+recording remains in the mounted chat for retry. Audio is held in browser memory,
+not persisted across page reloads, and is released when the chat is unmounted.
+After successful sending, the conversation stores the recognized text, prefixed
+`Voice message:`; it does not archive the original audio.
+
+The browser uploads raw audio to `/daemon/voice/transcribe` through the existing
+Fleet prefix proxy, then submits recognized text to the selected agent. Requires
+the daemon voice HTTP endpoint and Fleet `submit_voice_prompt` control support;
+older supervisors reject that command. A recording is bound to its initial
+session generation. A new draft creates one agent using the existing frozen
+creation request. Retrying an uncertain input reuses its exact command ID/text;
+recognized `/commands` are sent as text rather than invoked by the composer.
+
+The separate **Live voice mode** button opens a keyboard-accessible dialog
+explaining that conversational calling is not available yet. It requests no
+microphone access or connection. Existing external-chat audio flows remain in use.

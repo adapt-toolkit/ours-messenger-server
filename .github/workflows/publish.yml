@@ -1,7 +1,6 @@
 name: CI
 
-# Canonical ours.network single-package publish flow, with Chromium installed
-# because messenger's full gate includes its browser suite.
+# Backend-only package gates. Browser application gates live in ours-web.
 # Required secrets: NPM_TOKEN, VERSION_BUMP_APP_ID, and
 # VERSION_BUMP_APP_PRIVATE_KEY.
 
@@ -29,7 +28,6 @@ jobs:
           cache: npm
       - run: node --test tests/release-channel.test.mjs
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: npm run typecheck
       - run: npm run build
       - run: npm test

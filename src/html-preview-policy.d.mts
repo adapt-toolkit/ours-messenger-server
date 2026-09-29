@@ -5,4 +5,3 @@ export function attachmentExtension(filename: unknown): string;
 export function isHtmlFilename(filename: unknown): boolean;
 export function isHtmlAttachment(filename: unknown, mime?: unknown): boolean;
 export function attachmentBlobMime(mime: unknown, filename?: unknown): string;
-export function buildSandboxedHtmlDocument(html: unknown): string;

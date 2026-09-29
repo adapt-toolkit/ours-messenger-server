@@ -8,7 +8,7 @@ import {
 import {
   HTML_PREVIEW_CSP, HTML_PREVIEW_SANDBOX, NEUTRAL_DOWNLOAD_MIME,
   attachmentBlobMime, attachmentExtension, isHtmlAttachment, isHtmlFilename,
-} from '../web/src/ui/htmlPreviewCore.mjs';
+} from '../src/html-preview-policy.mjs';
 
 assert.equal(HTML_PREVIEW_SANDBOX, '');
 const expectedCsp = new Map([
@@ -64,11 +64,5 @@ const once = transformHtmlPreview(malformed); assert.deepEqual(transformHtmlPrev
 assert.throws(() => transformHtmlPreview(Buffer.alloc(MAX_HTML_PREVIEW_BYTES + 1)), (error) => error instanceof HtmlPreviewTransformError && error.kind === 'oversize');
 const deep = Buffer.from('<div>'.repeat(12000) + 'x' + '</div>'.repeat(12000));
 try { transformHtmlPreview(deep); } catch (error) { assert.ok(error instanceof HtmlPreviewTransformError, 'deep input fails as a controlled transform error'); }
-
-const component = readFileSync(new URL('../web/src/ui/HtmlPreview.tsx', import.meta.url), 'utf8');
-assert.match(component, /sandbox=\{HTML_PREVIEW_SANDBOX\}/); assert.match(component, /key=\{rec\.id\}/);
-assert.match(component, /src=\{appPath\(`\/api\/html-preview\/\$\{encodeURIComponent\(rec\.id\)\}`\)\}/);
-assert.doesNotMatch(component, /srcDoc|buildSandboxedHtmlDocument/); assert.match(component, /attachmentBlobMime/);
-assert.match(component, /URL\.revokeObjectURL\(objectUrl\)/); assert.match(component, /Transformed safe preview/);
 
 console.log('html-preview transform OK — standards parsing, inert fragments, bounded/idempotent output');
