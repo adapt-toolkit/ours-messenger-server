@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Brain, FileText, Layers, Users } from 'lucide-react';
 import { Button, Field, PageHeader, MenuAction, SearchField } from './components';
 import { catalog, effortChoices, initialConfiguration, validateDefinition, type Configuration, type ConfigKind, type Definition } from './configuration';
@@ -11,16 +11,40 @@ export function ConfigurationProvider({children, live = false}: {children: React
   const [data,setData] = useState<Configuration>(live ? empty : initialConfiguration);
   const [snapshot,setSnapshot] = useState<any>(null);
   const [error,setError] = useState('');
-  const adopt = (value: any) => { setSnapshot(value); setData({ role: value.model.roles, brain: value.model.brains, template: value.model.agent_templates, tasks: value.model.room_templates }); };
-  const refresh = async () => { if (live) { try { adopt(await fleet('/configuration?includeDefinitions=true')); setError(''); } catch (e) { setError((e as Error).message); throw e; } } };
-  useEffect(() => { if (live) void refresh().catch(() => {}); }, [live]);
+  const requestVersion = useRef(0);
+  const adopt = useCallback((value: any) => { setSnapshot(value); setData({ role: value.model.roles, brain: value.model.brains, template: value.model.agent_templates, tasks: value.model.room_templates }); }, []);
+  const refresh = useCallback(async () => {
+    if (!live) return;
+    const version = ++requestVersion.current;
+    try {
+      const value = await fleet('/configuration?includeDefinitions=true');
+      if (version === requestVersion.current) { adopt(value); setError(''); }
+    } catch (e) {
+      if (version === requestVersion.current) setError((e as Error).message);
+      throw e;
+    }
+  }, [live, adopt]);
+  useEffect(() => {
+    if (!live) return;
+    let pending = false;
+    const update = () => {
+      if (pending || document.visibilityState === 'hidden') return;
+      pending = true;
+      void refresh().catch(() => {}).finally(() => { pending = false; });
+    };
+    update();
+    const timer = window.setInterval(update, 5000);
+    window.addEventListener('focus', update);
+    document.addEventListener('visibilitychange', update);
+    return () => { ++requestVersion.current; window.clearInterval(timer); window.removeEventListener('focus', update); document.removeEventListener('visibilitychange', update); };
+  }, [live, refresh]);
   const save = async (kind: ConfigKind, id: string, value: Definition) => {
     if (!live) { setData(d => ({ ...d, [kind]: { ...d[kind], [id]: structuredClone(value) } })); return; }
     if (!snapshot) throw new Error(error || 'Configuration is still loading.');
     const key = { role: 'roles', brain: 'brains', template: 'agent_templates', tasks: 'room_templates' }[kind];
     const model = { ...snapshot.model, [key]: { ...snapshot.model[key], [id]: value } };
     await fleet('/configuration/save', { revision: snapshot.revision, model });
-    adopt(await fleet('/configuration?includeDefinitions=true')); setError('');
+    await refresh();
   };
   return <Context.Provider value={{data,live,defaults:snapshot?.model?.manifest?.defaults ?? {},loaded: !live || !!snapshot,error,refresh,save}}>{children}</Context.Provider>;
 }
