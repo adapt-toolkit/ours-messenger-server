@@ -13,7 +13,7 @@ export function agentPreview(events: any[]): ChatPreview {
     const text = message.parts.flatMap(p => p.type === 'content' ? p.content.flatMap(c => c.type === 'text' ? [c.text] : []) : []).join(' ');
     if (!text.trim() || message.timestamp < newestAt) continue;
     newestAt = message.timestamp;
-    newest = { text: `${message.role === 'user' ? 'You' : 'Incoming'}: ${line(text)}`, at: Number.isFinite(message.timestamp) ? new Date(message.timestamp).toISOString() : '' };
+    newest = { text: `${message.role === 'user' ? 'You: ' : ''}${line(text)}`, at: Number.isFinite(message.timestamp) ? new Date(message.timestamp).toISOString() : '' };
   }
   return newest ?? emptyPreview();
 }
@@ -24,5 +24,5 @@ export function externalPreview(page: ConversationPage, announcedName: string): 
   const room = newest.dir === 'in' ? roomLineForContact(announcedName, newest.text) : null;
   const text = line(page.preview ?? (room ? roomMessagePreview(room) : newest.text));
   const fallback = newest.message_kind === 'file' ? 'File attachment' : 'Message';
-  return { text: `${newest.dir === 'out' ? 'You' : 'Incoming'}: ${text || fallback}`, at: newest.date };
+  return { text: `${newest.dir === 'out' ? 'You: ' : ''}${text || fallback}`, at: newest.date };
 }

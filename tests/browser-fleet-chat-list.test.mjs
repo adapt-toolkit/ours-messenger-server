@@ -31,14 +31,14 @@ try {
  await p.goto(base+'/fleet');
  const row=name=>p.locator('.listcol-scroll:visible .contact-row').filter({has:p.locator('.contact-name',{hasText:name})});
  await row('TestFleetCoordinator').getByText('You: My first message',{exact:true}).waitFor();
- await row('External friend').getByText('Incoming: Incoming hello',{exact:true}).waitFor();
+ await row('External friend').getByText('Incoming hello',{exact:true}).waitFor();
  await row('Empty chat').getByText('No messages yet',{exact:true}).waitFor();
- await row('Project room').getByText('Incoming: Alice · Room reply',{exact:true}).waitFor();
+ await row('Project room').getByText('Alice · Room reply',{exact:true}).waitFor();
  assert.equal(await p.locator('.contact-avatar').count(),0);
  for(const name of ['TestFleetCoordinator','External friend','Empty chat']){const box=await row(name).boundingBox();assert.ok(box.height>=44&&box.height<=64,`${name} height ${box.height}`);}
  assert.equal(reads,0);assert.equal(writes,0);
  phase=1;
- await row('TestFleetCoordinator').getByText(/^Incoming: Updated incoming response/).waitFor({timeout:12000});
+ await row('TestFleetCoordinator').getByText(/^Updated incoming response/).waitFor({timeout:12000});
  await row('External friend').getByText('You: File attachment',{exact:true}).waitFor();
  await row('TestFleetCoordinator').locator('.contact-unread').waitFor();
  const metrics=await row('TestFleetCoordinator').locator('.contact-last').evaluate(e=>({scroll:e.scrollWidth,width:e.clientWidth,ellipsis:getComputedStyle(e).textOverflow}));assert.ok(metrics.scroll>metrics.width);assert.equal(metrics.ellipsis,'ellipsis');
@@ -46,7 +46,7 @@ try {
  await p.screenshot({path:process.env.FLEET_LIST_SCREENSHOT??'../runtime/chat-list-mobile.png'});
  await p.getByRole('tab',{name:/^External/}).click();await row('External friend').getByText('You: File attachment',{exact:true}).waitFor();assert.equal(await p.locator('.contact-avatar').count(),0);
  await p.getByRole('tab',{name:/^All/}).click();fail=true;
- await row('TestFleetCoordinator').getByText(/Unable to refresh/).waitFor({timeout:12000});assert.ok((await row('TestFleetCoordinator').locator('.contact-last').innerText()).startsWith('Incoming: Updated incoming response'));
+ await row('TestFleetCoordinator').getByText(/Unable to refresh/).waitFor({timeout:12000});assert.ok((await row('TestFleetCoordinator').locator('.contact-last').innerText()).startsWith('Updated incoming response'));
  fail=false;await p.waitForFunction(()=>![...document.querySelectorAll('.contact-last')].some(e=>e.textContent.includes('Unable to refresh')),{},{timeout:12000});
  await p.getByRole('button',{name:'Use light theme',exact:true}).click();
  assert.ok((await row('External friend').boundingBox()).height<=64);
