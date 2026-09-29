@@ -134,9 +134,7 @@ The focused client does not persist messages, identities, receipts, or API
 responses in browser storage. Its service worker caches only the application
 shell and static assets for offline launch; all `/api/*` requests bypass it.
 
-The web UI and its same-origin transport adapter are maintained together in
-this repository; their presentation scope and transport exclusions are recorded
-in `web/src/CANONICAL_UI_PROVENANCE.md`. The interface
+The web UI and its same-origin transport adapter now live in the standalone `ours-web` repository. This repository builds only the Messenger backend. To optionally serve a separately built frontend, set `OURS_MESSENGER_WEB_DIR` to its `dist/web` directory; otherwise deploy the API behind the same-origin frontend gateway. The interface
 includes grouped identity-root contacts; contact add, approval, rename and
 removal; one-time/public invite creation and revocation; public bio editing;
 message and attachment replies; drag/drop/paste and picker uploads with bounded

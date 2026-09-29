@@ -71,8 +71,12 @@ export async function startHarnessDaemon(tag, options = {}) {
   // infers its server or credential from ambient daemon-local configuration.
   const credentialPath = join(stateDir, 'fixture-client-credential');
   writeFileSync(credentialPath, 'ab'.repeat(32) + '\n', { mode: 0o600 });
+  // Select this fixture's daemon configuration explicitly; never inherit a host client profile.
+  const daemonConfig = join(stateDir, 'daemon-config.json');
+  writeFileSync(daemonConfig, JSON.stringify({ stateDir, port }), { mode: 0o600 });
   const env = {
     ...process.env,
+    OURS_CONFIG: daemonConfig,
     OURS_STATE_DIR: stateDir,
     OURS_PORT: String(port),
     OURS_BROKER_URL: 'wss://invalid.local/none',

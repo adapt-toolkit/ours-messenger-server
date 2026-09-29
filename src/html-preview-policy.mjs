@@ -107,20 +107,3 @@ const BASE_STYLE = [
 // markup is appended VERBATIM after that head — its own <html>/<head> tags are
 // folded into the document by the parser, and the policy above is already
 // enforced by the time any of it is read.
-export function buildSandboxedHtmlDocument(html) {
-  return [
-    '<!doctype html>',
-    '<html>',
-    '<head>',
-    `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`,
-    '<meta charset="utf-8">',
-    '<meta name="referrer" content="no-referrer">',
-    '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    `<style>${BASE_STYLE}</style>`,
-    '</head>',
-    '<body>',
-    String(html ?? ''),
-    '</body>',
-    '</html>',
-  ].join('\n');
-}

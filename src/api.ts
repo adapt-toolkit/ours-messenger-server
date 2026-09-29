@@ -37,7 +37,7 @@ import { HtmlPreviewTransformError, MAX_HTML_PREVIEW_BYTES, transformHtmlPreview
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName } from '../shared/roomMessageCore.mjs';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
-import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../web/src/ui/htmlPreviewCore.mjs';
+import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../src/html-preview-policy.mjs';
 
 const HTML_PREVIEW_RESPONSE_CSP = `${HTML_PREVIEW_CSP}; sandbox; frame-ancestors 'self'`;
 
