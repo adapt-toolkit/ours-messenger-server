@@ -82,7 +82,7 @@ export function SessionList(p: Props) {
     </div>
     <div ref={scroll} onScroll={event => positions.current.set(scrollKey, event.currentTarget.scrollTop)} className="listcol-scroll" hidden={p.scope === 'External' && !p.task} aria-label={p.task ? `${p.task.name} conversations` : 'Chats'}>
       {p.task ? <div className="conversation-group">
-        {matches('Room') && row(`room-${p.task.id}`, 'Room', 'Room', () => p.openRoom(p.task!.id))}
+        {matches('Room') && row(`room-${p.task.id}`, 'Room', '', () => p.openRoom(p.task!.id))}
         {p.task.agents.map(id => p.agents.find(a => a.id === id)).filter((a): a is Agent => !!a && matches(a.name)).map(a => row(a.id, a.name, 'Agent', () => p.openChat(a.id)))}
       </div> : <div className="conversation-group">
         {showAgents && visibleAgents.map(a => row(a.id, a.name, 'Agent', () => p.openChat(a.id)))}
