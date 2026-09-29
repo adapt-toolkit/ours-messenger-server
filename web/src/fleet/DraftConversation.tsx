@@ -1,3 +1,4 @@
+import {useAgentAttachments, AttachmentPicker, AttachmentPreviews} from './AgentAttachments';
 import { AcpVoice, appendTranscript, type VoiceIntent } from './AcpVoice';
 import { useRef, useState } from 'react';
 import { ArrowUp } from 'lucide-react';
@@ -9,6 +10,8 @@ import './acp.css';
 import { useGlassChrome } from './useGlassChrome';
 export function DraftConversation({dark,back,ready,active}:{active:boolean;dark:boolean;back:()=>void;ready:(id:string)=>Promise<void>}) {
  const chrome=useGlassChrome();
+ const attachments=useAgentAttachments();
+ const [attachmentEditable,setAttachmentEditable]=useState(false);
  const config=useConfiguration();const keyName=useRef(crypto.randomUUID().slice(0,8));
  const [draft,setDraft]=useState<DraftAgent|null>(null);
  const template=config.data.template.Assistant ?? Object.values(config.data.template).find(t=>t.role?.ref==='Assistant');
@@ -21,7 +24,7 @@ export function DraftConversation({dark,back,ready,active}:{active:boolean;dark:
  }
  async function deliver(message:string, voice?:VoiceIntent){
   if(busy.current)throw Object.assign(new Error('A message is already being sent.'),{code:'conflict'});
-  busy.current=true;setError('');setState('Starting your agent…');setDraft({...current});setLocked(true);setPrompt(message);
+  busy.current=true;setAttachmentEditable(false);setError('');setState('Starting your agent…');setDraft({...current});setLocked(true);setPrompt(message);
   let inputAttempted=false;
   try{
    if(!frozen.current){
@@ -31,12 +34,17 @@ export function DraftConversation({dark,back,ready,active}:{active:boolean;dark:
    }
    if(!action.current){const result=await fleet('/roles',frozen.current);action.current=result.actionId;}
    await awaitReady();setState('Sending your first message…');
-   if(voice && !voiceGeneration.current){const page=await fleet(`/roles/${encodeURIComponent(role.current!)}/conversation?limit=1`);voiceGeneration.current=page.snapshot.sessionGeneration;}
+   if((voice || attachments.has) && !voiceGeneration.current){const page=await fleet(`/roles/${encodeURIComponent(role.current!)}/conversation?limit=1`);voiceGeneration.current=page.snapshot.sessionGeneration;}
+   const uploaded=attachments.has?await attachments.upload(role.current!,voiceGeneration.current!):[];
    inputAttempted=true;
-   await fleet(`/roles/${encodeURIComponent(role.current!)}/input`,{text:message,commandId:voice?.commandId??command.current,...(voice?{expectedSessionGeneration:voiceGeneration.current}:{})});
+   await fleet(`/roles/${encodeURIComponent(role.current!)}/input`,{text:message,commandId:voice?.commandId??command.current,...((voice||uploaded.length)?{expectedSessionGeneration:voiceGeneration.current}:{}),...(uploaded.length?{attachments:uploaded.map(x=>x.id)}:{})});
    await ready(role.current!);
-  }catch(e){if(!inputAttempted)Object.assign(e as Error,{accepted:false});throw e;}finally{busy.current=false;setState('');}
+  }catch(e){if((e as {code?:string}).code==='stale_state'&&attachments.has&&!voice){
+    const page=await fleet(`/roles/${encodeURIComponent(role.current!)}/conversation?limit=1`);
+    voiceGeneration.current=page.snapshot.sessionGeneration;command.current=crypto.randomUUID();setAttachmentEditable(true);
+    throw new Error('Agent session changed. Remove the attachments, select them again, then resume your first message.');
+   }if(!inputAttempted)Object.assign(e as Error,{accepted:false});throw e;}finally{busy.current=false;setState('');}
  }
- async function send(){if(!text.trim()||locked||busy.current||voiceBusy)return;try{const message=hasVoice&&text.trimStart().startsWith('/')?'Voice message:\n'+text:text;if(hasVoice)voiceIntent.current={text:message,commandId:command.current};await deliver(message,voiceIntent.current);}catch(e){setError((e as Error).message);}}
- return <div ref={chrome} className="fleet-acp" data-acp-theme={dark?'dark':'light'}><header className="fleet-acp-header"><BackButton label="Back to chats" onClick={back}/><div><strong>New chat</strong><small>Temporary agent</small></div></header><div className="fleet-acp-scroll"><div className="fleet-acp-thread">{config.loaded?<><ChatSetup draft={current} onChange={setDraft} locked={locked||voiceBusy}/><p className="muted">Temporary chats close after 24 hours without activity. Active work and pending approvals keep them open.</p></>:<p role="status">Loading defaults…</p>}{prompt&&<article className="fleet-acp-message user"><small>You</small><p style={{whiteSpace:'pre-wrap'}}>{prompt}</p></article>}{error&&<div role="alert"><p>{error}</p>{!submitted&&<Button onClick={()=>{setLocked(false);setPrompt('');setError('');}}>Edit settings</Button>}{submitted&&<Button onClick={()=>{if(busy.current)return;setError('');void deliver(prompt,voiceIntent.current).catch(e=>setError(e.message));}}>Resume first message</Button>}<p>Your message remains here if it could not be sent.</p></div>}</div></div><form className="fleet-acp-composer" onSubmit={e=>{e.preventDefault();void send();}}><div className="fleet-acp-state" role="status">{state||'Settings lock when you send your first message.'}</div><div className="fleet-acp-input"><AcpVoice onBusy={setVoiceBusy} active={active} disabled={!config.loaded||!current.role||!current.brain||locked} onTranscript={transcript=>{setText(current=>appendTranscript(current,transcript));setHasVoice(true);}}/><textarea aria-label="Message agent" placeholder="Message your agent…" rows={1} value={text} readOnly={locked} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send();}}}/><Button primary className="fleet-acp-send" aria-label="Send" type="submit" disabled={locked||voiceBusy||!config.loaded||!current.role||!current.brain||!text.trim()}><ArrowUp size={20}/></Button></div></form></div>;
+ async function send(){if((!text.trim()&&!attachments.has)||locked||busy.current||voiceBusy)return;try{const message=hasVoice&&text.trimStart().startsWith('/')?'Voice message:\n'+text:text;if(hasVoice)voiceIntent.current={text:message,commandId:command.current};await deliver(message,voiceIntent.current);}catch(e){setError((e as Error).message);}}
+ return <div ref={chrome} className="fleet-acp" data-acp-theme={dark?'dark':'light'}><header className="fleet-acp-header"><BackButton label="Back to chats" onClick={back}/><div><strong>New chat</strong><small>Temporary agent</small></div></header><div className="fleet-acp-scroll"><div className="fleet-acp-thread">{config.loaded?<><ChatSetup draft={current} onChange={setDraft} locked={locked||voiceBusy}/><p className="muted">Temporary chats close after 24 hours without activity. Active work and pending approvals keep them open.</p></>:<p role="status">Loading defaults…</p>}{prompt&&<article className="fleet-acp-message user"><small>You</small><p style={{whiteSpace:'pre-wrap'}}>{prompt}</p></article>}{error&&<div role="alert"><p>{error}</p>{!submitted&&<Button onClick={()=>{setLocked(false);setPrompt('');setError('');}}>Edit settings</Button>}{submitted&&<Button onClick={()=>{if(busy.current)return;setError('');void deliver(prompt,voiceIntent.current).catch(e=>setError(e.message));}}>Resume first message</Button>}<p>Your message remains here if it could not be sent.</p></div>}</div></div><form className="fleet-acp-composer" onSubmit={e=>{e.preventDefault();void send();}}><div className="fleet-acp-state" role="status">{state||'Settings lock when you send your first message.'}</div><AttachmentPreviews attachments={attachments} disabled={locked&&!attachmentEditable}/><div className="fleet-acp-input"><AttachmentPicker attachments={attachments} generation={voiceGeneration.current} disabled={(locked&&!attachmentEditable)||voiceBusy}/><AcpVoice onBusy={setVoiceBusy} active={active} disabled={!config.loaded||!current.role||!current.brain||locked} onTranscript={transcript=>{setText(current=>appendTranscript(current,transcript));setHasVoice(true);}}/><textarea aria-label="Message agent" placeholder="Message your agent…" rows={1} value={text} readOnly={locked} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send();}}}/><Button primary className="fleet-acp-send" aria-label="Send" type="submit" disabled={locked||voiceBusy||!config.loaded||!current.role||!current.brain||(!text.trim()&&!attachments.has)}><ArrowUp size={20}/></Button></div></form></div>;
 }

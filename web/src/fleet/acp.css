@@ -58,3 +58,8 @@
 .fleet-voice-panel .voice-preview-add{height:44px;min-width:72px;padding:0 8px;border:0;border-radius:12px;background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--text);font:inherit;font-size:13px;font-weight:600;white-space:nowrap;box-shadow:none}
 .fleet-voice-panel .voice-preview-add:disabled{opacity:.6}.voice-preview-error{grid-column:1/-1}.fleet-voice-panel p{font-size:12px;padding:4px 8px}
 @media(max-width:600px){.fleet-acp-thread{padding:10px 14px}.fleet-acp-header{padding:2px 4px}.fleet-acp-message.user{max-width:90%}.fleet-acp-input .voice-rec-overlay{border-radius:24px}}
+.fleet-attachment-previews{display:flex;gap:8px;overflow-x:auto;list-style:none;margin:0;padding:8px 0;max-width:100%}
+.fleet-attachment-previews li{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:12px;padding:6px;min-width:0;flex:0 0 200px}
+.fleet-attachment-previews img{width:44px;height:44px;object-fit:cover;border-radius:6px}
+.fleet-attachment-previews span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:13px}
+.fleet-attachment-previews small{display:block;opacity:.65}
