@@ -26,7 +26,7 @@ try {
  },wav);
  await p.route('**/daemon/voice/transcribe',r=>r.fulfill({status:503,json:{error:{message:'Fixture transcription failure'}}}));
  await p.goto(base+'/fleet/chats?chat=fixture-chat&detail=1');
- await p.getByText('First message received',{exact:true}).waitFor();
+ await p.locator('.fleet-acp-thread').getByText('First message received',{exact:true}).waitFor();
  await p.waitForFunction(()=>!document.querySelector('button[aria-label="Record voice message"]').disabled);
  // Representative long conversation with harmless fixture content.
  await p.evaluate(()=>{const thread=document.querySelector('.fleet-acp-thread');for(let i=0;i<12;i++){const article=document.createElement('article');article.className='fleet-acp-message '+(i%2?'user':'agent');article.textContent=i%2?'Проверь запись перед отправкой.':'Запись можно прослушать, преобразовать в текст и отредактировать перед отправкой.';thread.append(article);}});
