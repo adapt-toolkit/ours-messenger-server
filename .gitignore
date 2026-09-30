@@ -4,3 +4,5 @@ mufl_files/
 *.log
 .env
 .ours-messenger/
+
+.test-artifacts/

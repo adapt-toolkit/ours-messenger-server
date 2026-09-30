@@ -1,3 +1,5 @@
+import { producerConfig } from './notification-outbox.js';
+import { MessengerNotificationProducer } from './notification-producer.js';
 import { normalizeBasePath, prefixDocument } from './base-path.js';
 // The HTTP host. It attaches to one shared ours daemon and owns only the public
 // REST/SSE server plus messenger-specific WebPush state.
@@ -352,6 +354,7 @@ export async function start(
   let runtime: Runtime | undefined;
   let watcher: WatcherHandle | undefined;
   let delivery: PushDeliveryQueue | undefined;
+  let notificationOutbox: MessengerNotificationProducer | undefined;
   let events: MessengerEventBus | undefined;
   let http: Server | undefined;
   let startupProbe: StartupProbe | undefined;
@@ -371,6 +374,7 @@ export async function start(
       startupProbe = undefined;
       await watcher?.stop().catch((error) => reportFailure(log.warn, 'watcher stop', error));
       watcher = undefined;
+      await notificationOutbox?.close();
       await delivery?.stop().catch((error) => reportFailure(log.warn, 'push delivery stop', error));
       delivery = undefined;
       events?.close();
@@ -408,8 +412,11 @@ export async function start(
       store: push, client: runtime.client, identityCid: bound.cid, log,
       foregroundBindingIds: () => presence.onlineBindings(bound.cid),
     });
+    const notificationConfig = producerConfig();
+    if (notificationConfig) notificationOutbox = new MessengerNotificationProducer(cfg.stateDir, notificationConfig, bound.cid, runtime.client, log.warn);
+    const notificationDelivery = notificationOutbox ?? delivery;
     watcher = startWatcher(runtime.client, cfg.identity, push, log, events, {
-      delivery,
+      delivery: notificationDelivery,
       readPage: runtime.readNotificationPage,
     });
 
