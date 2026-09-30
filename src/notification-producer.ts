@@ -13,7 +13,7 @@ export class MessengerNotificationProducer {
       const event = await projectPushEvent(client, { contactId: record.sender_id, wireId: record.wire_id,
         kind: record.event === 'message_received' ? 'message' : 'file', senderName: record.sender_name } as PushJob);
       return { eventId, title: event.title.slice(0, 160), body: event.body.slice(0, 512) || 'New message',
-        url: `/fleet/chats?source=messenger&chat=${encodeURIComponent(record.sender_id)}&detail=1` };
+        url: `/fleet/chats?source=messenger&chat=${encodeURIComponent(record.sender_id)}&detail=1#chat-message-${encodeURIComponent(record.wire_id)}` };
     }, warn);
   }
   admit(record: Record<string, unknown>): PushAdmission {

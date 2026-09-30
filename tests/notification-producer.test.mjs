@@ -36,7 +36,8 @@ try {
   fail = false; await producer.outbox.drain();
   assert.equal(accepted.length, 2); assert.equal(accepted[0].body, 'Hello user');
   assert.equal(accepted[1].body, 'Photo: photo.png');
-  assert.match(accepted[0].url, /source=messenger&chat=PEER/);
+  assert.equal(accepted[0].url, '/fleet/chats?source=messenger&chat=PEER&detail=1#chat-message-MESSAGE');
+  assert.equal(accepted[1].url, '/fleet/chats?source=messenger&chat=PEER&detail=1#chat-message-FILE');
   assert.equal(JSON.parse(readFileSync(join(dir, 'notification-outbox.json'), 'utf8')).entries.length, 0);
   console.log('Messenger event watcher -> durable producer -> HTTP delivery passed without local push bindings');
 } finally { await producer.close(); server.closeAllConnections(); await new Promise(r => server.close(r)); }
