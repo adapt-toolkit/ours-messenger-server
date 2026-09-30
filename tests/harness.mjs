@@ -79,7 +79,7 @@ export async function startHarnessDaemon(tag, options = {}) {
     OURS_CONFIG: daemonConfig,
     OURS_STATE_DIR: stateDir,
     OURS_PORT: String(port),
-    OURS_BROKER_URL: 'wss://invalid.local/none',
+    OURS_BROKER_URL: options.brokerUrl ?? 'wss://invalid.local/none',
     OURS_API_VISIBILITY: 'owner',
     OURS_API_TOKEN: 'ab'.repeat(32),
     OURS_DAEMON_ID: instanceId,
