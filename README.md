@@ -404,3 +404,8 @@ Use the companion Fleet gateway and its local password/session authentication.
 See [Fleet setup and verification](docs/FLEET-PREVIEW.md) for connection requirements,
 current coverage and limitations. `npm run test:fleet` runs the current isolated fixture gates.
 The older mock walkthrough and its browser tests describe an earlier design stage.
+
+
+### Dedicated notification service
+
+Set `OURS_NOTIFICATIONS_ORIGIN` and a Messenger-scoped `OURS_NOTIFICATIONS_PRODUCER_TOKEN` to forward incoming messages/files to [ours-notifications](https://github.com/adapt-toolkit/ours-notifications). Both settings must be provided together. The canonical watcher durably queues notifications even without a local push binding, freezes projected content before its first HTTP attempt, and retries the same payload after outages/restarts. Keep the Messenger state directory across restarts. When configured, new events use the dedicated service; legacy pending push jobs may finish. Existing standalone push endpoints remain for compatibility.
