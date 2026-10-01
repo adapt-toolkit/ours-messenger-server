@@ -1,3 +1,4 @@
+import { readHumanProfile, writeHumanProfile, profileName } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
 // WHAT IS DELIBERATELY ABSENT, because an absence is invisible unless it is written
@@ -706,7 +707,43 @@ const ROUTES: Record<string, Handler> = {
   // ---- identity / profile --------------------------------------------------
   // The old browser surface called the read half `getProfileName`; the name is a
   // field on this result.
-  'GET /api/identity': async ({ client }) => publicIdentity(await client.currentIdentity()),
+  'GET /api/identity': async ({ client,deps }) => ({...publicIdentity(await client.currentIdentity()),humanProfile:readHumanProfile(deps.config.stateDir,deps.identityCid)}),
+
+  'POST /api/identity/profile': async ({ client,deps,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Human profile requires the root identity');
+    return writeHumanProfile(deps.config.stateDir,deps.identityCid,{name:profileName(body.name),surname:profileName(body.surname)});
+  },
+
+  // First-party setup operation: daemon signs the command using this bound root.
+  'GET /api/workspace/enrollment-identity': async ({client}) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
+    return {cid:identity.cid};
+  },
+  'POST /api/workspace/enroll': async ({ client,deps,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
+    const serverCid=str(body,'serverCid').toUpperCase();
+    if(!/^[A-F0-9]{64}$/.test(serverCid) || !/^[A-Za-z0-9_-]{43}$/.test(str(body,'hostWorkspaceId')))throw bad('Invalid workspace proof');
+    const challenge=body.challenge as Record<string,unknown>;
+    if(!challenge || !['nonce','workspaceId','accountId'].every(k=>typeof challenge[k]==='string' && /^[A-Za-z0-9_-]{43}$/.test(String(challenge[k]))) || !Number.isFinite(challenge.expiresAt) || Number(challenge.expiresAt)<=Date.now() || Number(challenge.expiresAt)>Date.now()+16*60000)throw bad('Workspace challenge expired or invalid');
+    let humanProfile;try{humanProfile={name:profileName(body.name),surname:profileName(body.surname)};}catch{throw bad('Name and Surname require printable text up to 100 characters');}
+    const invitation=str(body,'invitation');if(invitation.length>8192)throw bad('Workspace invitation too large');
+    writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
+    const peer=await client.addContact({invite:invitation});
+    if(peer.cid.toUpperCase()!==serverCid)throw bad('Enrollment server identity mismatch');
+    const contactDeadline=Date.now()+10000;
+    while(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid)) {
+      if(Date.now()>=contactDeadline)throw bad('Enrollment contact is not ready; obtain a fresh setup payload before retrying');
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const argumentsValue={type:'ours.app.bind-workspace.v1',accountId:String(challenge.accountId),workspaceId:String(challenge.workspaceId),nonce:String(challenge.nonce),hostWorkspaceId:String(body.hostWorkspaceId)};
+    const outcome=await client.sendCommand({contact:serverCid,command:'bind-workspace',arguments:argumentsValue});
+    if(!('sent' in outcome) || !outcome.sent)throw bad('Workspace proof was not sent');
+    const invite=await client.generateInvite({mode:'public'});
+    return {submitted:true,rootCid:identity.cid,ownerInvite:invite.blob};
+  },
 
   'GET /api/identities': async ({ client }) => client.listIdentities(),
 
