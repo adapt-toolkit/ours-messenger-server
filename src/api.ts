@@ -719,7 +719,7 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/workspace/enrollment-identity': async ({client}) => {
     const identity=await client.currentIdentity();
     if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
-    return {cid:identity.cid};
+    return {cid:identity.cid,preserveProfile:true};
   },
   'POST /api/workspace/enroll': async ({ client,deps,body }) => {
     const identity=await client.currentIdentity();
@@ -728,9 +728,11 @@ const ROUTES: Record<string, Handler> = {
     if(!/^[A-F0-9]{64}$/.test(serverCid) || !/^[A-Za-z0-9_-]{43}$/.test(str(body,'hostWorkspaceId')))throw bad('Invalid workspace proof');
     const challenge=body.challenge as Record<string,unknown>;
     if(!challenge || !['nonce','workspaceId','accountId'].every(k=>typeof challenge[k]==='string' && /^[A-Za-z0-9_-]{43}$/.test(String(challenge[k]))) || !Number.isFinite(challenge.expiresAt) || Number(challenge.expiresAt)<=Date.now() || Number(challenge.expiresAt)>Date.now()+16*60000)throw bad('Workspace challenge expired or invalid');
-    let humanProfile;try{humanProfile={name:profileName(body.name),surname:profileName(body.surname)};}catch{throw bad('Name and Surname require printable text up to 100 characters');}
+    const preserveProfile=optBool(body,'preserveProfile')===true;
+    let humanProfile;
+    if(!preserveProfile)try{humanProfile={name:profileName(body.name),surname:profileName(body.surname)};}catch{throw bad('Name and Surname require printable text up to 100 characters');}
     const invitation=str(body,'invitation');if(invitation.length>8192)throw bad('Workspace invitation too large');
-    writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
+    if(humanProfile)writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
     const peer=await client.addContact({invite:invitation});
     if(peer.cid.toUpperCase()!==serverCid)throw bad('Enrollment server identity mismatch');
     const contactDeadline=Date.now()+10000;
