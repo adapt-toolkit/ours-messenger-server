@@ -45,7 +45,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@ours.network/cli": "2.8.1-nightly.12",
+    "@ours.network/cli": "2.8.1-nightly.13",
     "@ours.network/daemon": "3.8.1-nightly.7",
     "@playwright/test": "^1.62.1",
     "@types/node": "^20.14.0",
