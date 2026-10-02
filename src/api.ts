@@ -267,6 +267,21 @@ function inlineBase64(body: Record<string, unknown>): string {
   return value;
 }
 
+/**
+ * The person on this host: the Human root itself, or a permanent identity the daemon describes as a role
+ * under a root. Temporary identities and identities without a described root are neither.
+ */
+function humanIdentity(value: unknown): { rootCid?: string } | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const identity = value as Record<string, unknown>;
+  if (identity.temporary !== false || typeof identity.cid !== 'string') return undefined;
+  if (identity.isRoot === true) return {};
+  const rootCid = identity.rootCid;
+  if (identity.isRoot !== false || identity.described !== true || typeof identity.roleId !== 'string' || !identity.roleId
+      || typeof rootCid !== 'string' || !/^[a-f0-9]{64}$/i.test(rootCid) || rootCid.toLowerCase() === identity.cid.toLowerCase()) return undefined;
+  return { rootCid };
+}
+
 function publicIdentity(value: unknown): Readonly<Record<string, string>> {
   if (value === null || typeof value !== 'object') return {};
   const identity = value as Record<string, unknown>;
@@ -710,17 +725,19 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/identity': async ({ client,deps }) => ({...publicIdentity(await client.currentIdentity()),humanProfile:readHumanProfile(deps.config.stateDir,deps.identityCid)}),
 
   'POST /api/identity/profile': async ({ client,deps,body }) => {
-    const identity=await client.currentIdentity();
-    if(!identity.isRoot || identity.temporary)throw bad('Human profile requires the root identity');
+    if(!humanIdentity(await client.currentIdentity()))throw bad('Human profile requires the Human root or a permanent identity under it');
     return writeHumanProfile(deps.config.stateDir,deps.identityCid,{name:profileName(body.name),surname:profileName(body.surname)});
   },
 
-  // First-party setup operation: daemon signs the command using this bound root.
+  // Who the person is on this host. A Messenger that runs as the Human root can sign the workspace proof
+  // itself; one that runs as the person's own identity under that root names the root the daemon describes
+  // for it, and the proof is then signed by that root outside Messenger.
   'GET /api/workspace/enrollment-identity': async ({client}) => {
-    const identity=await client.currentIdentity();
-    if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
-    return {cid:identity.cid,preserveProfile:true};
+    const identity=await client.currentIdentity(),human=humanIdentity(identity);
+    if(!human)throw bad('Workspace proof requires the bound Human root or a permanent identity under it');
+    return human.rootCid===undefined?{cid:identity.cid,preserveProfile:true}:{cid:identity.cid,rootCid:human.rootCid,preserveProfile:true};
   },
+  // First-party setup operation: daemon signs the command using this bound root.
   'POST /api/workspace/enroll': async ({ client,deps,body }) => {
     const identity=await client.currentIdentity();
     if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
