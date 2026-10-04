@@ -413,3 +413,25 @@ Set `OURS_NOTIFICATIONS_ORIGIN` and a Messenger-scoped `OURS_NOTIFICATIONS_PRODU
 Workspace enrollment supports optional `preserveProfile: true` on its protected POST endpoint. This skips human profile creation/replacement (including an absent profile); root checks and the signed binding command remain mandatory. The protected enrollment-identity response advertises `preserveProfile: true` so clients can fail closed against older servers. Omitted/false keeps fresh-host account profile setup.
 
 Messenger may run as the Human root or as a permanent identity under it. For the latter, the enrollment-identity response also carries `rootCid`, the root the daemon describes for the bound identity; `POST /api/identity/profile` accepts both. Only a Messenger bound to the root itself signs the workspace binding on `POST /api/workspace/enroll`; for an identity under the root the caller obtains that signature from the root outside Messenger.
+
+After successful contact removal, the notification producer durably retires that
+conversation through the notification service's scoped `/api/v1/delete-target`
+route. Pending sends for that contact are removed; cleanup follows any already
+inflight send and retries after service outages or restart. Watch replay confirms
+absence against a complete contacts/pending inventory before dropping an event.
+Inventory errors preserve the queue. The gateway and notification service must
+support this producer lifecycle route before source cleanup can be delivered.
+
+Profile-preserving workspace enrollment reuses an already authenticated contact
+with the exact pinned enrollment server CID. This permits a fresh signed account
+challenge after the one-time invitation was used for registration retirement;
+account-side invitation provenance or an exact signed replacement handoff still
+controls proof acceptance.
+
+`POST /api/workspace/unregister` carries the first-party retirement command when
+Messenger already holds the Human root lease. It requires local API/CSRF
+authentication, a permanent root matching `rootCid`, the exact ready enrollment
+server contact, and well-formed workspace/host/nonce identifiers. An optional
+three-field replacement challenge is forwarded unchanged. The account service
+owns retirement authorization and cleanup; this route only sends the signed
+command and acknowledges submission.

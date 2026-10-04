@@ -7,8 +7,8 @@ import {serveApi} from '../src/api.ts';
 import {writeHumanProfile,readHumanProfile} from '../src/workspace-profile.ts';
 const dir=mkdtempSync(join(tmpdir(),'messenger-preserve-'));
 const root='a'.repeat(64),serverCid='b'.repeat(64),commands=[];
-let isRoot=true,described={};
-const client={currentIdentity:async()=>({cid:root,isRoot,temporary:false,...described}),addContact:async()=>({cid:serverCid}),listContacts:async()=>({contacts:[{container_id:serverCid}]}),sendCommand:async value=>{commands.push(value);return {sent:true};},generateInvite:async()=>({blob:'fixture-public-invite'})};
+let isRoot=true,described={},invitationUses=0;
+const client={currentIdentity:async()=>({cid:root,isRoot,temporary:false,...described}),addContact:async()=>{invitationUses++;return {cid:serverCid};},listContacts:async()=>({contacts:[{container_id:serverCid}]}),sendCommand:async value=>{commands.push(value);return {sent:true};},generateInvite:async()=>({blob:'fixture-public-invite'})};
 const deps={runtime:{client},config:{stateDir:dir,publicOrigin:'http://localhost'},identityCid:root};
 const http=createServer((req,res)=>void serveApi(req,res,deps));
 await new Promise(resolve=>http.listen(0,'127.0.0.1',resolve));
@@ -22,12 +22,13 @@ try {
  const preserved=await post({...body,preserveProfile:true,name:undefined,surname:undefined});assert.equal(preserved.status,200);
  assert.deepEqual(readFileSync(file),original,'existing profile bytes unchanged');
  assert.deepEqual(readHumanProfile(dir,root),{name:'Original',surname:'Human'});
+ assert.equal(invitationUses,0,'retained pinned contact does not consume an invitation again');
  assert.equal(commands.length,1);assert.equal(commands[0].command,'bind-workspace');assert.equal(commands[0].arguments.nonce,body.challenge.nonce);
  rmSync(file);
  assert.equal((await post({...body,preserveProfile:true})).status,200);assert.deepEqual(readdirSync(dir),[],'absent profile stays absent');
  assert.equal((await post({...body,preserveProfile:'true'})).status,400);
  isRoot=false;assert.equal((await post({...body,preserveProfile:true})).status,400);assert.equal(commands.length,2,'delegated identity never submits proof');isRoot=true;
- assert.equal((await post(body)).status,200);assert.deepEqual(readHumanProfile(dir,root),{name:'New',surname:'Account'},'fresh path still fills account name');
+ assert.equal((await post(body)).status,200);assert.equal(invitationUses,1,'fresh enrollment still verifies invitation server CID');assert.deepEqual(readHumanProfile(dir,root),{name:'New',surname:'Account'},'fresh path still fills account name');
  // The person's own identity under the Human root: it names its root, takes Name and Surname, and never signs the proof.
  const parent='d'.repeat(64),identity=()=>fetch(base+'workspace/enrollment-identity'),profile=value=>fetch(base+'identity/profile',{method:'POST',headers:{Origin:'http://localhost','Content-Type':'application/json','X-Ours-Messenger-CSRF':'1'},body:JSON.stringify(value)});
  rmSync(join(dir,`human-${root}.json`));isRoot=false;described={described:true,roleId:'role-1',rootCid:parent.toUpperCase()};
