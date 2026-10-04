@@ -12,9 +12,12 @@ const post=async(value=body,csrf=true)=>{const res=await fetch(url,{method:'POST
 try {
  assert.equal((await post(body,false)).status,403);assert.equal(commands.length,0);
  for(const change of [()=>isRoot=false,()=>temporary=true,()=>identityCid='d'.repeat(64),()=>connected=false]){change();assert.equal((await post()).status,400);assert.equal(commands.length,0);isRoot=true;temporary=false;identityCid=root;connected=true;}
- for(const value of [{...body,operationNonce:'invalid'},{...body,serverCid:'bad'},{...body,replacement:{...body.replacement,extra:'bad'}},{...body,replacement:{...body.replacement,nonce:'bad'}}]){assert.equal((await post(value)).status,400);assert.equal(commands.length,0);}
+ for(const value of [{...body,operationExpiresAt:0},{...body,operationExpiresAt:1.5},{...body,operationExpiresAt:Date.now()+86460000},{...body,operationNonce:'invalid'},{...body,serverCid:'bad'},{...body,replacement:{...body.replacement,extra:'bad'}},{...body,replacement:{...body.replacement,nonce:'bad'}}]){assert.equal((await post(value)).status,400);assert.equal(commands.length,0);}
  const result=await post();assert.equal(result.status,200);assert.deepEqual(result.value,{submitted:true,rootCid:root});
  assert.deepEqual(commands[0],{contact:serverCid.toUpperCase(),command:'unregister-workspace',arguments:{type:'ours.app.unregister-workspace.v1',workspaceId:body.workspaceId,hostWorkspaceId:body.hostWorkspaceId,operationNonce:body.operationNonce,replacement:body.replacement}});
- sent=false;assert.equal((await post({...body,replacement:undefined})).status,400);assert.equal(commands[1].arguments.replacement,undefined);
+ const deadline=Date.now()+86400000;assert.equal((await post({...body,operationExpiresAt:deadline})).status,200);assert.equal(commands[1].arguments.operationExpiresAt,deadline);
+ // Expired signed operations must reach App so it can issue the private terminal refusal.
+ assert.equal((await post({...body,operationExpiresAt:Date.now()-1000})).status,200);
+ sent=false;assert.equal((await post({...body,replacement:undefined})).status,400);assert.equal(commands[3].arguments.replacement,undefined);
  console.log('Root-held Messenger retirement route: CSRF, immutable expected root, root-only delegation, ready server contact, strict challenge shape and send acknowledgement PASS');
 }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}

@@ -749,9 +749,13 @@ const ROUTES: Record<string, Handler> = {
     if(!identity.isRoot || identity.temporary)throw bad('Workspace retirement requires the bound Human root');
     const rootCid=str(body,'rootCid').toUpperCase(),serverCid=str(body,'serverCid').toUpperCase();
     if(!/^[A-F0-9]{64}$/.test(rootCid) || !/^[A-F0-9]{64}$/.test(serverCid) || identity.cid.toUpperCase()!==rootCid)throw bad('Workspace retirement identity mismatch');
-    const command:Record<string,string|Record<string,string>>={type:'ours.app.unregister-workspace.v1'};
+    const command:Record<string,string|number|Record<string,string>>={type:'ours.app.unregister-workspace.v1'};
     for(const key of ['workspaceId','hostWorkspaceId','operationNonce']) {
       const value=str(body,key);if(!/^[A-Za-z0-9_-]{43}$/.test(value))throw bad('Invalid workspace retirement');command[key]=value;
+    }
+    if(body.operationExpiresAt!==undefined) {
+      if(!Number.isSafeInteger(body.operationExpiresAt) || Number(body.operationExpiresAt)<=0 || Number(body.operationExpiresAt)>Date.now()+86400000)throw bad('Invalid retirement deadline');
+      command.operationExpiresAt=Number(body.operationExpiresAt);
     }
     if(body.replacement!==undefined) {
       const replacement=body.replacement as Record<string,unknown>;
