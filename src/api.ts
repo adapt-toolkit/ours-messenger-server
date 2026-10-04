@@ -60,6 +60,7 @@ export interface ApiDeps {
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
+  readonly retireContactNotifications?: (cid: string) => void;
   readonly commandInvocations?: CommandInvocationStore;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
@@ -685,8 +686,13 @@ const ROUTES: Record<string, Handler> = {
   'POST /api/contacts/add': async ({ client, body }) =>
     client.addContact({ invite: str(body, 'invite'), name: optStr(body, 'name') }),
 
-  'POST /api/contacts/remove': async ({ client, body }) =>
-    client.removeContact({ contact: str(body, 'contact') }),
+  'POST /api/contacts/remove': async ({ client, body, deps }) => {
+    const contact = str(body, 'contact');
+    const canonical = deps.retireContactNotifications ? (await resolveContact(client, contact)).cid : contact;
+    const result = await client.removeContact({ contact: canonical });
+    deps.retireContactNotifications?.(canonical);
+    return result;
+  },
 
   'POST /api/contacts/rename': async ({ client, body }) =>
     client.renameContact({ contact: str(body, 'contact'), name: str(body, 'name') }),
@@ -738,6 +744,27 @@ const ROUTES: Record<string, Handler> = {
     return human.rootCid===undefined?{cid:identity.cid,preserveProfile:true}:{cid:identity.cid,rootCid:human.rootCid,preserveProfile:true};
   },
   // First-party setup operation: daemon signs the command using this bound root.
+  'POST /api/workspace/unregister': async ({ client,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace retirement requires the bound Human root');
+    const rootCid=str(body,'rootCid').toUpperCase(),serverCid=str(body,'serverCid').toUpperCase();
+    if(!/^[A-F0-9]{64}$/.test(rootCid) || !/^[A-F0-9]{64}$/.test(serverCid) || identity.cid.toUpperCase()!==rootCid)throw bad('Workspace retirement identity mismatch');
+    const command:Record<string,unknown>={type:'ours.app.unregister-workspace.v1'};
+    for(const key of ['workspaceId','hostWorkspaceId','operationNonce']) {
+      const value=str(body,key);if(!/^[A-Za-z0-9_-]{43}$/.test(value))throw bad('Invalid workspace retirement');command[key]=value;
+    }
+    if(body.replacement!==undefined) {
+      const replacement=body.replacement as Record<string,unknown>;
+      if(!replacement || typeof replacement!=='object' || Object.keys(replacement).length!==3
+        || !['workspaceId','accountId','nonce'].every(key=>typeof replacement[key]==='string' && /^[A-Za-z0-9_-]{43}$/.test(replacement[key] as string)))throw bad('Invalid replacement challenge');
+      command.replacement=replacement;
+    }
+    if(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid))throw bad('Original enrollment contact is not ready');
+    const outcome=await client.sendCommand({contact:serverCid,command:'unregister-workspace',arguments:command});
+    if(!('sent' in outcome) || !outcome.sent)throw bad('Workspace retirement was not sent');
+    return {submitted:true,rootCid:identity.cid};
+  },
+
   'POST /api/workspace/enroll': async ({ client,deps,body }) => {
     const identity=await client.currentIdentity();
     if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
@@ -750,8 +777,13 @@ const ROUTES: Record<string, Handler> = {
     if(!preserveProfile)try{humanProfile={name:profileName(body.name),surname:profileName(body.surname)};}catch{throw bad('Name and Surname require printable text up to 100 characters');}
     const invitation=str(body,'invitation');if(invitation.length>8192)throw bad('Workspace invitation too large');
     if(humanProfile)writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
-    const peer=await client.addContact({invite:invitation});
-    if(peer.cid.toUpperCase()!==serverCid)throw bad('Enrollment server identity mismatch');
+    // A retained authenticated peer can carry another signed challenge. The
+    // one-time invitation may already have been used by registration retirement.
+    const connected=preserveProfile && (await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid);
+    if(!connected) {
+      const peer=await client.addContact({invite:invitation});
+      if(peer.cid.toUpperCase()!==serverCid)throw bad('Enrollment server identity mismatch');
+    }
     const contactDeadline=Date.now()+10000;
     while(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid)) {
       if(Date.now()>=contactDeadline)throw bad('Enrollment contact is not ready; obtain a fresh setup payload before retrying');

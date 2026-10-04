@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { dirname } from 'node:path';
 
 export interface NotificationInput { eventId: string; title: string; body: string; url: string; }
-interface Entry { id: string; value: unknown; payload?: NotificationInput; }
+interface Entry { id: string; value: unknown; payload?: NotificationInput; operation?: 'delete-target'; }
 export interface ProducerConfig { origin: string; token: string; }
 export function producerConfig(env: NodeJS.ProcessEnv = process.env): ProducerConfig | undefined {
   const origin = env.OURS_NOTIFICATIONS_ORIGIN, token = env.OURS_NOTIFICATIONS_PRODUCER_TOKEN;
@@ -22,7 +22,7 @@ export class NotificationOutbox {
   private running?: Promise<void>;
   private timer: ReturnType<typeof setInterval>;
   constructor(private readonly file: string, private readonly config: ProducerConfig,
-    private readonly project: (value: unknown, id: string) => Promise<NotificationInput>,
+    private readonly project: (value: unknown, id: string) => Promise<NotificationInput | undefined>,
     private readonly warn: (message: string) => void = () => {}) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { entries: [] };
@@ -48,17 +48,27 @@ export class NotificationOutbox {
     this.persist([...this.entries, { id, value }], cursor);
     return true;
   }
+  retireTarget(url: string, matches: (value: unknown, payload?: NotificationInput) => boolean): void {
+    const id = `delete-target:${url}`;
+    const retained = this.entries.filter(entry => entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
+    if (!retained.some(entry => entry.id === id)) retained.push({ id, value: { url }, operation: 'delete-target' });
+    // A cleanup request must survive service outage and cannot be dropped by send capacity limits.
+    this.persist(retained);
+  }
   drain(): Promise<void> {
     return this.running ??= this.drainOnce().finally(() => { this.running = undefined; });
   }
   private async drainOnce(): Promise<void> {
     for (const entry of [...this.entries].slice(0, 32)) {
       try {
-        const value = entry.payload ?? await this.project(entry.value, entry.id);
+        if (!this.entries.some(current => current.id === entry.id)) continue;
+        const value = entry.operation === 'delete-target' ? entry.value : entry.payload ?? await this.project(entry.value, entry.id);
+        if (!this.entries.some(current => current.id === entry.id)) continue;
+        if (value === undefined) { this.persist(this.entries.filter(current => current.id !== entry.id)); continue; }
         // Freeze the canonical projection before any network attempt. A crash
         // after service acceptance must replay the identical dedupe payload.
-        if (!entry.payload) this.persist(this.entries.map(e => e.id === entry.id ? { ...e, payload: value } : e));
-        const response = await fetch(this.config.origin + '/api/v1/send', {
+        if (!entry.operation && !entry.payload) this.persist(this.entries.map(e => e.id === entry.id ? { ...e, payload: value as NotificationInput } : e));
+        const response = await fetch(this.config.origin + (entry.operation === 'delete-target' ? '/api/v1/delete-target' : '/api/v1/send'), {
           method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
           headers: { Authorization: `Bearer ${this.config.token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(value),

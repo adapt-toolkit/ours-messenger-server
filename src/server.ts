@@ -433,6 +433,7 @@ export async function start(
       }),
       events,
       identityCid: bound.cid,
+      retireContactNotifications: notificationOutbox ? cid => notificationOutbox!.retireContact(cid) : undefined,
     };
 
     const moduleDir = dirname(fileURLToPath(import.meta.url));
