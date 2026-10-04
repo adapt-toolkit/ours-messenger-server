@@ -45,5 +45,10 @@ try{
  unavailable=true;admit('KEPT','retryable');await producer.outbox.drain();assert.equal(entries().length,1);
  unavailable=false;malformed=true;await producer.outbox.drain();assert.equal(entries().length,1);
  malformed=false;await producer.outbox.drain();assert.equal(entries().length,0);
+ // A delayed cleanup must preserve a contact re-added before service recovery.
+ failDelete=true;contacts=[];producer.retireContact('RECREATED');await producer.outbox.drain();
+ assert.ok(entries().some(row=>row.operation==='delete-target'));
+ contacts=[{container_id:'RECREATED'}];failDelete=false;const deletesBefore=deliveries.filter(row=>row.path==='/api/v1/delete-target').length;
+ await producer.outbox.drain();assert.equal(entries().length,0);assert.equal(deliveries.filter(row=>row.path==='/api/v1/delete-target').length,deletesBefore);
  console.log('Contact removal canonical CID, failed removal preservation, inflight send cleanup order, durable outage/restart, unrelated contact and pending/contact-inventory failure preservation PASS');
 }finally{await producer.close();for(const server of [api,service]){server.closeAllConnections();await new Promise(r=>server.close(r));}}

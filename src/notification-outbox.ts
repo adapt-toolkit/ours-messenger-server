@@ -23,7 +23,8 @@ export class NotificationOutbox {
   private timer: ReturnType<typeof setInterval>;
   constructor(private readonly file: string, private readonly config: ProducerConfig,
     private readonly project: (value: unknown, id: string) => Promise<NotificationInput | undefined>,
-    private readonly warn: (message: string) => void = () => {}) {
+    private readonly warn: (message: string) => void = () => {},
+    private readonly shouldRetire?: (url: string) => Promise<boolean>) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { entries: [] };
     this.entries = Array.isArray(saved) ? saved : saved.entries;
@@ -62,7 +63,9 @@ export class NotificationOutbox {
     for (const entry of [...this.entries].slice(0, 32)) {
       try {
         if (!this.entries.some(current => current.id === entry.id)) continue;
-        const value = entry.operation === 'delete-target' ? entry.value : entry.payload ?? await this.project(entry.value, entry.id);
+        const value = entry.operation === 'delete-target'
+          ? this.shouldRetire && !await this.shouldRetire((entry.value as {url:string}).url) ? undefined : entry.value
+          : entry.payload ?? await this.project(entry.value, entry.id);
         if (!this.entries.some(current => current.id === entry.id)) continue;
         if (value === undefined) { this.persist(this.entries.filter(current => current.id !== entry.id)); continue; }
         // Freeze the canonical projection before any network attempt. A crash

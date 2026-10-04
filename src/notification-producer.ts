@@ -9,19 +9,21 @@ export class MessengerNotificationProducer {
   readonly outbox: NotificationOutbox;
   constructor(stateDir: string, config: ProducerConfig, private readonly identityCid: string,
     client: PushDeliveryOptions['client'] & Partial<Pick<OursClient, 'listContacts'>>, warn: (message: string) => void) {
+    const knownContact=async(cid:string) => {
+      if(!client.listContacts)return undefined;
+      const view=await client.listContacts();
+      if(!Array.isArray(view.contacts) || !Array.isArray(view.pending)
+        || [...view.contacts,...view.pending].some(contact=>typeof contact?.container_id!=='string'))throw Error('Contact inventory unavailable');
+      return [...view.contacts,...view.pending].some(contact=>contact.container_id.toLowerCase()===cid.toLowerCase());
+    };
     this.outbox = new NotificationOutbox(join(stateDir, 'notification-outbox.json'), config, async (value, eventId) => {
       const record = value as { sender_id: string; wire_id: string; event: string; sender_name?: string };
-      if (client.listContacts) {
-        const view = await client.listContacts();
-        if (!Array.isArray(view.contacts) || !Array.isArray(view.pending)
-          || [...view.contacts, ...view.pending].some(contact => typeof contact?.container_id !== 'string')) throw Error('Contact inventory unavailable');
-        if (![...view.contacts, ...view.pending].some(contact => contact.container_id.toLowerCase() === record.sender_id.toLowerCase())) return;
-      }
+      if(await knownContact(record.sender_id)===false)return;
       const event = await projectPushEvent(client, { contactId: record.sender_id, wireId: record.wire_id,
         kind: record.event === 'message_received' ? 'message' : 'file', senderName: record.sender_name } as PushJob);
       return { eventId, title: event.title.slice(0, 160), body: event.body.slice(0, 512) || 'New message',
         url: `/fleet/chats?source=messenger&chat=${encodeURIComponent(record.sender_id)}&detail=1#chat-message-${encodeURIComponent(record.wire_id)}` };
-    }, warn);
+    }, warn, async url=>await knownContact(new URL(url,'https://ours.invalid').searchParams.get('chat')!)!==true);
   }
   admit(record: Record<string, unknown>): PushAdmission {
     if (!['message_received', 'file_received'].includes(String(record.event))
