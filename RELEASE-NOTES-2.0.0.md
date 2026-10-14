@@ -34,6 +34,7 @@ versions the upstream `main` bump jobs are expected to produce.
 
 ## Features
 
+- Adopt canonical conversation notification routes.
 - send incoming message and file notifications to dedicated service
 - add ACP voice messages and live voice placeholder
 - connect wireframe app to local Fleet and Messenger APIs
