@@ -8,6 +8,8 @@ import { OursClient } from '@ours.network/sdk/client';
 import { startRuntime } from '../src/daemon.ts';
 
 const BUILD = {name:'messenger',version:'fixture',sha:'1'.repeat(40),dirty:false};
+// Durable ownership uses Linux flock and /proc; native fallback is tested separately.
+const ownerTest = {timeout:5000, skip:process.platform !== 'linux' && 'requires Linux flock and /proc ownership activation'};
 const ACK = {released:[],closed:[],attempted:0,notified:0,failed:0};
 const keys=['OURS_DAEMON_URL','OURS_DAEMON_ID','OURS_DAEMON_CREDENTIAL_PATH'];
 async function selected(t, run, endpoint='http://127.0.0.1:3210') {
@@ -25,7 +27,7 @@ const client=(extra={})=>({version:async()=>({version:'fixture',compat:3,stateDi
   releaseLease:async()=>ACK,close:async()=>{},...extra});
 const record=path=>JSON.parse(readFileSync(path,'utf8'));
 
-test('owner is privately persisted before admission and terminal intent precedes release', {timeout:5000}, async t=>{
+test('owner is privately persisted before admission and terminal intent precedes release', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     let original;
     const runtime=await startRuntime(cfg,BUILD,async options=>{
@@ -50,7 +52,7 @@ test('owner is privately persisted before admission and terminal intent precedes
   });
 });
 
-test('failed startup closes transport and permits the same nonterminal owner to resume', {timeout:5000}, async t=>{
+test('failed startup closes transport and permits the same nonterminal owner to resume', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     let firstOwner,closed=0;
     await assert.rejects(startRuntime(cfg,BUILD,async options=>{
@@ -67,7 +69,7 @@ test('failed startup closes transport and permits the same nonterminal owner to 
   });
 });
 
-test('second activation refuses before SDK admission and never replaces the lock inode', {timeout:5000}, async t=>{
+test('second activation refuses before SDK admission and never replaces the lock inode', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     const first=await startRuntime(cfg,BUILD,async()=>client());
     let second;
@@ -87,7 +89,7 @@ test('second activation refuses before SDK admission and never replaces the lock
   });
 });
 
-test('terminal release failure is immutable across retry and acknowledged before a fresh owner', {timeout:5000}, async t=>{
+test('terminal release failure is immutable across retry and acknowledged before a fresh owner', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     let firstEvent;
     const runtime=await startRuntime(cfg,BUILD,async()=>client({releaseLease:async args=>{
@@ -125,7 +127,7 @@ test('terminal release failure is immutable across retry and acknowledged before
   });
 });
 
-test('changed selection refuses without retargeting a saved owner or starting a client', {timeout:5000}, async t=>{
+test('changed selection refuses without retargeting a saved owner or starting a client', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     await assert.rejects(startRuntime(cfg,BUILD,async()=>client({version:async()=>{throw Error('offline');}})),/offline/);
     const saved=readFileSync(path,'utf8');
@@ -137,7 +139,7 @@ test('changed selection refuses without retargeting a saved owner or starting a 
   });
 });
 
-test('actual public SDK incomplete ACK retains terminal state and the same event replays', {timeout:5000}, async t=>{
+test('actual public SDK incomplete ACK retains terminal state and the same event replays', ownerTest, async t=>{
   let complete=false;const delivered=[];
   const server=createServer((req,res)=>{
     if(req.url==='/version') {res.end(JSON.stringify({version:'fixture',compat:3,stateDir:'/daemon'}));return;}
@@ -164,7 +166,7 @@ test('actual public SDK incomplete ACK retains terminal state and the same event
   },endpoint);} finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
 
-test('activation remains held until asynchronous transport close settles', {timeout:5000}, async t=>{
+test('activation remains held until asynchronous transport close settles', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     let finish,entered;
     const gate=new Promise(resolve=>finish=resolve);
@@ -181,7 +183,7 @@ test('activation remains held until asynchronous transport close settles', {time
   });
 });
 
-test('dangling owner record symlink is preserved and refused before admission', {timeout:5000}, async t=>{
+test('dangling owner record symlink is preserved and refused before admission', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     const {symlinkSync,lstatSync,readlinkSync}=await import('node:fs');
     symlinkSync('missing-owner-record',path);
@@ -195,7 +197,7 @@ test('dangling owner record symlink is preserved and refused before admission', 
   });
 });
 
-test('unsafe ancestry refuses before creating child application state', {timeout:5000}, async t=>{
+test('unsafe ancestry refuses before creating child application state', ownerTest, async t=>{
   await selected(t,async(cfg)=>{
     const {mkdirSync,chmodSync}=await import('node:fs');
     const unsafe=join(cfg.stateDir,'unsafe');mkdirSync(unsafe);chmodSync(unsafe,0o777);
@@ -225,7 +227,7 @@ test('unavailable flock without a saved owner preserves native V1 process behavi
   });
 });
 
-test('unavailable flock with saved state never resumes an owner unlocked', {timeout:5000}, async t=>{
+test('unavailable flock with saved state never resumes an owner unlocked', ownerTest, async t=>{
   await selected(t,async(cfg,path)=>{
     await assert.rejects(startRuntime(cfg,BUILD,async()=>client({version:async()=>{throw Error('offline');}})),/offline/);
     const saved=readFileSync(path,'utf8');
@@ -235,5 +237,22 @@ test('unavailable flock with saved state never resumes an owner unlocked', {time
       await assert.rejects(startRuntime(cfg,BUILD,async()=>{admitted=true;return client();}),/locking|activation|qualified/i);
       assert.equal(admitted,false);assert.equal(readFileSync(path,'utf8'),saved);
     } finally {process.env.PATH=oldPath;}
+  });
+});
+
+test('non-Linux saved ownership refuses before SDK admission and preserves the record', {
+  timeout:5000, skip:process.platform === 'linux' && 'native fallback applies outside Linux',
+}, async t=>{
+  await selected(t,async(cfg,path)=>{
+    const {writeFileSync}=await import('node:fs');
+    const saved=JSON.stringify({version:1,ownerInstanceId:'saved-owner',phase:'active',
+      selection:{endpoint:'http://127.0.0.1:3210',expectedInstanceId:'fixture-daemon',
+        credentialPath:'/private/current-token',identity:cfg.identity}});
+    writeFileSync(path,saved,{mode:0o600});
+    let admitted=false;
+    await assert.rejects(startRuntime(cfg,BUILD,async()=>{admitted=true;return client();}),/qualified V1 activation and original selection/);
+    assert.equal(admitted,false);
+    assert.equal(readFileSync(path,'utf8'),saved);
+    assert.equal(existsSync(join(cfg.stateDir,'owner-session.lock')),false);
   });
 });

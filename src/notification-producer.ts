@@ -4,6 +4,19 @@ import { NotificationOutbox, type ProducerConfig } from './notification-outbox.j
 import { projectPushEvent, type PushDeliveryOptions } from './push-delivery.js';
 import type { PushAdmission, PushJob } from './push.js';
 
+/** Unsupported persisted links must not authorize contact cleanup. */
+function contactTargetId(path: string): string | null {
+  try {
+    if (typeof path !== 'string' || /[\\\x00-\x20]|%(?:2f|5c|00|0[ad])/i.test(path)) return null;
+    const match = /^\/fleet\/chats\/contacts\/([^/?#]+)(?:[?#]|$)/.exec(path);
+    if (!match) return null;
+    const url = new URL(path, 'https://ours.invalid');
+    if (['source', 'chat', 'task', 'detail'].some(key => url.searchParams.has(key))) return null;
+    const id = decodeURIComponent(match[1]);
+    return id && id !== '.' && id !== '..' && !/[\x00-\x1f\x7f]/.test(id) ? id : null;
+  } catch { return null; }
+}
+
 /** Durable event producer even when the user has no registered push devices. */
 export class MessengerNotificationProducer {
   readonly outbox: NotificationOutbox;
@@ -22,8 +35,12 @@ export class MessengerNotificationProducer {
       const event = await projectPushEvent(client, { contactId: record.sender_id, wireId: record.wire_id,
         kind: record.event === 'message_received' ? 'message' : 'file', senderName: record.sender_name } as PushJob);
       return { eventId, title: event.title.slice(0, 160), body: event.body.slice(0, 512) || 'New message',
-        url: `/fleet/chats?source=messenger&chat=${encodeURIComponent(record.sender_id)}&detail=1#chat-message-${encodeURIComponent(record.wire_id)}` };
-    }, warn, async url=>await knownContact(new URL(url,'https://ours.invalid').searchParams.get('chat')!)!==true);
+        url: `/fleet/chats/contacts/${encodeURIComponent(record.sender_id)}#chat-message-${encodeURIComponent(record.wire_id)}` };
+    }, warn, async url=>{
+      const cid=contactTargetId(url);
+      if(!cid)return undefined;
+      return await knownContact(cid)!==true;
+    });
   }
   admit(record: Record<string, unknown>): PushAdmission {
     if (!['message_received', 'file_received'].includes(String(record.event))
@@ -36,13 +53,12 @@ export class MessengerNotificationProducer {
     return { status: admitted ? 'queued' : 'saturated' };
   }
   retireContact(cid: string): void {
-    const url = `/fleet/chats?source=messenger&chat=${encodeURIComponent(cid)}`;
+    const url = `/fleet/chats/contacts/${encodeURIComponent(cid)}`;
     this.outbox.retireTarget(url, (value, payload) => {
       const record = value as { sender_id?: unknown };
       if (typeof record?.sender_id === 'string' && record.sender_id.toLowerCase() === cid.toLowerCase()) return true;
       if (!payload) return false;
-      try { const target = new URL(payload.url, 'https://ours.invalid'); return target.pathname === '/fleet/chats' && target.searchParams.get('source') === 'messenger' && target.searchParams.get('chat')?.toLowerCase() === cid.toLowerCase(); }
-      catch { return false; }
+      return contactTargetId(payload.url)?.toLowerCase() === cid.toLowerCase();
     });
     void this.outbox.drain();
   }

@@ -12,7 +12,10 @@ assert.ok(address && typeof address === 'object');
 const url = `ws://127.0.0.1:${address.port}/api/presence`;
 const registry = new PresenceRegistry();
 const events = new MessengerEventBus();
+let resolveOffline;
+const offline = new Promise(resolve => { resolveOffline = resolve; });
 const presence = attachPresenceServer(http, registry, {
+  onChange: (cid, online) => { if (cid === 'CID-ME' && !online) resolveOffline(); },
   allowedOrigin: 'https://messenger.example',
   verify: (frame) => frame.identity === 'CID-ME' && frame.endpoint === 'ENDPOINT' && frame.auth === 'AUTH'
     ? { cid: 'CID-ME', bindingId: 'BINDING-PC' } : null,
@@ -47,7 +50,16 @@ try {
 
   socket.close();
   await once(socket, 'close');
-  await new Promise((resolve) => setImmediate(resolve));
+  // Client close can precede the peer's close callback. Wait for server cleanup.
+  let offlineTimeout;
+  try {
+    await Promise.race([
+      offline,
+      new Promise((_resolve, reject) => {
+        offlineTimeout = setTimeout(() => reject(new Error('server did not observe disconnect')), 1000);
+      }),
+    ]);
+  } finally { clearTimeout(offlineTimeout); }
   assert.equal(registry.isOnline('CID-ME'), false, 'socket loss immediately resumes background push eligibility');
   assert.deepEqual([...registry.onlineBindings('CID-ME')], []);
 } finally {
