@@ -435,3 +435,5 @@ server contact, and well-formed workspace/host/nonce identifiers. An optional
 three-field replacement challenge is forwarded unchanged. The account service
 owns retirement authorization and cleanup; this route only sends the signed
 command and acknowledges submission.
+
+Conversation notifications use `/fleet/chats/contacts/:contactId`, escaping the ID once and preserving the matching message anchor. Contact retirement matches canonical contact identity independent of filters and anchors. Deploy the app, notification service, and producers together: old query-based conversation links are intentionally unsupported. Previously frozen delivery URLs replay unchanged for idempotency, and unsupported persisted cleanup URLs remain pending without being sent or blocking canonical cleanup. Contact lifecycle authorization and inventory checks still apply.
