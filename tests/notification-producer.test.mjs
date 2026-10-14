@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MessengerNotificationProducer } from '../src/notification-producer.ts';
 import { PushStore } from '../src/push.ts';
@@ -36,8 +36,14 @@ try {
   fail = false; await producer.outbox.drain();
   assert.equal(accepted.length, 2); assert.equal(accepted[0].body, 'Hello user');
   assert.equal(accepted[1].body, 'Photo: photo.png');
-  assert.equal(accepted[0].url, '/fleet/chats?source=messenger&chat=PEER&detail=1#chat-message-MESSAGE');
-  assert.equal(accepted[1].url, '/fleet/chats?source=messenger&chat=PEER&detail=1#chat-message-FILE');
+  assert.equal(accepted[0].url, '/fleet/chats/contacts/PEER#chat-message-MESSAGE');
+  assert.equal(accepted[1].url, '/fleet/chats/contacts/PEER#chat-message-FILE');
   assert.equal(JSON.parse(readFileSync(join(dir, 'notification-outbox.json'), 'utf8')).entries.length, 0);
+  await producer.close();
+  const file=join(dir,'notification-outbox.json'),saved=JSON.parse(readFileSync(file,'utf8'));
+  const legacy={eventId:'frozen-old',title:'Frozen',body:'Original',url:'/fleet/chats?source=messenger&chat=PEER&detail=1#chat-message-old'};
+  saved.entries=[{id:legacy.eventId,value:{},payload:legacy}];writeFileSync(file,JSON.stringify(saved));
+  producer=new MessengerNotificationProducer(dir,config,'USER',client,()=>{});await producer.outbox.drain();
+  assert.deepEqual(accepted.at(-1),legacy);
   console.log('Messenger event watcher -> durable producer -> HTTP delivery passed without local push bindings');
 } finally { await producer.close(); server.closeAllConnections(); await new Promise(r => server.close(r)); }
