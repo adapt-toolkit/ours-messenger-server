@@ -20,7 +20,6 @@ import { projectPage } from '../src/conversation.ts';
 import { projectPushEvent } from '../src/push-delivery.ts';
 import { contactDisplayName, isCoworkRoomContact, roomContactLabel } from '../shared/roomMessageCore.mjs';
 import { presentContacts } from '../src/api.ts';
-import { contactName, displayName } from '../web/src/ui/viewmodel.ts';
 
 const t = counter();
 
@@ -135,8 +134,6 @@ for (const identity of [ROOM_FRIENDLY, ROOM_V051, ROOM_LEGACY]) {
 }
 
 t.eq(contactDisplayName(ROOM_FRIENDLY), 'Release 2 room', 'the shared presentation helper uses the strict parser');
-t.eq(displayName(ROOM_FRIENDLY), 'Release 2 room', 'the browser view model uses the same room label');
-t.eq(displayName(ROOM_FRIENDLY, 'Local alias'), 'Local alias', 'an explicit local alias remains authoritative for presentation');
 
 const contacts = presentContacts({
   contacts: [{ name: ROOM_FRIENDLY, container_id: 'CID-FRIENDLY' }, { name: PERSON, container_id: 'CID-PERSON' }],
@@ -147,7 +144,6 @@ t.eq(contacts.contacts[0].name, ROOM_FRIENDLY, 'the API preserves the SDK contac
 t.eq(contacts.contacts[0].display_name, 'Release 2 room', 'the API exposes the intended presentation label additively');
 t.eq(contacts.contacts[1].display_name, PERSON, 'the API leaves ordinary contact labels unchanged');
 t.eq(contacts.pending[0].display_name, 'Release 2 room', 'the API presents pending friendly rooms consistently');
-t.eq(contactName(contacts.pending[0]), 'Release 2 room', 'the shared browser helper keeps introduction banners off the raw identity');
 
 // A message relayed under the v0.5.1 identity renders through the same funnel.
 const v051 = pageFor(ROOM_V051, [msg(roomBody({ kind: 'room_msg', text: 'pushed the branch' }), 1)]);

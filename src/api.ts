@@ -1,3 +1,4 @@
+import { readHumanProfile, writeHumanProfile, profileName } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
 // WHAT IS DELIBERATELY ABSENT, because an absence is invisible unless it is written
@@ -37,7 +38,7 @@ import { HtmlPreviewTransformError, MAX_HTML_PREVIEW_BYTES, transformHtmlPreview
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName } from '../shared/roomMessageCore.mjs';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
-import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../web/src/ui/htmlPreviewCore.mjs';
+import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../src/html-preview-policy.mjs';
 
 const HTML_PREVIEW_RESPONSE_CSP = `${HTML_PREVIEW_CSP}; sandbox; frame-ancestors 'self'`;
 
@@ -59,6 +60,7 @@ export interface ApiDeps {
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
+  readonly retireContactNotifications?: (cid: string) => void;
   readonly commandInvocations?: CommandInvocationStore;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
@@ -264,6 +266,21 @@ function inlineBase64(body: Record<string, unknown>): string {
     if (value.charCodeAt(i) !== 61) throw bad('data_base64 must be valid canonical base64');
   }
   return value;
+}
+
+/**
+ * The person on this host: the Human root itself, or a permanent identity the daemon describes as a role
+ * under a root. Temporary identities and identities without a described root are neither.
+ */
+function humanIdentity(value: unknown): { rootCid?: string } | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const identity = value as Record<string, unknown>;
+  if (identity.temporary !== false || typeof identity.cid !== 'string') return undefined;
+  if (identity.isRoot === true) return {};
+  const rootCid = identity.rootCid;
+  if (identity.isRoot !== false || identity.described !== true || typeof identity.roleId !== 'string' || !identity.roleId
+      || typeof rootCid !== 'string' || !/^[a-f0-9]{64}$/i.test(rootCid) || rootCid.toLowerCase() === identity.cid.toLowerCase()) return undefined;
+  return { rootCid };
 }
 
 function publicIdentity(value: unknown): Readonly<Record<string, string>> {
@@ -669,8 +686,13 @@ const ROUTES: Record<string, Handler> = {
   'POST /api/contacts/add': async ({ client, body }) =>
     client.addContact({ invite: str(body, 'invite'), name: optStr(body, 'name') }),
 
-  'POST /api/contacts/remove': async ({ client, body }) =>
-    client.removeContact({ contact: str(body, 'contact') }),
+  'POST /api/contacts/remove': async ({ client, body, deps }) => {
+    const contact = str(body, 'contact');
+    const canonical = deps.retireContactNotifications ? (await resolveContact(client, contact)).cid : contact;
+    const result = await client.removeContact({ contact: canonical });
+    deps.retireContactNotifications?.(canonical);
+    return result;
+  },
 
   'POST /api/contacts/rename': async ({ client, body }) =>
     client.renameContact({ contact: str(body, 'contact'), name: str(body, 'name') }),
@@ -706,7 +728,77 @@ const ROUTES: Record<string, Handler> = {
   // ---- identity / profile --------------------------------------------------
   // The old browser surface called the read half `getProfileName`; the name is a
   // field on this result.
-  'GET /api/identity': async ({ client }) => publicIdentity(await client.currentIdentity()),
+  'GET /api/identity': async ({ client,deps }) => ({...publicIdentity(await client.currentIdentity()),humanProfile:readHumanProfile(deps.config.stateDir,deps.identityCid)}),
+
+  'POST /api/identity/profile': async ({ client,deps,body }) => {
+    if(!humanIdentity(await client.currentIdentity()))throw bad('Human profile requires the Human root or a permanent identity under it');
+    return writeHumanProfile(deps.config.stateDir,deps.identityCid,{name:profileName(body.name),surname:profileName(body.surname)});
+  },
+
+  // Who the person is on this host. A Messenger that runs as the Human root can sign the workspace proof
+  // itself; one that runs as the person's own identity under that root names the root the daemon describes
+  // for it, and the proof is then signed by that root outside Messenger.
+  'GET /api/workspace/enrollment-identity': async ({client}) => {
+    const identity=await client.currentIdentity(),human=humanIdentity(identity);
+    if(!human)throw bad('Workspace proof requires the bound Human root or a permanent identity under it');
+    return human.rootCid===undefined?{cid:identity.cid,preserveProfile:true}:{cid:identity.cid,rootCid:human.rootCid,preserveProfile:true};
+  },
+  // First-party setup operation: daemon signs the command using this bound root.
+  'POST /api/workspace/unregister': async ({ client,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace retirement requires the bound Human root');
+    const rootCid=str(body,'rootCid').toUpperCase(),serverCid=str(body,'serverCid').toUpperCase();
+    if(!/^[A-F0-9]{64}$/.test(rootCid) || !/^[A-F0-9]{64}$/.test(serverCid) || identity.cid.toUpperCase()!==rootCid)throw bad('Workspace retirement identity mismatch');
+    const command:Record<string,string|number|Record<string,string>>={type:'ours.app.unregister-workspace.v1'};
+    for(const key of ['workspaceId','hostWorkspaceId','operationNonce']) {
+      const value=str(body,key);if(!/^[A-Za-z0-9_-]{43}$/.test(value))throw bad('Invalid workspace retirement');command[key]=value;
+    }
+    if(body.operationExpiresAt!==undefined) {
+      if(!Number.isSafeInteger(body.operationExpiresAt) || Number(body.operationExpiresAt)<=0 || Number(body.operationExpiresAt)>Date.now()+86400000)throw bad('Invalid retirement deadline');
+      command.operationExpiresAt=Number(body.operationExpiresAt);
+    }
+    if(body.replacement!==undefined) {
+      const replacement=body.replacement as Record<string,unknown>;
+      if(!replacement || typeof replacement!=='object' || Object.keys(replacement).length!==3
+        || !['workspaceId','accountId','nonce'].every(key=>typeof replacement[key]==='string' && /^[A-Za-z0-9_-]{43}$/.test(replacement[key] as string)))throw bad('Invalid replacement challenge');
+      command.replacement=Object.fromEntries(['workspaceId','accountId','nonce'].map(key=>[key,replacement[key] as string]));
+    }
+    if(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid))throw bad('Original enrollment contact is not ready');
+    const outcome=await client.sendCommand({contact:serverCid,command:'unregister-workspace',arguments:command});
+    if(!('sent' in outcome) || !outcome.sent)throw bad('Workspace retirement was not sent');
+    return {submitted:true,rootCid:identity.cid};
+  },
+
+  'POST /api/workspace/enroll': async ({ client,deps,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
+    const serverCid=str(body,'serverCid').toUpperCase();
+    if(!/^[A-F0-9]{64}$/.test(serverCid) || !/^[A-Za-z0-9_-]{43}$/.test(str(body,'hostWorkspaceId')))throw bad('Invalid workspace proof');
+    const challenge=body.challenge as Record<string,unknown>;
+    if(!challenge || !['nonce','workspaceId','accountId'].every(k=>typeof challenge[k]==='string' && /^[A-Za-z0-9_-]{43}$/.test(String(challenge[k]))) || !Number.isFinite(challenge.expiresAt) || Number(challenge.expiresAt)<=Date.now() || Number(challenge.expiresAt)>Date.now()+16*60000)throw bad('Workspace challenge expired or invalid');
+    const preserveProfile=optBool(body,'preserveProfile')===true;
+    let humanProfile;
+    if(!preserveProfile)try{humanProfile={name:profileName(body.name),surname:profileName(body.surname)};}catch{throw bad('Name and Surname require printable text up to 100 characters');}
+    const invitation=str(body,'invitation');if(invitation.length>8192)throw bad('Workspace invitation too large');
+    if(humanProfile)writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
+    // A retained authenticated peer can carry another signed challenge. The
+    // one-time invitation may already have been used by registration retirement.
+    const connected=preserveProfile && (await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid);
+    if(!connected) {
+      const peer=await client.addContact({invite:invitation});
+      if(peer.cid.toUpperCase()!==serverCid)throw bad('Enrollment server identity mismatch');
+    }
+    const contactDeadline=Date.now()+10000;
+    while(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid)) {
+      if(Date.now()>=contactDeadline)throw bad('Enrollment contact is not ready; obtain a fresh setup payload before retrying');
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const argumentsValue={type:'ours.app.bind-workspace.v1',accountId:String(challenge.accountId),workspaceId:String(challenge.workspaceId),nonce:String(challenge.nonce),hostWorkspaceId:String(body.hostWorkspaceId)};
+    const outcome=await client.sendCommand({contact:serverCid,command:'bind-workspace',arguments:argumentsValue});
+    if(!('sent' in outcome) || !outcome.sent)throw bad('Workspace proof was not sent');
+    const invite=await client.generateInvite({mode:'public'});
+    return {submitted:true,rootCid:identity.cid,ownerInvite:invite.blob};
+  },
 
   'GET /api/identities': async ({ client }) => client.listIdentities(),
 

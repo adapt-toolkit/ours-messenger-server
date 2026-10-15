@@ -18,14 +18,14 @@ let server;
 let peer;
 try {
   const { OursClient } = daemon.sdk;
-  const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
+  const provision = new OursClient({ ...daemon.clientOptions, leaseToken: 'provision' });
   const human = await provision.createRootIdentity({
     name: 'Me', bio: 'messenger identity', exposeLocal: true,
     localAutoAccept: true, skipIfRootExists: false,
   });
   await provision.releaseLease();
 
-  peer = new OursClient({ url: daemon.url, leaseToken: 'peer' });
+  peer = new OursClient({ ...daemon.clientOptions, leaseToken: 'peer' });
   await peer.createTemporaryIdentity({
     name: 'Peer', bio: 'the other end', exposeLocal: true, localAutoAccept: true,
   });

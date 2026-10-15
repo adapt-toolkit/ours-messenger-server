@@ -77,12 +77,12 @@ const daemon = await startHarnessDaemon('rest-e2e');
 const ownStateDir = mkdtempSync(join(tmpdir(), 'messenger-e2e-app-state-'));
 const publicOrigin = 'http://messenger.test';
 const { OursClient } = daemon.sdk;
-const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
+const provision = new OursClient({ ...daemon.clientOptions, leaseToken: 'provision' });
 const human = await provision.createRootIdentity({
   name: 'Me', bio: 'messenger identity', exposeLocal: true,
   localAutoAccept: true, skipIfRootExists: false,
 });
-const peer = new OursClient({ url: daemon.url, leaseToken: 'peer-lease' });
+const peer = new OursClient({ ...daemon.clientOptions, leaseToken: 'peer-lease' });
 const peerIdentity = await peer.createIdentity({
   name: 'Peer', bio: 'the other end', exposeLocal: true, localAutoAccept: true,
 });
@@ -168,18 +168,11 @@ const openEvents = async () => {
   };
 };
 
-// ---- the focused same-origin client ----------------------------------------
+// ---- API-only distribution: frontend is supplied independently ------------
 const shellResponse = await fetch(base + '/');
-const shellHtml = await shellResponse.text();
-t.eq(shellResponse.status, 200, 'GET / serves the focused messenger client');
-const appAsset = shellHtml.match(/src="(\/assets\/index-[^"]+\.js)"/)?.[1];
-t.ok(shellHtml.includes('id="root"') && appAsset, 'and its same-origin content-hashed Vite entry');
-const appResponse = await fetch(base + appAsset);
-t.eq(appResponse.status, 200, 'GET the hashed Vite entry serves the built client bundle');
-t.eq(appResponse.headers.get('cache-control'), 'public, max-age=31536000, immutable', 'hashed assets are immutable');
-t.ok((await appResponse.text()).includes('/api/events'), 'whose live path is the same-origin SSE endpoint');
+t.eq(shellResponse.status, 503, 'GET / reports no configured standalone frontend');
 const clientRoute = await fetch(base + '/chats/peer');
-t.ok((await clientRoute.text()).includes('id="root"'), 'non-API client routes fall back to the app shell');
+t.eq(clientRoute.status, 503, 'client routes require an explicitly configured frontend');
 const unknownApi = await api('GET', '/api/not-a-route');
 t.eq(unknownApi.status, 404, 'unknown /api routes remain JSON 404s and never fall through to HTML');
 const publicMcp = await fetch(base + '/mcp');

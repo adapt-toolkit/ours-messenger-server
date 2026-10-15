@@ -82,6 +82,13 @@ t.ok(
   'with no stack trace — the message is the whole answer for a config error',
 );
 
+
+// --help deliberately avoids the server graph; load the actual lazy chunk too.
+const serverChunk = readdirSync(join(ROOT, 'dist', 'chunks')).find(name => /^server-.*\.js$/.test(name));
+t.ok(Boolean(serverChunk), 'the split server module is present');
+const builtServer = await import(new URL('../dist/chunks/' + serverChunk, import.meta.url));
+t.eq(typeof builtServer.start, 'function', 'the actual lazy server graph loads with its CommonJS dependencies');
+
 const runtimeAssets = readdirSync(join(ROOT, 'dist'), { recursive: true })
   .map(String)
   .filter((name) => /\.(?:wasm|node|muflo)$/.test(name));
