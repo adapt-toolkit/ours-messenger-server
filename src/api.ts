@@ -1,4 +1,4 @@
-import { readHumanProfile, writeHumanProfile, profileName } from './workspace-profile.js';
+import { readHumanProfile, writeHumanProfile, workspaceProfile } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
 // WHAT IS DELIBERATELY ABSENT, because an absence is invisible unless it is written
@@ -732,7 +732,8 @@ const ROUTES: Record<string, Handler> = {
 
   'POST /api/identity/profile': async ({ client,deps,body }) => {
     if(!humanIdentity(await client.currentIdentity()))throw bad('Human profile requires the Human root or a permanent identity under it');
-    return writeHumanProfile(deps.config.stateDir,deps.identityCid,{name:profileName(body.name),surname:profileName(body.surname)});
+    let profile;try{profile=workspaceProfile(body);}catch{throw bad('Profile requires printable text up to 100 characters');}
+    return writeHumanProfile(deps.config.stateDir,deps.identityCid,profile);
   },
 
   // Who the person is on this host. A Messenger that runs as the Human root can sign the workspace proof
@@ -741,7 +742,7 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/workspace/enrollment-identity': async ({client}) => {
     const identity=await client.currentIdentity(),human=humanIdentity(identity);
     if(!human)throw bad('Workspace proof requires the bound Human root or a permanent identity under it');
-    return human.rootCid===undefined?{cid:identity.cid,preserveProfile:true}:{cid:identity.cid,rootCid:human.rootCid,preserveProfile:true};
+    return human.rootCid===undefined?{cid:identity.cid,preserveProfile:true,optionalWorkspaceProfileV1:true}:{cid:identity.cid,rootCid:human.rootCid,preserveProfile:true,optionalWorkspaceProfileV1:true};
   },
   // First-party setup operation: daemon signs the command using this bound root.
   'POST /api/workspace/unregister': async ({ client,body }) => {
@@ -778,7 +779,7 @@ const ROUTES: Record<string, Handler> = {
     if(!challenge || !['nonce','workspaceId','accountId'].every(k=>typeof challenge[k]==='string' && /^[A-Za-z0-9_-]{43}$/.test(String(challenge[k]))) || !Number.isFinite(challenge.expiresAt) || Number(challenge.expiresAt)<=Date.now() || Number(challenge.expiresAt)>Date.now()+16*60000)throw bad('Workspace challenge expired or invalid');
     const preserveProfile=optBool(body,'preserveProfile')===true;
     let humanProfile;
-    if(!preserveProfile)try{humanProfile={name:profileName(body.name),surname:profileName(body.surname)};}catch{throw bad('Name and Surname require printable text up to 100 characters');}
+    if(!preserveProfile)try{humanProfile=workspaceProfile(body);}catch{throw bad('Name and Surname require printable text up to 100 characters');}
     const invitation=str(body,'invitation');if(invitation.length>8192)throw bad('Workspace invitation too large');
     if(humanProfile)writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
     // A retained authenticated peer can carry another signed challenge. The
