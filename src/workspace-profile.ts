@@ -1,8 +1,23 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 export interface HumanProfile { fullName:string|null; name:string|null; surname:string|null }
 export interface HumanProfileInput { fullName?:unknown; name?:unknown; surname?:unknown }
+const profileObservers = new Map<string, Set<() => void>>();
+function profileKey(dir:string,cid:string):string { return resolve(path(dir,cid)); }
+/** Passive post-commit observation; never acquires presence or marks data read. */
+export function subscribeHumanProfile(dir:string,cid:string,onCommitted:()=>void,signal:AbortSignal):()=>void {
+  if(signal.aborted)return ()=>{};
+  const key=profileKey(dir,cid),observers=profileObservers.get(key)??new Set<()=>void>();
+  profileObservers.set(key,observers);observers.add(onCommitted);
+  const dispose=()=>{observers.delete(onCommitted);if(!observers.size)profileObservers.delete(key);signal.removeEventListener('abort',dispose);};
+  signal.addEventListener('abort',dispose,{once:true});return dispose;
+}
+function publishHumanProfile(dir:string,cid:string):void {
+  for(const observer of [...(profileObservers.get(profileKey(dir,cid))??[])]) {
+    try { observer(); } catch { /* A committed write cannot fail through an observer. */ }
+  }
+}
 export function workspaceProfile(value:HumanProfileInput):HumanProfile {
   const optional=(field:unknown)=>field==null || field==='' ? null : profileName(field);
   return {fullName:optional(value.fullName),name:optional(value.name),surname:optional(value.surname)};
@@ -14,5 +29,5 @@ export function writeHumanProfile(dir:string,cid:string,value:HumanProfileInput)
   const row=workspaceProfile(value);mkdirSync(dir,{recursive:true,mode:0o700});
   const directory=lstatSync(dir);if(!directory.isDirectory() || directory.isSymbolicLink() || directory.uid!==process.getuid?.() || (directory.mode&0o077)!==0)throw Error('Private profile directory required');
   const file=path(dir,cid);if(existsSync(file)){const stat=lstatSync(file);if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || stat.uid!==process.getuid?.() || (stat.mode&0o077)!==0)throw Error('Private profile path required');}
-  const temporary=file+'.'+randomUUID();writeFileSync(temporary,JSON.stringify(row)+'\n',{mode:0o600,flag:'wx'});renameSync(temporary,file);return row;
+  const temporary=file+'.'+randomUUID();writeFileSync(temporary,JSON.stringify(row)+'\n',{mode:0o600,flag:'wx'});renameSync(temporary,file);publishHumanProfile(dir,cid);return row;
 }
