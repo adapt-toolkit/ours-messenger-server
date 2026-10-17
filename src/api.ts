@@ -1,3 +1,5 @@
+import { ResourceConnections, ResourceBindingError } from './resource-connections.js';
+import { canonicalResourceDescriptor, projectMessageWindow, RESOURCE_ASSEMBLY_BYTES, type ResourceDescriptor } from './resource-views.js';
 import { readHumanProfile, writeHumanProfile, workspaceProfile } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
@@ -66,6 +68,18 @@ export interface ApiDeps {
   readonly sseHeartbeatMs?: number;
   readonly sseQueueLimit?: number;
   readonly healthTimeoutMs?: number;
+}
+
+const resourceConnections = new WeakMap<ApiDeps, ResourceConnections>();
+function resourceService(deps: ApiDeps): ResourceConnections {
+  let service = resourceConnections.get(deps);
+  if (!service) {
+    service = new ResourceConnections({ client: deps.runtime.client, identity: deps.config.identity,
+      identityCid: deps.identityCid, stateDir: deps.config.stateDir,
+      project: (descriptor, signal) => projectResourceView(deps, descriptor, signal) });
+    resourceConnections.set(deps, service);
+  }
+  return service;
 }
 
 const invocationStores = new WeakMap<ApiDeps, CommandInvocationStore>();
@@ -348,11 +362,20 @@ function beforeSequence(raw: string | undefined): number | undefined {
   return value;
 }
 
-async function listAllFiles(client: OursClient, peerCid: string): Promise<HistoryFile[]> {
+async function listAllFiles(client: OursClient, peerCid: string, signal?: AbortSignal, identity?: { cid: string; name: string }): Promise<HistoryFile[]> {
   const files: HistoryFile[] = [];
+  let bytes = 0;
   let before: number | undefined;
   for (;;) {
+    signal?.throwIfAborted();
     const page = await client.listFiles({ peer_cid: peerCid, before_seq: before, limit: 200 });
+    signal?.throwIfAborted();
+    if (signal) {
+      bytes += Buffer.byteLength(JSON.stringify(page.items.map(row => publicMediaRecord(row, identity!, 1))));
+      if (bytes > RESOURCE_ASSEMBLY_BYTES) throw new Error('resource assembly limit exceeded');
+      if (page.next_cursor !== null && (!page.items.length || !Number.isSafeInteger(page.next_cursor)
+          || (before !== undefined && page.next_cursor >= before))) throw new Error('invalid file continuation');
+    }
     files.push(...page.items);
     if (page.next_cursor === null) return files;
     before = page.next_cursor;
@@ -493,12 +516,100 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
   }
 }
 
+async function projectIdentityResource(client: OursClient, deps: ApiDeps) { return ({...publicIdentity(await client.currentIdentity()),humanProfile:readHumanProfile(deps.config.stateDir,deps.identityCid)}); }
+
+async function projectCommandResource(client: OursClient, deps: ApiDeps, params: Record<string, string>) {
+  if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
+  const peer = await resolveContact(client, params.contact);
+  return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
+}
+
+async function projectFilesResource(client: OursClient, deps: ApiDeps, params: Record<string, string>, signal?: AbortSignal) {
+  const peer = await resolveContact(client, params.contact);
+  const files = (await listAllFiles(client, peer.cid, signal, { cid: deps.identityCid, name: deps.config.identity })).reverse();
+  const versions = new Map<string, number>();
+  return {
+    contact: params.contact,
+    files: files.map((row) => {
+      const logicalName = row.filename.normalize('NFC').toLocaleLowerCase('en-US');
+      const version = (versions.get(logicalName) ?? 0) + 1;
+      versions.set(logicalName, version);
+      return publicMediaRecord(row, {
+        cid: deps.identityCid,
+        name: deps.config.identity,
+      }, version);
+    }),
+  };
+}
+
+/** The stream and HTTP routes share the same canonical serializers. */
+export async function projectResourceView(deps: ApiDeps, input: ResourceDescriptor, signal: AbortSignal): Promise<unknown> {
+  const descriptor = canonicalResourceDescriptor(input), client = deps.runtime.client;
+  signal.throwIfAborted();
+  switch (descriptor.resource) {
+    case 'contacts': return presentContacts(await client.listContacts());
+    case 'identity': return projectIdentityResource(client, deps);
+    case 'files': return projectFilesResource(client, deps, { contact: descriptor.entityId! }, signal);
+    case 'commands': return projectCommandResource(client, deps, { contact: descriptor.entityId! });
+    case 'messages': {
+      const peer = await resolveContact(client, descriptor.entityId!);
+      const page = await projectMessageWindow(client, peer.cid, peer.announcedName, descriptor.window!, signal);
+      return { ...page, contact: descriptor.entityId! };
+    }
+  }
+}
+
 /** `undefined` from a handler means "already responded" (used by the raw-bytes route). */
 const ROUTES: Record<string, Handler> = {
   // ---- live metadata invalidations (canonical state remains REST/MUFL) ------
-  'GET /api/events': async ({ req, res, deps }) => {
+  'GET /api/events': async ({ req, res, deps, query }) => {
+    if (query.get('resources') === '1') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive', 'x-accel-buffering': 'no' });
+      res.flushHeaders?.();
+      const connection = resourceService(deps).open(res);
+      const close = () => connection.close();
+      req.once('close', close);
+      try { await connection.closed; } finally { req.removeListener('close', close); connection.close(); }
+      return undefined;
+    }
     await serveEvents(req, res, deps);
     return undefined;
+  },
+
+  'POST /api/resource-subscriptions': async ({ req, res, deps, body }) => {
+    const connectionId = str(body, 'connectionId'), viewId = str(body, 'viewId');
+    const epoch = body.subscriptionEpoch as number;
+    if (deps.config.typedCommands === false && (body.descriptor as ResourceDescriptor | undefined)?.resource === 'commands') {
+      throw new HttpError(404, 'Typed commands are disabled');
+    }
+    const controller = new AbortController();
+    let installed = false;
+    const cleanup = () => {
+      req.removeListener('aborted', abort);
+      res.removeListener('close', responseClosed);
+      res.removeListener('finish', cleanup);
+    };
+    const abort = () => {
+      controller.abort();
+      if (installed) resourceService(deps).remove(connectionId, viewId, epoch);
+      cleanup();
+    };
+    req.once('aborted', abort);
+    const responseClosed = () => { if (!res.writableFinished) abort(); };
+    res.once('close', responseClosed);
+    res.once('finish', cleanup);
+    try {
+      const registered = await resourceService(deps).register(connectionId, viewId, epoch, body.descriptor, controller.signal);
+      installed = true;
+      if (req.aborted || res.destroyed) { abort(); return undefined; }
+      return registered;
+    } catch (error) { if (controller.signal.aborted) return undefined; throw error; }
+    finally { if (controller.signal.aborted || res.writableFinished || res.destroyed) cleanup(); }
+  },
+  'DELETE /api/resource-subscriptions': async ({ deps, body }) => {
+    resourceService(deps).remove(str(body, 'connectionId'), str(body, 'viewId'), body.subscriptionEpoch as number);
+    return { removed: true };
   },
 
   // ---- messaging -----------------------------------------------------------
@@ -519,11 +630,7 @@ const ROUTES: Record<string, Handler> = {
     return { wire_id: wireId, delivery: 'tracked' };
   },
 
-  'GET /api/contacts/:contact/commands': async ({ client, deps, params }) => {
-    if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
-    const peer = await resolveContact(client, params.contact);
-    return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
-  },
+  'GET /api/contacts/:contact/commands': async ({ client, deps, params }) => projectCommandResource(client, deps, params),
 
   'POST /api/commands/send': async ({ client, deps, body }) => {
     if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
@@ -728,7 +835,7 @@ const ROUTES: Record<string, Handler> = {
   // ---- identity / profile --------------------------------------------------
   // The old browser surface called the read half `getProfileName`; the name is a
   // field on this result.
-  'GET /api/identity': async ({ client,deps }) => ({...publicIdentity(await client.currentIdentity()),humanProfile:readHumanProfile(deps.config.stateDir,deps.identityCid)}),
+  'GET /api/identity': async ({ client, deps }) => projectIdentityResource(client, deps),
 
   'POST /api/identity/profile': async ({ client,deps,body }) => {
     if(!humanIdentity(await client.currentIdentity()))throw bad('Human profile requires the Human root or a permanent identity under it');
@@ -818,23 +925,7 @@ const ROUTES: Record<string, Handler> = {
   // ---- files ---------------------------------------------------------------
   'GET /api/files/incoming': async ({ client }) => client.listIncomingFiles(),
 
-  'GET /api/conversations/:contact/files': async ({ client, deps, params }) => {
-    const peer = await resolveContact(client, params.contact);
-    const files = (await listAllFiles(client, peer.cid)).reverse();
-    const versions = new Map<string, number>();
-    return {
-      contact: params.contact,
-      files: files.map((row) => {
-        const logicalName = row.filename.normalize('NFC').toLocaleLowerCase('en-US');
-        const version = (versions.get(logicalName) ?? 0) + 1;
-        versions.set(logicalName, version);
-        return publicMediaRecord(row, {
-          cid: deps.identityCid,
-          name: deps.config.identity,
-        }, version);
-      }),
-    };
-  },
+  'GET /api/conversations/:contact/files': async ({ client, deps, params }) => projectFilesResource(client, deps, params),
 
   'POST /api/files/fetch': async ({ client, body }) => {
     const ids = body.wire_ids;
@@ -1060,6 +1151,32 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       req,
       url.pathname.startsWith('/api/push/') ? MAX_PUSH_BODY_BYTES : MAX_HTTP_BODY_BYTES,
     );
+    const resourceHeaderNames = ['x-resource-connection', 'x-resource-view', 'x-resource-epoch', 'x-resource-baseline'];
+    const resourceHeaders = resourceHeaderNames.map(name => rawHeaderValues(req, name));
+    if (resourceHeaders.some(values => values.length > 0)) {
+      if (method !== 'GET' || resourceHeaders.some(values => values.length !== 1)) throw new ResourceBindingError(409, 'incomplete resource binding');
+      const [connectionId, viewId, epoch, baselineId] = resourceHeaders.map(values => values[0]);
+      const baseline = await resourceService(deps).bound(connectionId, viewId, Number(epoch), baselineId);
+      const descriptor = baseline.descriptor;
+      const route = descriptor.resource === 'contacts' ? 'GET /api/contacts'
+        : descriptor.resource === 'identity' ? 'GET /api/identity'
+          : descriptor.resource === 'commands' ? 'GET /api/contacts/:contact/commands'
+            : descriptor.resource === 'files' ? 'GET /api/conversations/:contact/files' : 'GET /api/conversations/:contact/page';
+      const allowedQuery = descriptor.resource === 'messages' && [...url.searchParams.keys()].every(key => key === 'limit')
+        && (!url.searchParams.has('limit') || (url.searchParams.getAll('limit').length === 1 && Number(url.searchParams.get('limit')) === descriptor.window!.limit));
+      if (hit.key !== route || (descriptor.entityId !== undefined && descriptor.entityId !== hit.params.contact)
+          || (url.searchParams.size > 0 && !allowedQuery)) throw new ResourceBindingError(409, 'resource read descriptor mismatch');
+      res.setHeader('X-Resource-Connection', connectionId);
+      res.setHeader('X-Resource-View', viewId);
+      res.setHeader('X-Resource-Epoch', epoch);
+      res.setHeader('X-Resource-Baseline', baselineId);
+      res.setHeader('X-Resource-Producer', baseline.producerGeneration);
+      res.setHeader('X-Resource-Revision', String(baseline.revision));
+      res.setHeader('X-Resource-Source-Generation', baseline.source.producerGeneration);
+      res.setHeader('X-Resource-Source-Position', String(baseline.source.position));
+      sendJson(res, 200, baseline.payload);
+      return;
+    }
     const out = await ROUTES[hit.key]({
       deps,
       client: deps.runtime.client,
@@ -1076,6 +1193,8 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
     // content. Only fixed code/message pairs from the central allowlist survive.
     if (isOursError(e)) {
       sendJson(res, 400, { error: publicEngineError(e.code) });
+    } else if (e instanceof ResourceBindingError) {
+      sendJson(res, e.status, { error: { code: 'RESOURCE_BINDING', message: e.message } });
     } else if (e instanceof HttpError) {
       const code = e.status === 403 ? 'FORBIDDEN'
         : e.status === 415 ? 'UNSUPPORTED_MEDIA_TYPE'
