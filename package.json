@@ -33,20 +33,22 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:startup": "node --import tsx tests/startup-readiness.test.mjs",
     "test:runtime-catalog-candidate": "node --import tsx tests/runtime-command-catalog-reopen-e2e.test.mjs",
-    "test:offline": "for f in tests/workspace-profile-preservation.test.mjs tests/notification-producer.test.mjs tests/notification-contact-retirement.test.mjs tests/workspace-root-retirement.test.mjs tests/base-path.test.mjs tests/build-epoch.test.mjs tests/owner-session.test.mjs tests/v1-runtime.test.mjs tests/typed-commands-core.test.mjs tests/shared-daemon-contract.test.mjs tests/room-envelope-matrix.test.mjs tests/bundle-smoke.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/media-response.test.mjs tests/html-preview-transform.test.mjs tests/html-preview-response.test.mjs tests/push-store.test.mjs tests/push-store-hardening.test.mjs tests/push-delivery.test.mjs tests/push-queue-saturation.test.mjs tests/events.test.mjs tests/watch-cursor.test.mjs tests/watch-reconcile.test.mjs tests/introduction-send-guard.test.mjs tests/sse-e2e.test.mjs tests/presence.test.mjs tests/static-hosting.test.mjs tests/room-preview.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
+    "test:offline": "for f in tests/resource-views.test.mjs tests/resource-connections.test.mjs tests/resource-http.test.mjs tests/workspace-profile-preservation.test.mjs tests/notification-producer.test.mjs tests/notification-contact-retirement.test.mjs tests/workspace-root-retirement.test.mjs tests/base-path.test.mjs tests/build-epoch.test.mjs tests/owner-session.test.mjs tests/v1-runtime.test.mjs tests/typed-commands-core.test.mjs tests/shared-daemon-contract.test.mjs tests/room-envelope-matrix.test.mjs tests/bundle-smoke.test.mjs tests/build-metadata.test.mjs tests/production-security.test.mjs tests/conversation-page.test.mjs tests/media-response.test.mjs tests/html-preview-transform.test.mjs tests/html-preview-response.test.mjs tests/push-store.test.mjs tests/push-store-hardening.test.mjs tests/push-delivery.test.mjs tests/push-queue-saturation.test.mjs tests/events.test.mjs tests/watch-cursor.test.mjs tests/watch-reconcile.test.mjs tests/introduction-send-guard.test.mjs tests/sse-e2e.test.mjs tests/presence.test.mjs tests/static-hosting.test.mjs tests/room-preview.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
     "test:loopback": "for f in tests/shared-daemon-e2e.test.mjs tests/typed-command-loopback-e2e.test.mjs tests/introduction-send.test.mjs tests/rest-e2e.test.mjs; do echo \"# $f\"; node --import tsx \"$f\" || exit 1; done",
-    "test": "npm run build && npm run test:startup && npm run test:offline && npm run test:loopback"
+    "test": "npm run build && npm run test:startup && npm run test:offline && npm run test:loopback",
+    "test:resource-daemon": "node --import tsx tests/resource-daemon.test.mjs",
+    "test:resources": "node --import tsx tests/resource-views.test.mjs && node --import tsx tests/resource-connections.test.mjs && node --import tsx tests/resource-http.test.mjs"
   },
   "dependencies": {
     "@eslint-community/regexpp": "4.12.2",
-    "@ours.network/sdk": "3.8.1-nightly.18",
+    "@ours.network/sdk": "4.1.1-nightly.1",
     "parse5": "^8.0.1",
     "web-push": "^3.6.7",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@ours.network/cli": "2.8.1-nightly.16",
-    "@ours.network/daemon": "3.8.1-nightly.10",
+    "@ours.network/cli": "3.1.1-nightly.1",
+    "@ours.network/daemon": "4.1.1-nightly.1",
     "@playwright/test": "^1.62.1",
     "@types/node": "^20.14.0",
     "@types/web-push": "^3.6.4",
