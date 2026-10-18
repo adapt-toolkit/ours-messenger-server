@@ -19,13 +19,16 @@ function notificationInput(value: unknown): value is NotificationInput {
     && value.anchor.kind === 'messenger-message' && text(value.anchor.wireId, 1024) && !/[\x00-\x1f\x7f]/.test(value.anchor.wireId));
 }
 const cleanup = (value: unknown): value is { target: ContactTarget } => object(value) && closed(value, ['target']) && contactTarget(value.target);
-const has = (entry: Entry, key: string) => Object.hasOwn(entry, key);
-// An entry is sent only as a typed contact cleanup, with a frozen payload that is the closed typed
-// contract or, with no payload field at all, carrying the current version marker. Any other present
-// operation or payload is never projected or sent.
-const supported = (entry: Entry) => has(entry, 'operation') ? entry.operation === 'delete-target' && cleanup(entry.value)
-  : has(entry, 'payload') ? notificationInput(entry.payload)
-  : entry.targetVersion === 1;
+const has = (entry: object, key: string) => Object.hasOwn(entry, key);
+// An entry is sent only when it is an object with a string ID: as a typed contact cleanup, with a
+// frozen payload that is the closed typed contract or, with no payload field at all, carrying the
+// current version marker. Anything else, including null or scalar entries, is never read further,
+// projected, sent or changed.
+const supported = (entry: unknown): entry is Entry => object(entry) && typeof entry.id === 'string'
+  && (has(entry, 'operation') ? entry.operation === 'delete-target' && cleanup(entry.value)
+    : has(entry, 'payload') ? notificationInput(entry.payload)
+    : entry.targetVersion === 1);
+const same = (id: string) => (entry: unknown) => supported(entry) && entry.id === id;
 export interface ProducerConfig { origin: string; token: string; }
 export function producerConfig(env: NodeJS.ProcessEnv = process.env): ProducerConfig | undefined {
   const origin = env.OURS_NOTIFICATIONS_ORIGIN, token = env.OURS_NOTIFICATIONS_PRODUCER_TOKEN;
@@ -68,7 +71,7 @@ export class NotificationOutbox {
   advance(cursor: number): void { this.persist(this.entries, cursor); }
   saveCheckpoint(checkpoint: unknown): void { this.persist(this.entries, this.cursor, checkpoint); }
   enqueue(id: string, value: unknown, cursor = this.cursor): boolean {
-    if (this.entries.some(e => e.id === id)) { if (cursor !== this.cursor) this.advance(cursor!); return true; }
+    if (this.entries.some(same(id))) { if (cursor !== this.cursor) this.advance(cursor!); return true; }
     if (this.entries.filter(supported).length >= 2000) return false;
     this.persist([...this.entries, { id, value, targetVersion: 1 }], cursor);
     return true;
@@ -77,7 +80,7 @@ export class NotificationOutbox {
     if (!contactTarget(target)) throw new Error('Invalid notification target');
     const id = `delete-target:${contactIdentity(target.contactId)}`;
     const retained = this.entries.filter(entry => !supported(entry) || entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
-    if (!retained.some(entry => entry.id === id)) retained.push({ id, value: { target }, operation: 'delete-target' });
+    if (!retained.some(same(id))) retained.push({ id, value: { target }, operation: 'delete-target' });
     // A cleanup request must survive service outage and cannot be dropped by send capacity limits.
     this.persist(retained);
   }
@@ -90,22 +93,22 @@ export class NotificationOutbox {
       if (!supported(entry)) continue;
       if (attempts >= 32) break;
       try {
-        if (!this.entries.some(current => current.id === entry.id)) continue;
+        if (!this.entries.some(same(entry.id))) continue;
         if (entry.operation === 'delete-target' && this.shouldRetire) {
           const retire = await this.shouldRetire((entry.value as {target:ContactTarget}).target);
           // An unknown contact stays queued without blocking unrelated typed work.
           if (retire === undefined) continue;
-          if (!retire) { attempts++; this.persist(this.entries.filter(current => current.id !== entry.id)); continue; }
+          if (!retire) { attempts++; this.persist(this.entries.filter(current => !same(entry.id)(current))); continue; }
         }
         const value = entry.operation === 'delete-target'
           ? entry.value : entry.payload ?? await this.project(entry.value, entry.id);
-        if (!this.entries.some(current => current.id === entry.id)) continue;
-        if (value === undefined) { this.persist(this.entries.filter(current => current.id !== entry.id)); continue; }
+        if (!this.entries.some(same(entry.id))) continue;
+        if (value === undefined) { this.persist(this.entries.filter(current => !same(entry.id)(current))); continue; }
         if (entry.operation ? !cleanup(value) : !notificationInput(value)) continue;
         attempts++;
         // Freeze the canonical projection before any network attempt. A crash
         // after service acceptance must replay the identical dedupe payload.
-        if (!entry.operation && !entry.payload) this.persist(this.entries.map(e => e.id === entry.id ? { ...e, payload: value as NotificationInput } : e));
+        if (!entry.operation && !entry.payload) this.persist(this.entries.map(e => same(entry.id)(e) ? { ...e, payload: value as NotificationInput } : e));
         const response = await fetch(this.config.origin + (entry.operation === 'delete-target' ? '/api/v1/delete-target' : '/api/v1/send'), {
           method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
           headers: { Authorization: `Bearer ${this.config.token}`, 'Content-Type': 'application/json' },
@@ -113,7 +116,7 @@ export class NotificationOutbox {
         });
         await response.body?.cancel();
         if (!response.ok) throw new Error('notification service rejected event');
-        this.persist(this.entries.filter(e => e.id !== entry.id));
+        this.persist(this.entries.filter(e => !same(entry.id)(e)));
       } catch { this.warn('Notification producer delivery pending; retrying from durable outbox'); break; }
     }
   }
