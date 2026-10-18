@@ -19,8 +19,15 @@ function notificationInput(value: unknown): value is NotificationInput {
     && value.anchor.kind === 'messenger-message' && text(value.anchor.wireId, 1024) && !/[\x00-\x1f\x7f]/.test(value.anchor.wireId));
 }
 const cleanup = (value: unknown): value is { target: ContactTarget } => object(value) && closed(value, ['target']) && contactTarget(value.target);
-const supported = (entry: Entry) => entry.operation === 'delete-target' ? cleanup(entry.value)
-  : entry.payload ? notificationInput(entry.payload) : entry.targetVersion === 1;
+/** Recognizes a raw producer record queued before targetVersion existed, including its event ID. */
+export type LegacyRecord = (value: unknown, id: string) => boolean;
+const has = (entry: Entry, key: string) => Object.hasOwn(entry, key);
+// Earlier releases persisted the projected payload before any send, so only a record whose
+// envelope has no payload, operation or version at all, and that the producer recognizes,
+// was never sent. Anything else present but unrecognized stays retained and unsent.
+const supported = (entry: Entry, legacy?: LegacyRecord) => has(entry, 'operation') ? entry.operation === 'delete-target' && cleanup(entry.value)
+  : has(entry, 'payload') ? notificationInput(entry.payload)
+  : entry.targetVersion === 1 || (Object.keys(entry).every(key => key === 'id' || key === 'value') && typeof entry.id === 'string' && !!legacy?.(entry.value, entry.id));
 export interface ProducerConfig { origin: string; token: string; }
 export function producerConfig(env: NodeJS.ProcessEnv = process.env): ProducerConfig | undefined {
   const origin = env.OURS_NOTIFICATIONS_ORIGIN, token = env.OURS_NOTIFICATIONS_PRODUCER_TOKEN;
@@ -42,7 +49,8 @@ export class NotificationOutbox {
   constructor(private readonly file: string, private readonly config: ProducerConfig,
     private readonly project: (value: unknown, id: string) => Promise<NotificationInput | undefined>,
     private readonly warn: (message: string) => void = () => {},
-    private readonly shouldRetire?: (target: ContactTarget) => Promise<boolean | undefined>) {
+    private readonly shouldRetire?: (target: ContactTarget) => Promise<boolean | undefined>,
+    private readonly legacy?: LegacyRecord) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { entries: [] };
     this.entries = Array.isArray(saved) ? saved : saved.entries;
@@ -63,14 +71,14 @@ export class NotificationOutbox {
   saveCheckpoint(checkpoint: unknown): void { this.persist(this.entries, this.cursor, checkpoint); }
   enqueue(id: string, value: unknown, cursor = this.cursor): boolean {
     if (this.entries.some(e => e.id === id)) { if (cursor !== this.cursor) this.advance(cursor!); return true; }
-    if (this.entries.filter(supported).length >= 2000) return false;
+    if (this.entries.filter(entry => supported(entry, this.legacy)).length >= 2000) return false;
     this.persist([...this.entries, { id, value, targetVersion: 1 }], cursor);
     return true;
   }
   retireTarget(target: ContactTarget, matches: (value: unknown, payload?: NotificationInput) => boolean): void {
     if (!contactTarget(target)) throw new Error('Invalid notification target');
     const id = `delete-target:${contactIdentity(target.contactId)}`;
-    const retained = this.entries.filter(entry => !supported(entry) || entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
+    const retained = this.entries.filter(entry => !supported(entry, this.legacy) || entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
     if (!retained.some(entry => entry.id === id)) retained.push({ id, value: { target }, operation: 'delete-target' });
     // A cleanup request must survive service outage and cannot be dropped by send capacity limits.
     this.persist(retained);
@@ -81,7 +89,7 @@ export class NotificationOutbox {
   private async drainOnce(): Promise<void> {
     let attempts = 0;
     for (const entry of [...this.entries]) {
-      if (!supported(entry)) continue;
+      if (!supported(entry, this.legacy)) continue;
       if (attempts >= 32) break;
       try {
         if (!this.entries.some(current => current.id === entry.id)) continue;
