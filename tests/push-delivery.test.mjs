@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import webpush from 'web-push';
 import { PushStore } from '../src/push.ts';
-import { PushDeliveryQueue } from '../src/push-delivery.ts';
+import { projectPushEvent, PushDeliveryQueue } from '../src/push-delivery.ts';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'messenger-push-delivery-'));
 const vapid = webpush.generateVAPIDKeys();
@@ -40,7 +40,7 @@ try {
     project: async (job) => {
       projections++;
       if (projections === 1) throw new Error('projection not ready');
-      return { v: 1, kind: job.kind, title: 'Alice', body: 'private preview', contact_id: job.contactId, wire_id: job.wireId, url: `/chats/${job.contactId}` };
+      return { v: 1, kind: job.kind, title: 'Alice', body: 'private preview', contact_id: job.contactId, wire_id: job.wireId, target: {kind:'contact',contactId:job.contactId}, anchor: {kind:'messenger-message',wireId:job.wireId} };
     },
     autoStart: false,
   });
@@ -91,7 +91,7 @@ try {
       foregroundBindingIds: () => new Set([pc.bindingId]), autoStart: false,
       project: async (job) => ({
         v: 1, kind: job.kind, title: 'Alice', body: 'device-scoped', contact_id: job.contactId,
-        wire_id: job.wireId, url: `/chats/${job.contactId}`,
+        wire_id: job.wireId, target: {kind:'contact',contactId:job.contactId}, anchor: {kind:'messenger-message',wireId:job.wireId},
       }),
     });
     assert.equal(multiDeviceQueue.enqueue({ event: 'message_received', sender_id: 'CID-A', wire_id: 'MULTI-1' }), true);
@@ -119,7 +119,7 @@ try {
     now: () => now, random: () => 0, autoStart: false,
     project: async (job) => ({
       v: 1, kind: 'message', title: 'Restart', body: 'resumed', contact_id: job.contactId,
-      wire_id: job.wireId, url: `/chats/${job.contactId}`,
+      wire_id: job.wireId, target: {kind:'contact',contactId:job.contactId}, anchor: {kind:'messenger-message',wireId:job.wireId},
     }),
   });
   await restartQueue.drainDue();
@@ -201,8 +201,8 @@ try {
     assert.ok(!JSON.stringify(roomPush).includes('CID-AUTHOR-MUST-NOT-RENDER'), 'durable push preserves room anonymity');
     assert.ok(full.every((event) => event.contact_id === 'CID-A' && event.wire_id),
       'every payload preserves authenticated CID and wire correlation');
-    assert.ok(full.every((event) => event.url === `/chats/CID-A#chat-message-${encodeURIComponent(event.wire_id)}`),
-      'every notification deep-links to its exact conversation message');
+    assert.ok(full.every((event) => event.target?.kind === 'contact' && event.target.contactId === 'CID-A' && event.anchor?.kind === 'messenger-message' && event.anchor.wireId === event.wire_id && !('url' in event)),
+      'every notification carries raw contact and message identity without a frontend URL');
     const privatePayloads = delivered.filter((row) => row.endpoint.endsWith('/private')).map((row) => row.event);
     assert.ok(privatePayloads.every((event) => event.title === 'ours messenger'
       && !event.body.includes('full message text') && !event.body.includes('.png') && !event.body.includes('.pdf') && !event.body.includes('.ogg')),
@@ -217,3 +217,6 @@ try {
 }
 
 console.log('push-delivery OK — projection retry, transient backoff, dedupe, restart, and zero-binding short-circuit');
+
+const raw = await projectPushEvent({ getHistoryItem: async ({wire_id}) => ({wire_id,direction:'in',text:'Raw identity',peer:{id:'raw:%contact',name:'Peer'}}) }, {kind:'message',contactId:'raw:%contact',wireId:'raw/%wire#message'});
+assert.deepEqual(raw.target,{kind:'contact',contactId:'raw:%contact'});assert.deepEqual(raw.anchor,{kind:'messenger-message',wireId:'raw/%wire#message'});assert.equal('url' in raw,false);

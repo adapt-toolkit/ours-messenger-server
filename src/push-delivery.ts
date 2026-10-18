@@ -1,6 +1,7 @@
 import type { OursClient } from '@ours.network/sdk';
 import type { PushAdmission, PushEvent, PushJob, PushKind, PushStore } from './push.js';
 import { reportFailure } from './security.js';
+import { contactId } from './notification-outbox.js';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName, contactMessagePreview } from '../shared/roomMessageCore.mjs';
 
@@ -47,7 +48,10 @@ export async function projectPushEvent(
   client: PushDeliveryOptions['client'],
   job: PushJob,
 ): Promise<PushEvent> {
-  const url = `/chats/${encodeURIComponent(job.contactId)}#chat-message-${encodeURIComponent(job.wireId)}`;
+  if (!contactId(job.contactId) || !bounded(job.wireId, 1024) || /[\x00-\x1f\x7f]/.test(job.wireId))
+    throw new Error('invalid push destination');
+  const target = { kind: 'contact' as const, contactId: job.contactId };
+  const anchor = { kind: 'messenger-message' as const, wireId: job.wireId };
   if (job.kind === 'message') {
     if (!client.getHistoryItem) throw new Error('message projection is unavailable');
     const message = await client.getHistoryItem({ wire_id: job.wireId });
@@ -58,7 +62,7 @@ export async function projectPushEvent(
     return {
       v: 1, kind: 'message', title: contactDisplayName(announcedSender) as string,
       body: contactMessagePreview(announcedSender, message.text) as string,
-      contact_id: job.contactId, wire_id: job.wireId, url,
+      contact_id: job.contactId, wire_id: job.wireId, target, anchor,
     };
   }
 
@@ -73,7 +77,7 @@ export async function projectPushEvent(
   return {
     v: 1, kind, title: contactDisplayName(file.from.name || job.senderName || label) as string,
     body: `${label}: ${file.filename}`,
-    contact_id: job.contactId, wire_id: job.wireId, url,
+    contact_id: job.contactId, wire_id: job.wireId, target, anchor,
   };
 }
 
@@ -119,7 +123,7 @@ export class PushDeliveryQueue {
   }
 
   admit(record: Record<string, unknown>, notificationPageNextIndex?: number): PushAdmission {
-    if (!bounded(record.sender_id, 512) || !bounded(record.wire_id, 1_024)) return { status: 'no_targets' };
+    if (!contactId(record.sender_id) || !bounded(record.wire_id, 1_024) || /[\x00-\x1f\x7f]/.test(record.wire_id)) return { status: 'no_targets' };
     const kind = notificationKind(record);
     if (!kind || !this.store.hasBindings()) return { status: 'no_targets' };
     const admission = this.store.admitJob({
