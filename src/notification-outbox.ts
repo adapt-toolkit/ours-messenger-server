@@ -1,8 +1,26 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export interface NotificationInput { eventId: string; title: string; body: string; url: string; }
-interface Entry { id: string; value: unknown; payload?: NotificationInput; operation?: 'delete-target'; }
+export type ContactTarget = { kind: 'contact'; contactId: string };
+export interface NotificationInput { eventId: string; title: string; body: string; target: ContactTarget; anchor?: { kind: 'messenger-message'; wireId: string }; }
+interface Entry { id: string; value: unknown; payload?: NotificationInput; operation?: 'delete-target'; targetVersion?: 1; }
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const closed = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
+const text = (value: unknown, max: number): value is string => typeof value === 'string' && !!value.trim() && value.length <= max;
+export const contactId = (value: unknown): value is string => text(value, 512) && !/[\/\\\x00-\x1f\x7f]/.test(value) && value !== '.' && value !== '..';
+export const contactIdentity = (id: string): string => /^[a-f0-9]{64}$/i.test(id) ? id.toUpperCase() : id;
+export function contactTarget(value: unknown): value is ContactTarget {
+  return object(value) && closed(value, ['kind', 'contactId']) && value.kind === 'contact' && contactId(value.contactId);
+}
+function notificationInput(value: unknown): value is NotificationInput {
+  if (!object(value) || !closed(value, ['eventId', 'title', 'body', 'target', 'anchor']) || !text(value.eventId, 512)
+    || !text(value.title, 160) || !text(value.body, 512) || !contactTarget(value.target)) return false;
+  return value.anchor === undefined || (object(value.anchor) && closed(value.anchor, ['kind', 'wireId'])
+    && value.anchor.kind === 'messenger-message' && text(value.anchor.wireId, 1024) && !/[\x00-\x1f\x7f]/.test(value.anchor.wireId));
+}
+const cleanup = (value: unknown): value is { target: ContactTarget } => object(value) && closed(value, ['target']) && contactTarget(value.target);
+const supported = (entry: Entry) => entry.operation === 'delete-target' ? cleanup(entry.value)
+  : entry.payload ? notificationInput(entry.payload) : entry.targetVersion === 1;
 export interface ProducerConfig { origin: string; token: string; }
 export function producerConfig(env: NodeJS.ProcessEnv = process.env): ProducerConfig | undefined {
   const origin = env.OURS_NOTIFICATIONS_ORIGIN, token = env.OURS_NOTIFICATIONS_PRODUCER_TOKEN;
@@ -24,7 +42,7 @@ export class NotificationOutbox {
   constructor(private readonly file: string, private readonly config: ProducerConfig,
     private readonly project: (value: unknown, id: string) => Promise<NotificationInput | undefined>,
     private readonly warn: (message: string) => void = () => {},
-    private readonly shouldRetire?: (url: string) => Promise<boolean | undefined>) {
+    private readonly shouldRetire?: (target: ContactTarget) => Promise<boolean | undefined>) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { entries: [] };
     this.entries = Array.isArray(saved) ? saved : saved.entries;
@@ -45,14 +63,15 @@ export class NotificationOutbox {
   saveCheckpoint(checkpoint: unknown): void { this.persist(this.entries, this.cursor, checkpoint); }
   enqueue(id: string, value: unknown, cursor = this.cursor): boolean {
     if (this.entries.some(e => e.id === id)) { if (cursor !== this.cursor) this.advance(cursor!); return true; }
-    if (this.entries.length >= 2000) return false;
-    this.persist([...this.entries, { id, value }], cursor);
+    if (this.entries.filter(supported).length >= 2000) return false;
+    this.persist([...this.entries, { id, value, targetVersion: 1 }], cursor);
     return true;
   }
-  retireTarget(url: string, matches: (value: unknown, payload?: NotificationInput) => boolean): void {
-    const id = `delete-target:${url}`;
-    const retained = this.entries.filter(entry => entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
-    if (!retained.some(entry => entry.id === id)) retained.push({ id, value: { url }, operation: 'delete-target' });
+  retireTarget(target: ContactTarget, matches: (value: unknown, payload?: NotificationInput) => boolean): void {
+    if (!contactTarget(target)) throw new Error('Invalid notification target');
+    const id = `delete-target:${contactIdentity(target.contactId)}`;
+    const retained = this.entries.filter(entry => !supported(entry) || entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
+    if (!retained.some(entry => entry.id === id)) retained.push({ id, value: { target }, operation: 'delete-target' });
     // A cleanup request must survive service outage and cannot be dropped by send capacity limits.
     this.persist(retained);
   }
@@ -62,20 +81,22 @@ export class NotificationOutbox {
   private async drainOnce(): Promise<void> {
     let attempts = 0;
     for (const entry of [...this.entries]) {
+      if (!supported(entry)) continue;
       if (attempts >= 32) break;
       try {
         if (!this.entries.some(current => current.id === entry.id)) continue;
         if (entry.operation === 'delete-target' && this.shouldRetire) {
-          const retire = await this.shouldRetire((entry.value as {url:string}).url);
+          const retire = await this.shouldRetire((entry.value as {target:ContactTarget}).target);
           // Unknown stored URLs stay queued without blocking unrelated canonical work.
           if (retire === undefined) continue;
           if (!retire) { attempts++; this.persist(this.entries.filter(current => current.id !== entry.id)); continue; }
         }
-        attempts++;
         const value = entry.operation === 'delete-target'
           ? entry.value : entry.payload ?? await this.project(entry.value, entry.id);
         if (!this.entries.some(current => current.id === entry.id)) continue;
         if (value === undefined) { this.persist(this.entries.filter(current => current.id !== entry.id)); continue; }
+        if (entry.operation ? !cleanup(value) : !notificationInput(value)) continue;
+        attempts++;
         // Freeze the canonical projection before any network attempt. A crash
         // after service acceptance must replay the identical dedupe payload.
         if (!entry.operation && !entry.payload) this.persist(this.entries.map(e => e.id === entry.id ? { ...e, payload: value as NotificationInput } : e));
