@@ -20,13 +20,28 @@ try {
   const file = join(dir, 'invalid-fields.json');
   const invalid = [...[null, false, 0, ''].map((payload, i) => ({ id: `payload-${i}`, value: {}, targetVersion: 1, payload })),
     { id: 'operation', value: {}, targetVersion: 1, operation: 'other' },
-    { id: 'cleanup', value: { url: '/fleet/chats/contacts/PEER' }, operation: 'delete-target' }];
+    { id: 'cleanup', value: { url: '/fleet/chats/contacts/PEER' }, operation: 'delete-target' },
+    null, 7, 'typed', [], { id: 5, value: {}, targetVersion: 1 }, { id: 'typed', value: {} }];
   writeFileSync(file, JSON.stringify({ entries: [...invalid, { id: 'typed', value: {}, targetVersion: 1 }] }));
   const outbox = new NotificationOutbox(file, config, project, () => {}, async () => true); outboxes.push(outbox);
   await outbox.drain();
   assert.deepEqual(accepted.map(row => [row.path, row.body.eventId]), [['/api/v1/send', 'typed']]);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).entries, invalid);
-  assert.equal(outbox.enqueue('next', {}), true);
+  // Unsupported entries neither hold an ID nor block later typed work or cleanup, also after a restart.
+  assert.equal(outbox.enqueue('typed', {}), true); assert.equal(outbox.enqueue('next', {}), true);
+  outbox.retireTarget({ kind: 'contact', contactId: 'GONE' }, () => false); await outbox.close();
+  const restarted = new NotificationOutbox(file, config, project, () => {}, async () => true); outboxes.push(restarted);
+  await restarted.drain();
+  assert.deepEqual(accepted.map(row => [row.path, row.body.eventId ?? row.body.target.contactId]),
+    [['/api/v1/send', 'typed'], ['/api/v1/send', 'typed'], ['/api/v1/send', 'next'], ['/api/v1/delete-target', 'GONE']]);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).entries, invalid);
+
+  // Only typed entries count toward the queue capacity.
+  const capacity = join(dir, 'capacity.json');
+  writeFileSync(capacity, JSON.stringify({ entries: [...Array.from({ length: 50 }, () => null), { id: 'raw', value: {} },
+    ...Array.from({ length: 1999 }, (_, i) => ({ id: `typed-${i}`, value: {}, targetVersion: 1 }))] }));
+  const full = new NotificationOutbox(capacity, config, project); outboxes.push(full);
+  assert.equal(full.enqueue('last', {}), true); assert.equal(full.enqueue('over', {}), false);
 
   // Only the current state shape is read; anything else is refused and left unchanged.
   for (const contents of ['[]', '[{"id":"x","value":{}}]', 'null', '{"entries":{}}']) {
