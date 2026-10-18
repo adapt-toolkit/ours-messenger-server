@@ -6,6 +6,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import webpush from 'web-push';
+import type { ContactTarget } from './notification-outbox.js';
 
 export type PushPreviewMode = 'full' | 'private';
 export type PushKind = 'message' | 'file' | 'photo' | 'voice';
@@ -29,7 +30,8 @@ export interface PushEvent {
   readonly body: string;
   readonly contact_id: string;
   readonly wire_id: string;
-  readonly url: string;
+  readonly target: ContactTarget;
+  readonly anchor: { readonly kind: 'messenger-message'; readonly wireId: string };
 }
 
 export interface PushJob {

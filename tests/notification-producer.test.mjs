@@ -19,7 +19,7 @@ const server = createServer(async (req, res) => {
 }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
 const config = { origin: `http://127.0.0.1:${server.address().port}`, token: 'p'.repeat(40) };
 let text = 'Hello user';
-const client = { getHistoryItem: async ({ wire_id }) => ({ wire_id, direction: 'in', text, peer: { id: 'PEER', name: 'Alice' } }),
+const client = { getHistoryItem: async ({ wire_id }) => ({ wire_id, direction: 'in', text, peer: { id: wire_id==='raw/%wire#id'?'raw:%contact':'PEER', name: 'Alice' } }),
   getFileInfo: async ({ wire_id }) => ({ wire_id, direction: 'in', peer: { id: 'PEER' }, from: { name: 'Alice' }, kind: 'photo', mime: 'image/png', filename: 'photo.png' }) };
 let producer = new MessengerNotificationProducer(dir, config, 'USER', client, () => {});
 try {
@@ -36,14 +36,20 @@ try {
   fail = false; await producer.outbox.drain();
   assert.equal(accepted.length, 2); assert.equal(accepted[0].body, 'Hello user');
   assert.equal(accepted[1].body, 'Photo: photo.png');
-  assert.equal(accepted[0].url, '/fleet/chats/contacts/PEER#chat-message-MESSAGE');
-  assert.equal(accepted[1].url, '/fleet/chats/contacts/PEER#chat-message-FILE');
+  assert.deepEqual(accepted[0].target, {kind:'contact',contactId:'PEER'});assert.deepEqual(accepted[0].anchor,{kind:'messenger-message',wireId:'MESSAGE'});assert.equal('url' in accepted[0],false);
+  assert.deepEqual(accepted[1].target,{kind:'contact',contactId:'PEER'});assert.deepEqual(accepted[1].anchor,{kind:'messenger-message',wireId:'FILE'});
   assert.equal(JSON.parse(readFileSync(join(dir, 'notification-outbox.json'), 'utf8')).entries.length, 0);
   await producer.close();
   const file=join(dir,'notification-outbox.json'),saved=JSON.parse(readFileSync(file,'utf8'));
   const legacy={eventId:'frozen-old',title:'Frozen',body:'Original',url:'/fleet/chats?source=messenger&chat=PEER&detail=1#chat-message-old'};
-  saved.entries=[{id:legacy.eventId,value:{},payload:legacy}];writeFileSync(file,JSON.stringify(saved));
+  saved.entries=Array.from({length:40},(_,i)=>({id:'old-'+i,value:{sender_id:'PEER',wire_id:'old-'+i},...(i%2?{payload:{...legacy,eventId:'old-'+i}}:{})}));writeFileSync(file,JSON.stringify(saved));
   producer=new MessengerNotificationProducer(dir,config,'USER',client,()=>{});await producer.outbox.drain();
-  assert.deepEqual(accepted.at(-1),legacy);
+  assert.equal(accepted.length,2);assert.deepEqual(JSON.parse(readFileSync(file,'utf8')).entries,saved.entries);
+  assert.equal(producer.admit({event:'message_received',sender_id:'raw:%contact',wire_id:'raw/%wire#id'}).status,'queued');
+  await producer.outbox.drain();
+  assert.deepEqual(accepted.at(-1).target,{kind:'contact',contactId:'raw:%contact'});assert.deepEqual(accepted.at(-1).anchor,{kind:'messenger-message',wireId:'raw/%wire#id'});
+  assert.deepEqual(JSON.parse(readFileSync(file,'utf8')).entries,saved.entries);
+  assert.equal(producer.admit({event:'message_received',sender_id:'PEER',wire_id:'x'.repeat(512)}).status,'no_targets','new shared events outside the existing 512-character event ID envelope are rejected before durable admission');
+  assert.deepEqual(JSON.parse(readFileSync(file,'utf8')).entries,saved.entries);
   console.log('Messenger event watcher -> durable producer -> HTTP delivery passed without local push bindings');
 } finally { await producer.close(); server.closeAllConnections(); await new Promise(r => server.close(r)); }
