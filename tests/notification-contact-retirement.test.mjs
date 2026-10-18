@@ -35,7 +35,7 @@ try{
  releaseSend();await running;holdSend=false;await producer.outbox.drain();
  const cleanup=deliveries.findIndex(row=>row.path==='/api/v1/delete-target');
  assert.ok(cleanup>deliveries.findIndex(row=>row.value.eventId?.includes('inflight')));
- assert.equal(deliveries[cleanup].value.url,'/fleet/chats/contacts/REMOVED');
+ assert.deepEqual(deliveries[cleanup].value.target,{kind:'contact',contactId:'REMOVED'});
  assert.ok(entries().some(row=>row.operation==='delete-target')); // outage persists through restart
  await producer.close();producer=new MessengerNotificationProducer(dir,config,'USER',client,()=>{});
  failDelete=false;await producer.outbox.drain();assert.equal(entries().length,0);
@@ -56,23 +56,27 @@ try{
  const oldURL='/fleet/chats?source=messenger&chat=REMOVED';
  const unsupported=[...Array.from({length:33},(_,i)=>oldURL+'&old='+i),oldURL,'/fleet/chats/contacts/%','/fleet/chats/agents/REMOVED','/fleet/chats/contacts/REMOVED?chat='];
  const unknownEntries=unsupported.map((url,i)=>({id:'unsupported-'+i,operation:'delete-target',value:{url}}));
- saved.entries=[...unknownEntries,{id:'known-cleanup',operation:'delete-target',value:{url:'/fleet/chats/contacts/REMOVED'}}];
+ saved.entries=[...unknownEntries,{id:'known-cleanup',operation:'delete-target',value:{target:{kind:'contact',contactId:'REMOVED'}}}];
  writeFileSync(file,JSON.stringify(saved));producer=new MessengerNotificationProducer(dir,config,'USER',client,()=>{});
  const deliveredBefore=deliveries.length;await producer.outbox.drain();
- assert.equal(deliveries.length,deliveredBefore+1);assert.equal(deliveries.at(-1).value.url,'/fleet/chats/contacts/REMOVED');assert.deepEqual(entries(),unknownEntries);
+ assert.equal(deliveries.length,deliveredBefore+1);assert.deepEqual(deliveries.at(-1).value.target,{kind:'contact',contactId:'REMOVED'});assert.deepEqual(entries(),unknownEntries);
  saved.entries=unknownEntries;
  // Retiring a canonical payload also matches when old queue records have no sender field.
- const canonical={eventId:'canonical',title:'Update',body:'View',url:'/fleet/chats/contacts/%52EMOVED?scope=All#chat-message-old'};
+ const canonical={eventId:'canonical',title:'Update',body:'View',target:{kind:'contact',contactId:'REMOVED'},anchor:{kind:'messenger-message',wireId:'raw/#message'}};
  saved.entries.push({id:'canonical',value:{},payload:canonical});
- const legacy={...canonical,eventId:'legacy',url:oldURL};saved.entries.push({id:'legacy',value:{},payload:legacy});
+ const legacy={eventId:'legacy',title:'Legacy',body:'Retain',url:oldURL};saved.entries.push({id:'legacy',value:{},payload:legacy});
  await producer.close();writeFileSync(file,JSON.stringify(saved));
  producer=new MessengerNotificationProducer(dir,config,'USER',client,()=>{});unavailable=true;
- producer.retireContact('removed');
+ producer.retireContact('REMOVED');
  assert.ok(!entries().some(row=>row.id==='canonical'));
  assert.ok(entries().some(row=>row.id==='legacy' && row.payload.url===oldURL));
  await producer.outbox.drain();
- assert.deepEqual(deliveries.at(-1).value,legacy);
+ assert.ok(!deliveries.some(row=>row.value.eventId==='legacy'));assert.ok(entries().some(row=>row.id==='legacy'&&row.payload.url===oldURL));
  assert.ok(entries().some(row=>row.value.url===oldURL && row.operation==='delete-target'));
  unavailable=false;
+ const caseBefore=deliveries.length;producer.retireContact('Opaque');producer.retireContact('opaque');await producer.outbox.drain();await producer.outbox.drain();
+ const caseTargets=deliveries.slice(caseBefore).filter(row=>row.path==='/api/v1/delete-target'&&['Opaque','opaque'].includes(row.value.target?.contactId)).map(row=>row.value.target.contactId).sort();
+ assert.deepEqual(caseTargets,['Opaque','opaque'],'distinct opaque contact IDs must not share a cleanup operation');
+ contacts=[{container_id:'A'.repeat(64)}];const hexBefore=deliveries.length;producer.retireContact('a'.repeat(64));await producer.outbox.drain();assert.equal(deliveries.length,hexBefore,'hex CID case variants identify the recreated contact and cancel cleanup');
  console.log('Contact removal canonical CID, failed removal preservation, inflight send cleanup order, durable outage/restart, unrelated contact and pending/contact-inventory failure preservation PASS');
 }finally{await producer.close();for(const server of [api,service]){server.closeAllConnections();await new Promise(r=>server.close(r));}}

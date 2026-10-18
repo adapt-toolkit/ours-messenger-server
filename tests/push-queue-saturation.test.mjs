@@ -103,7 +103,7 @@ function legacyState(jobs) {
       now: () => now, autoStart: false,
       project: async (pending) => ({
         v: 1, kind: pending.kind, title: 'Agent', body: 'event', contact_id: pending.contactId,
-        wire_id: pending.wireId, url: '/chats/CID-AGENT',
+        wire_id: pending.wireId, target: {kind:'contact',contactId:pending.contactId}, anchor: {kind:'messenger-message',wireId:pending.wireId},
       }),
     });
     const firstQueue = new PushDeliveryQueue(queueOptions(store));
@@ -171,7 +171,7 @@ function legacyState(jobs) {
       store, client: {}, identityCid: 'CID-ME', log: { info() {}, warn() {} }, now: () => now,
       autoStart: false, project: async (pending) => ({
         v: 1, kind: pending.kind, title: 'Agent', body: 'once', contact_id: pending.contactId,
-        wire_id: pending.wireId, url: '/chats/CID-AGENT',
+        wire_id: pending.wireId, target: {kind:'contact',contactId:pending.contactId}, anchor: {kind:'messenger-message',wireId:pending.wireId},
       }),
     };
     const first = new PushDeliveryQueue(options);
