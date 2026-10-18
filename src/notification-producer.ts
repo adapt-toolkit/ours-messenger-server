@@ -1,19 +1,9 @@
 import type { OursClient } from '@ours.network/sdk';
 import { join } from 'node:path';
-import { NotificationOutbox, contactId, contactTarget, contactIdentity, type LegacyRecord, type ProducerConfig } from './notification-outbox.js';
+import { NotificationOutbox, contactId, contactTarget, contactIdentity, type ProducerConfig } from './notification-outbox.js';
 import { projectPushEvent, type PushDeliveryOptions } from './push-delivery.js';
 import type { PushAdmission, PushJob } from './push.js';
 
-// The raw record earlier releases queued, under the event ID this identity derived from it.
-const legacyRecord = (identityCid: string): LegacyRecord => (value, id) => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return Object.keys(record).every(key => ['event', 'sender_id', 'wire_id', 'sender_name'].includes(key))
-    && ['message_received', 'file_received'].includes(record.event as string) && contactId(record.sender_id)
-    && typeof record.wire_id === 'string' && !!record.wire_id.trim() && record.wire_id.length <= 1024 && !/[\x00-\x1f\x7f]/.test(record.wire_id)
-    && (record.sender_name === undefined || (typeof record.sender_name === 'string' && record.sender_name.length <= 512))
-    && id.length <= 512 && id === `${identityCid}:${record.wire_id}:${record.event}`;
-};
 /** Durable event producer even when the user has no registered push devices. */
 export class MessengerNotificationProducer {
   readonly outbox: NotificationOutbox;
@@ -37,7 +27,7 @@ export class MessengerNotificationProducer {
       if(!contactTarget(target))return undefined;
       const known = await knownContact(target.contactId);
       return known === undefined ? undefined : !known;
-    }, legacyRecord(identityCid));
+    });
   }
   admit(record: Record<string, unknown>): PushAdmission {
     if (!['message_received', 'file_received'].includes(String(record.event))
