@@ -457,6 +457,13 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
 
   const subscription = deps.events.subscribe(deps.sseQueueLimit ?? 64);
   let closed = false;
+  let lastOutput = Date.now();
+  const heartbeatMs = deps.sseHeartbeatMs ?? 20_000;
+  const sendHint = (event: MessengerEvent, identity?: string) => {
+    const writable = writeSse(res, event, identity);
+    lastOutput = Date.now();
+    return writable;
+  };
   let drainWait: Promise<void> | null = null;
   let releaseDrain: (() => void) | null = null;
   const onDrain = () => {
@@ -487,14 +494,16 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
     // A heartbeat is disposable while the previous write is backpressured. It
     // must share the same drain barrier as event frames or it can become a
     // second unbounded producer in ServerResponse's internal buffer.
-    if (!closed && !res.destroyed && !drainWait && !res.write(': keepalive\n\n')) {
-      void waitForDrain();
+    if (!closed && !res.destroyed && !drainWait && Date.now()-lastOutput>=heartbeatMs) {
+      const writable = res.write(': keepalive\n\n');
+      lastOutput = Date.now();
+      if (!writable) void waitForDrain();
     }
-  }, deps.sseHeartbeatMs ?? 20_000);
+  }, heartbeatMs);
   heartbeat.unref?.();
 
   try {
-    if (!writeSse(res, { type: 'sync_required', reason: 'connected' }, deps.identityCid)) {
+    if (!sendHint({ type: 'sync_required', reason: 'connected' }, deps.identityCid)) {
       await waitForDrain();
     }
     while (!closed) {
@@ -505,7 +514,7 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
       // missed details to one overflow sync hint.
       if (drainWait) await drainWait;
       if (closed || res.destroyed) break;
-      if (!writeSse(res, event)) await waitForDrain();
+      if (!sendHint(event)) await waitForDrain();
     }
   } finally {
     clearInterval(heartbeat);

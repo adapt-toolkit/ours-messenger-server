@@ -47,7 +47,7 @@ export interface ResourceFrameBinding {
   readonly baselineId?: string;
 }
 export type ResourceHealthReason = 'auth_required' | 'unsupported' | 'upstream_unavailable';
-export type ResourceEnvelope = ResourceFrameBinding & (
+export type ResourceEnvelope = ResourceFrameBinding & { readonly source?: IdentityResourcePosition } & (
   | { readonly kind: 'snapshot'; readonly payload: unknown }
   | { readonly kind: 'upsert'; readonly payload: MessageResourceDelta }
   | { readonly kind: 'delete'; readonly payload: { readonly id: string; readonly revision: number } }
@@ -56,7 +56,8 @@ export type ResourceEnvelope = ResourceFrameBinding & (
   | { readonly kind: 'resync'; readonly payload: { readonly reason: 'capacity' | 'projection_unavailable' } }
   | { readonly kind: 'health'; readonly payload: { readonly healthy: false; readonly reason: ResourceHealthReason } }
 );
-export interface ResourceWireFrame { event: 'resource' | 'resource-chunk'; data: Record<string, unknown> }
+export interface ResourceCoverage { readonly protocolVersion: 1; readonly producerGeneration: string; readonly views: readonly (ResourceFrameBinding & {readonly source: IdentityResourcePosition})[] }
+export interface ResourceWireFrame { event: 'resource' | 'resource-chunk' | 'resource-coverage'; data: Record<string, unknown> }
 export const RESOURCE_FRAME_BYTES = 512 * 1024;
 export const RESOURCE_PENDING_BYTES = 8 * 1024 * 1024;
 export const RESOURCE_ASSEMBLY_BYTES = 16 * 1024 * 1024;
