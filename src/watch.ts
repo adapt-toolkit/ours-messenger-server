@@ -193,7 +193,7 @@ export interface ResourceObserverHandle {
 
 /** Independent from durable push observation: neither notification long-poll
  * success nor browser keepalives certify this committed resource source. SDK
- * resourceEvents owns its opening and six-second producer-coverage deadlines. */
+ * resourceEvents owns its opening and 45-second producer-coverage deadlines. */
 export function startResourceObserver(
   client: Pick<OursClient, 'resourceEvents'>,
   identity: string,
@@ -242,7 +242,7 @@ export function startResourceObserver(
     } finally { healthy = false; }
   })();
   return { ready, get healthy() {
-      if (healthy && Date.now() - lastCoverage >= 6_000) {
+      if (healthy && Date.now() - lastCoverage >= 45_000) {
         fail(new Error('resource source coverage expired'));
         controller.abort();
       }
