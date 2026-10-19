@@ -55,6 +55,9 @@ try {
  const response=await fetch(base+'/api/events?resources=1',{signal:abort.signal}); reader=response.body.getReader();
  let pending='';
  const frames=[];
+ const coverageViews=frame=>frame.event==='resource-coverage'
+  ? frame.data.views
+  : frame.data.kind==='coverage' ? [{...frame.data,source:frame.data.payload.source}] : [];
  async function nextFrame() {
   for(;;) {
    while(!pending.includes('\n\n')) {const result=await reader.read();assert.equal(result.done,false,'resource stream remains open');pending+=new TextDecoder().decode(result.value);}
@@ -110,8 +113,8 @@ try {
  // The contact snapshot can arrive while another view still has a queued
  // projection for the same mutation. Measure idle only after every view has
  // delivered coverage through the removal's capture, without a settling sleep.
- const removalCoverage=await untilFrame('removed contact coverage',frame=>frame.data.viewId==='contacts'&&frame.data.kind==='coverage');
- const barrier=removalCoverage.data.payload.source;
+ const removalCoverage=await untilFrame('removed contact coverage',frame=>coverageViews(frame).some(view=>view.viewId==='contacts'));
+ const barrier=coverageViews(removalCoverage).find(view=>view.viewId==='contacts').source;
  // A removed peer no longer has a command catalog. Its explicit failure is
  // not healthy coverage; retire that selection before measuring active views.
  const catalogFailed=frame=>frame.data.viewId==='commands'&&frame.data.kind==='resync'&&frame.data.payload?.reason==='projection_unavailable';
@@ -121,15 +124,15 @@ try {
  // Do not reuse an earlier capture at the same position: the observer may
  // already have queued another view pass while that capture was publishing.
  const coverageRoundStart=frames.length;
- const allCovered=()=>views.filter(([descriptor])=>descriptor.viewId!=='commands').every(([descriptor])=>frames.slice(coverageRoundStart).some(frame=>frame.data.viewId===descriptor.viewId
-  && frame.data.kind==='coverage' && frame.data.payload.source.producerGeneration===barrier.producerGeneration
-  && frame.data.payload.source.position>=barrier.position));
+ const allCovered=()=>views.filter(([descriptor])=>descriptor.viewId!=='commands').every(([descriptor])=>frames.slice(coverageRoundStart).some(frame=>coverageViews(frame).some(view=>view.viewId===descriptor.viewId
+  && view.source.producerGeneration===barrier.producerGeneration
+  && view.source.position>=barrier.position)));
  if(!allCovered())await untilFrame('all views cover removal',allCovered);
  const contentBefore=requests.filter(request=>request.startsWith('GET /api/')&&!request.includes('/api/events')).length;
  dataEventFollowupGETs=contentBefore-initialGETs;
  const idleCanonicalBefore=canonicalReads,idlePositionBefore=positionReads;
  const coverageStart=Date.now();
- await untilFrame('healthy source coverage',frame=>frame.data.kind==='coverage'&&Date.now()-coverageStart>=2100);
+ await untilFrame('healthy source coverage',frame=>coverageViews(frame).length>0&&Date.now()-coverageStart>=2100);
  assert.equal(requests.filter(request=>request.startsWith('GET /api/')&&!request.includes('/api/events')).length,contentBefore);
  healthyPeriodicGETs=requests.filter(request=>request.startsWith('GET /api/')&&!request.includes('/api/events')).length-contentBefore;
  assert.equal(contentBefore,initialGETs,'healthy updates required only registered initial GETs');
