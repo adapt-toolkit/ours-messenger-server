@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mock } from 'node:test';
 import { serveApi } from '../src/api.ts';
 import { MessengerEventBus } from '../src/events.ts';
 
@@ -84,6 +85,7 @@ class BackpressuredResponse extends FakeResponse {
   }
 }
 
+mock.timers.enable({apis:['setInterval','Date'],now:1000});
 const slowEvents = new MessengerEventBus();
 const slowReq = new FakeRequest();
 const slowRes = new BackpressuredResponse();
@@ -98,6 +100,8 @@ for (let i = 0; i < 20; i++) {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+mock.timers.tick(40000);
+assert.equal(slowRes.chunks.length,1,'hint timer cannot write around a backpressured initial sync');
 const beforeDrain = slowRes.chunks.join('');
 const detailedBeforeDrain = beforeDrain.split('\n\n').filter((frame) => frame.startsWith('event: message_received')).length;
 slowRes.drain();
@@ -108,9 +112,31 @@ const overflowFrames = slowWire.split('\n\n').filter((frame) => frame.includes('
 slowReq.emit('close');
 await slowServing;
 slowEvents.close();
+mock.timers.reset();
 
 assert.equal(detailedBeforeDrain, 0, 'a backpressured HTTP writer must stop consuming detailed frames');
 assert.equal(overflowFrames, 1, 'bounded overflow collapses missed details to one snapshot recovery signal');
 assert.equal(slowEvents.size, 0, 'backpressured socket close releases the SSE subscriber and drain wait');
 
 console.log('sse-e2e OK — headers, metadata privacy, backpressure overflow recovery, reconnect, disconnect');
+
+// Production hint cadence remains twenty seconds; actual hints suppress the
+// transport-only comment without adding any content reader or bus owner.
+{
+ mock.timers.enable({apis:['setInterval','Date'],now:1000});
+ const bus=new MessengerEventBus(),request=new FakeRequest(),response=new FakeResponse();
+ const {sseHeartbeatMs,...normalDeps}=deps;
+ const running=serveApi(request,response,{...normalDeps,events:bus});
+ try {
+  await new Promise(resolve=>setImmediate(resolve));mock.timers.tick(19000);
+  assert.equal(response.chunks.filter(chunk=>chunk.startsWith(':')).length,0,'default hint cadence is not faster than twenty seconds');
+  bus.publish({type:'sync_required',reason:'daemon_reconnected'});await new Promise(resolve=>setImmediate(resolve));
+  mock.timers.tick(1000);
+  assert.equal(response.chunks.filter(chunk=>chunk.startsWith(':')).length,0,'recent actual hint suppresses redundant comment');
+  mock.timers.tick(20000);
+  assert.equal(response.chunks.filter(chunk=>chunk.startsWith(':')).length,1,'quiet hints retain twenty-second transport liveness');
+  const count=response.chunks.length;request.emit('close');await running;
+  mock.timers.tick(40000);assert.equal(response.chunks.length,count);assert.equal(bus.size,0);
+ } finally {request.emit('close');await running;bus.close();mock.timers.reset();}
+}
+console.log('sse-e2e: retained twenty-second hint cadence and output suppression passed');

@@ -79,7 +79,7 @@ try {
  position++; wake({protocolVersion:1,producerGeneration:'source',position,kind:'committed'});
  let update = await frame();
  assert.equal(update.data.kind,'snapshot'); assert.equal(update.data.payload.name,'Name1');
- await frame(); // committed coverage
+ assert.equal(update.data.source.position,1,'complete changed data certifies its source without redundant coverage');
  writeHumanProfile(stateDir,identityCid,{name:'Local profile'});
  update = await frame(); assert.equal(update.data.payload.humanProfile.name,'Local profile');
  race=true;

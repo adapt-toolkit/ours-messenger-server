@@ -17,11 +17,14 @@ const completion = output.send(envelope);
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(response.chunks.length, 1, 'large assembly emits only start while backpressured');
 assert.ok(!failure, 'valid >8MiB assembly does not count as pending queue');
+const batchCompletion=output.send({protocolVersion:1,producerGeneration:'m',views:[{...envelope,kind:undefined,payload:undefined,sequence:2,source:{protocolVersion:1,producerGeneration:'s',position:0}}]});
+assert.equal(response.chunks.length,1,'shared health remains behind the active chunk assembly');
 response.drain();
-await completion;
+await Promise.all([completion,batchCompletion]);
 assert.ok(response.chunks.length > 2);
 assert.ok(response.chunks.every(frame => Buffer.byteLength(frame) <= 512 * 1024));
-assert.ok(response.chunks.at(-1).includes('"type":"commit"'));
+assert.ok(response.chunks.at(-2).includes('"type":"commit"'));
+assert.ok(response.chunks.at(-1).startsWith('event: resource-coverage\n'),'shared envelope follows complete data in the same ordered writer');
 controller.abort();
 
 const slow = new Response(), abort = new AbortController();
@@ -127,7 +130,9 @@ Date.now = () => now;
 const elapsedFailures=[];
 const elapsedSource=watch.startResourceObserver(sourceClient,'bound',{committed:()=>{},failed:error=>elapsedFailures.push(error)});
 await elapsedSource.ready;
-now=7001;
+now=45000;
+assert.equal(elapsedSource.healthy,true,'established relay source survives forty-four seconds');
+now=46001;
 assert.equal(elapsedSource.healthy,false,'elapsed source silence expires before a delayed timer or new activity');
 assert.equal(elapsedFailures.length,1);
 Date.now=realNow;
@@ -258,3 +263,103 @@ try{
  await assert.rejects(registry2.register(boundedSession.connectionId,'retired_0',1,{viewId:'retired_0',resource:'identity'}),/obsolete/);
  console.log('resource-connections: retirement identity validation and bounded fence retention passed');
 }finally{boundedSession.close();}
+
+// Fresh SDK liveness cannot certify a projection still held at an older position.
+{
+ const savedNow=Date.now;let clock=1000;Date.now=()=>clock;
+ sourcePosition=0;let hold=false,release,entered;const gate=new Promise(resolve=>release=resolve),entry=new Promise(resolve=>entered=resolve);
+ const heldStream=new Response();heldStream.blocked=false;let reads=0;
+ const heldRegistry=new connections.ResourceConnections({client:rpc,identity:'bound',identityCid:'a'.repeat(64),stateDir:profileDir,
+  project:async()=>{reads++;if(hold){entered();await gate;}return {position:sourcePosition};}});
+ const heldSession=heldRegistry.open(heldStream);
+ const frames=()=>heldStream.chunks.filter(chunk=>chunk.startsWith('event: resource')).map(chunk=>({event:chunk.split('\n')[0].slice(7),data:JSON.parse(chunk.split('data: ')[1])}));
+ try {
+  const a=await heldRegistry.register(heldSession.connectionId,'held',1,{viewId:'held',resource:'contacts'});
+  await heldRegistry.bound(heldSession.connectionId,'held',1,a.baselineId);
+  const b=await heldRegistry.register(heldSession.connectionId,'sibling',1,{viewId:'sibling',resource:'contacts'});
+  await heldRegistry.bound(heldSession.connectionId,'sibling',1,b.baselineId);
+  const settledReads=reads;heldStream.chunks.length=0;
+  for(let i=1;i<=4;i++) {clock+=15000;wake({protocolVersion:1,kind:'coverage',producerGeneration:'s',position:0});await new Promise(resolve=>setImmediate(resolve));}
+  const idleFrames=frames(),idleReads=reads;
+  hold=true;sourcePosition=1;wake({protocolVersion:1,kind:'committed',producerGeneration:'s',position:1});await entry;
+  heldStream.chunks.length=0;clock+=15000;
+  wake({protocolVersion:1,kind:'coverage',producerGeneration:'s',position:1});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(frames().length,0,'position one cannot freshly cover held position zero');
+  assert.equal(idleFrames.length,4,'multiple views use one sparse envelope per fresh source signal');
+  assert.ok(idleFrames.every(frame=>frame.event==='resource-coverage'&&frame.data.views.length===2));
+  assert.equal(idleReads,settledReads,'health does not project canonical content');
+  release();await new Promise(resolve=>setImmediate(resolve));
+  const changed=frames().filter(frame=>frame.data.kind==='snapshot');
+  assert.equal(changed.length,2);
+  assert.ok(changed.every(frame=>frame.data.source?.position===1),'complete changed data carries its captured source');
+  assert.equal(frames().filter(frame=>frame.data.kind==='coverage'||frame.event==='resource-coverage').length,0,'changed data suppresses redundant coverage');
+ } finally {release();heldSession.close();Date.now=savedNow;}
+}
+console.log('resource-connections: sparse shared health, held projection and qualified changed data passed');
+
+// Commits suppress SDK's periodic coverage. Completed unchanged projections
+// must therefore share due coverage using that fresh committed evidence.
+{
+ const savedNow=Date.now;let clock=1000,position=0,deliver,positionReads=0,projections=0;
+ Date.now=()=>clock;
+ const client={
+  async *resourceEvents(_identity,{signal}) {
+   yield {protocolVersion:1,producerGeneration:'frequent',position,kind:'ready'};
+   while(!signal.aborted) {
+    let abort;const frame=await new Promise(resolve=>{deliver=resolve;abort=()=>resolve(null);signal.addEventListener('abort',abort,{once:true});});
+    signal.removeEventListener('abort',abort);if(!frame)return;yield frame;
+   }
+  },
+  async resourcePosition(){positionReads++;return {protocolVersion:1,producerGeneration:'frequent',position};},
+ };
+ const response=new Response();response.blocked=false;
+ const owner=new connections.ResourceConnections({client,identity:'bound',identityCid:'a'.repeat(64),stateDir:profileDir,
+  project:async descriptor=>{projections++;return descriptor.viewId==='changing'?{position}:{contacts:[],pending:[],roots:[]};}});
+ const session=owner.open(response),qualified=new Map(),batches=[];
+ const settle=()=>new Promise(resolve=>setImmediate(resolve));
+ try {
+  for(const viewId of ['constant_a','constant_b','changing']) {
+   const descriptor={viewId,resource:'contacts'},binding=await owner.register(session.connectionId,viewId,1,descriptor);
+   await owner.bound(session.connectionId,viewId,1,binding.baselineId);qualified.set(viewId,clock);
+  }
+  await settle();response.chunks.length=0;
+  for(let tick=0;tick<6;tick++) {
+   clock+=10000;position++;
+   deliver({protocolVersion:1,producerGeneration:'frequent',position,kind:'committed'});await settle();
+   for(const wire of response.chunks.splice(0)) {
+    const frame=JSON.parse(wire.split('data: ')[1]);
+    if(wire.startsWith('event: resource-coverage\n')) {
+     batches.push({at:clock,frame});
+     for(const entry of frame.views) {assert.equal(entry.source.position,position);qualified.set(entry.viewId,clock);}
+    } else if(frame.source) qualified.set(frame.viewId,clock);
+   }
+   for(const viewId of ['constant_a','constant_b','changing']) assert.ok(clock-qualified.get(viewId)<45000,`${viewId} must not expire behind active sibling traffic`);
+  }
+  assert.equal(batches.length,3,'due unchanged views share one envelope per connection deadline');
+  assert.ok(batches.every(batch=>batch.frame.views.length===2&&batch.frame.views.every(entry=>entry.viewId.startsWith('constant_'))),'changing sibling certifies itself with complete data');
+  assert.ok(batches.slice(1).every((batch,index)=>batch.at-batches[index].at>=15000),'projection completion preserves the connection health budget');
+  assert.equal(projections,21,'exactly three baselines plus three projections per committed wake');
+  assert.equal(positionReads,42,'health adds no canonical source reads beyond before/after capture');
+  const before=projections,reads=positionReads;clock+=15000;
+  deliver({protocolVersion:1,producerGeneration:'frequent',position,kind:'coverage'});await settle();
+  assert.equal(projections,before);assert.equal(positionReads,reads,'source coverage itself never reads content or source position');
+  // A later baseline has a different due time. Its completion cannot start a
+  // second connection envelope eight seconds after earlier siblings' output.
+  response.chunks.length=0;clock+=8000;
+  const lateDescriptor={viewId:'constant_late',resource:'contacts'};
+  const late=await owner.register(session.connectionId,lateDescriptor.viewId,1,lateDescriptor);
+  await owner.bound(session.connectionId,lateDescriptor.viewId,1,late.baselineId);await settle();response.chunks.length=0;
+  const skewed=[];
+  for(let tick=0;tick<3;tick++) {
+   clock+=8000;position++;
+   deliver({protocolVersion:1,producerGeneration:'frequent',position,kind:'committed'});await settle();
+   for(const wire of response.chunks.splice(0)) if(wire.startsWith('event: resource-coverage\n')) skewed.push({at:clock,frame:JSON.parse(wire.split('data: ')[1])});
+  }
+  assert.equal(skewed.length,2,'different view due times retain one connection health budget');
+  assert.equal(skewed[1].at-skewed[0].at,16000);
+  assert.deepEqual(skewed[0].frame.views.map(entry=>entry.viewId),['constant_a','constant_b']);
+  assert.deepEqual(skewed[1].frame.views.map(entry=>entry.viewId),['constant_a','constant_b','constant_late']);
+
+ } finally {session.close();Date.now=savedNow;}
+}
+console.log('resource-connections: frequent commits preserve unchanged sibling health without extra reads passed');

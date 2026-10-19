@@ -4,10 +4,10 @@ import { subscribeHumanProfile } from './workspace-profile.js';
 import { startResourceObserver, type ResourceObserverHandle } from './watch.js';
 import { abortableProjection, canonicalResourceDescriptor, captureResourceProjection, messageProjectionDelta, type ResourceDescriptor, type MessageResourceSnapshot } from './resource-views.js';
 import type { ServerResponse } from 'node:http';
-import { resourceFrames, RESOURCE_ASSEMBLY_BYTES, RESOURCE_PENDING_BYTES, type ResourceEnvelope } from './resource-views.js';
+import { resourceFrames, RESOURCE_ASSEMBLY_BYTES, RESOURCE_PENDING_BYTES, type ResourceEnvelope, type ResourceCoverage } from './resource-views.js';
 
 interface PendingOutput {
-  envelope: ResourceEnvelope;
+  envelope: ResourceEnvelope | ResourceCoverage;
   bytes: number;
   resolve: () => void;
   reject: (error: Error) => void;
@@ -34,13 +34,14 @@ export class ResourceOutput {
     }
   }
 
-  send(envelope: ResourceEnvelope): Promise<void> {
+  send(envelope: ResourceEnvelope | ResourceCoverage, admitted: () => void = () => {}): Promise<void> {
     if (this.#closed) return Promise.reject(new Error('resource output closed'));
     const bytes = Buffer.byteLength(JSON.stringify(envelope));
     if (bytes > RESOURCE_ASSEMBLY_BYTES) return this.#fail(new Error('resource assembly limit exceeded'));
     if (this.#active && this.#pendingBytes + bytes > RESOURCE_PENDING_BYTES) {
       return this.#fail(new Error('resource pending limit exceeded'));
     }
+    admitted();
     return new Promise<void>((resolve, reject) => {
       const item = { envelope, bytes, resolve, reject };
       if (!this.#active) {
@@ -75,7 +76,7 @@ export class ResourceOutput {
     try {
       while (this.#active && !this.#closed) {
         const item = this.#active;
-        for (const frame of resourceFrames(item.envelope)) {
+        for (const frame of ('views' in item.envelope ? [{event:'resource-coverage' as const,data:item.envelope as unknown as Record<string,unknown>}] : resourceFrames(item.envelope))) {
           if (this.#closed) break;
           const writable = this.response.write(`event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`);
           if (!writable) await this.#drain();
@@ -130,6 +131,7 @@ interface ResourceView {
   payload?: unknown;
   covered?: IdentityResourcePosition;
   localRevision: number;
+  qualifiedAt?: number;
 }
 interface Connection {
   id: string;
@@ -140,6 +142,9 @@ interface Connection {
   observer: ResourceObserverHandle;
   localRevision: number;
   projectionTail: Promise<void>;
+  source?: IdentityResourcePosition;
+  coverageQueued: boolean;
+  coverageAt?: number;
   close: () => void;
 }
 
@@ -182,11 +187,12 @@ export class ResourceConnections {
     const observer = startResourceObserver(this.deps.client, this.deps.identity, {
       committed: frame => {
         if (!connection || controller.signal.aborted) return;
+        connection.source = frame;
         for (const view of connection.views.values()) {
-          if (frame.kind === 'coverage') {
-            if (view.covered && !view.failed) void this.#emit(connection, view, 'coverage', { source: view.covered }).catch(close);
-          } else if (!view.covered || frame.position > view.covered.position) this.#schedule(connection, view);
+          if (!view.covered || frame.position > view.covered.position) this.#schedule(connection, view);
         }
+        if (frame.kind === 'coverage') void this.#coverage(connection, frame).catch(close);
+        else this.#queueCoverage(connection);
       },
       failed: error => {
         if (!connection || controller.signal.aborted) return;
@@ -206,7 +212,7 @@ export class ResourceConnections {
         else void Promise.allSettled(writes).then(close);
       },
     });
-    connection = { id, controller, output, views: new Map(), epochs: new Map(), observer, localRevision: 0, projectionTail: Promise.resolve(), close };
+    connection = { id, controller, output, views: new Map(), epochs: new Map(), observer, localRevision: 0, projectionTail: Promise.resolve(), coverageQueued: false, close };
     this.#connections.set(id, connection);
     response.once('close', close);
     subscribeHumanProfile(this.deps.stateDir, this.deps.identityCid, () => {
@@ -285,10 +291,46 @@ export class ResourceConnections {
     view.controller.abort();
     view.rejectInitial(new ResourceBindingError(409, 'resource binding retired'));
   }
-  #emit(connection: Connection, view: ResourceView, kind: ResourceEnvelope['kind'], payload: unknown): Promise<void> {
+  #emit(connection: Connection, view: ResourceView, kind: ResourceEnvelope['kind'], payload: unknown, source?: IdentityResourcePosition): Promise<void> {
     return connection.output.send({ protocolVersion: 1, producerGeneration: this.producerGeneration,
-      viewId: view.descriptor.viewId, subscriptionEpoch: view.epoch, sequence: ++view.sequence,
-      revision: view.revision, baselineId: view.baselineId, kind, payload } as ResourceEnvelope);
+      viewId: view.descriptor.viewId, subscriptionEpoch: view.epoch, sequence: view.sequence+1,
+      revision: view.revision, baselineId: view.baselineId, kind, payload, ...(source ? {source} : {}) } as ResourceEnvelope, () => {view.sequence++;if(source||kind==='ready')view.qualifiedAt=Date.now();});
+  }
+  #queueCoverage(connection: Connection): void {
+    if (connection.coverageQueued) return;
+    connection.coverageQueued = true;
+    // A committed wake can suppress SDK heartbeats. Wait for its existing
+    // projection queue to settle so unchanged siblings share one due envelope.
+    // New source turns extend that same queue; no cached-health timer is added.
+    void (async () => {
+      try {
+        let tail: Promise<void>;
+        do {
+          tail = connection.projectionTail;
+          await tail;
+        } while (tail !== connection.projectionTail && !connection.controller.signal.aborted);
+        if (!connection.controller.signal.aborted && connection.source) {
+          void this.#coverage(connection, connection.source).catch(connection.close);
+        }
+      } finally { connection.coverageQueued = false; }
+    })().catch(connection.close);
+  }
+  #coverage(connection: Connection, source: IdentityResourcePosition): Promise<void> {
+    const now = Date.now();
+    if (now-(connection.coverageAt ?? -Infinity)<15_000 || !connection.observer.healthy) return Promise.resolve();
+    const eligible = [...connection.views.values()].filter(view => this.#current(connection,view) && !view.failed
+      && !view.running && !view.dirty && view.payload !== undefined && view.covered
+      && view.covered.producerGeneration === source.producerGeneration && view.covered.position === source.position
+      && (view.descriptor.resource !== 'identity' || view.localRevision === connection.localRevision)
+      && now-(view.qualifiedAt ?? 0)>=15_000);
+    if (!eligible.length) return Promise.resolve();
+    const views = eligible.map(view => ({protocolVersion:1 as const,producerGeneration:this.producerGeneration,
+      viewId:view.descriptor.viewId,subscriptionEpoch:view.epoch,baselineId:view.baselineId,
+      sequence:view.sequence+1,revision:view.revision,source:view.covered!}));
+    return connection.output.send({protocolVersion:1,producerGeneration:this.producerGeneration,views},()=>{
+      connection.coverageAt=now;
+      for (const view of eligible) {view.sequence++;view.qualifiedAt=now;}
+    });
   }
   #schedule(connection: Connection, view: ResourceView): void {
     if (!this.#current(connection, view) || view.failed) return;
@@ -308,7 +350,6 @@ export class ResourceConnections {
       // appends any newly dirty work behind other views already waiting.
       if (view.dirty && this.#current(connection, view)) {
         view.dirty = false;
-        const localRevision = connection.localRevision;
         const captured = await captureResourceProjection(this.deps.client, this.deps.identity, async () => {
           const payload = await this.deps.project(view.descriptor, view.controller.signal);
           const delta = view.descriptor.resource === 'messages' && view.payload !== undefined
@@ -323,13 +364,13 @@ export class ResourceConnections {
         const first = view.payload === undefined;
         const changed = first || JSON.stringify(captured.payload.payload) !== JSON.stringify(view.payload);
         view.covered = captured.source;
-        view.localRevision = localRevision;
+        view.localRevision = connection.localRevision;
         if (changed) {
           view.revision++;
           if (first || view.descriptor.resource !== 'messages') {
-            await this.#emit(connection, view, 'snapshot', captured.payload.payload);
+            await this.#emit(connection, view, 'snapshot', captured.payload.payload, captured.source);
           } else {
-            await this.#emit(connection, view, 'upsert', captured.payload.delta);
+            await this.#emit(connection, view, 'upsert', captured.payload.delta, captured.source);
           }
           if (!this.#current(connection, view)) return;
           view.payload = captured.payload.payload;
@@ -339,8 +380,6 @@ export class ResourceConnections {
           if (!this.#current(connection, view)) return;
           view.resolveInitial({ payload: view.payload, source: captured.source, producerGeneration: this.producerGeneration,
             revision: view.revision, baselineId: view.baselineId, descriptor: view.descriptor });
-        } else {
-          await this.#emit(connection, view, 'coverage', { source: captured.source });
         }
       }
     } catch (error) {
