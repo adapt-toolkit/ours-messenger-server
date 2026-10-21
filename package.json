@@ -1,6 +1,6 @@
 {
   "name": "@ours.network/messenger-server",
-  "version": "1.0.30",
+  "version": "2.0.0",
   "description": "Self-hosted Messenger REST/SSE backend for one identity on a shared Ours daemon.",
   "type": "module",
   "license": "FSL-1.1-Apache-2.0",
