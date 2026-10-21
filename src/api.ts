@@ -1,3 +1,6 @@
+import { ResourceConnections, ResourceBindingError } from './resource-connections.js';
+import { canonicalResourceDescriptor, projectMessageWindow, RESOURCE_ASSEMBLY_BYTES, type ResourceDescriptor } from './resource-views.js';
+import { readHumanProfile, writeHumanProfile, workspaceProfile } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
 // WHAT IS DELIBERATELY ABSENT, because an absence is invisible unless it is written
@@ -37,7 +40,7 @@ import { HtmlPreviewTransformError, MAX_HTML_PREVIEW_BYTES, transformHtmlPreview
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
 import { contactDisplayName } from '../shared/roomMessageCore.mjs';
 // @ts-ignore -- shared pure-JS core, typed by its sibling .d.mts at this seam.
-import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../web/src/ui/htmlPreviewCore.mjs';
+import { HTML_PREVIEW_CSP, isHtmlAttachment } from '../src/html-preview-policy.mjs';
 
 const HTML_PREVIEW_RESPONSE_CSP = `${HTML_PREVIEW_CSP}; sandbox; frame-ancestors 'self'`;
 
@@ -59,11 +62,24 @@ export interface ApiDeps {
   readonly watcherStats: () => Record<string, number>;
   readonly events: MessengerEventBus;
   readonly identityCid: string;
+  readonly retireContactNotifications?: (cid: string) => void;
   readonly commandInvocations?: CommandInvocationStore;
   /** Test seams; production uses the contract defaults. */
   readonly sseHeartbeatMs?: number;
   readonly sseQueueLimit?: number;
   readonly healthTimeoutMs?: number;
+}
+
+const resourceConnections = new WeakMap<ApiDeps, ResourceConnections>();
+function resourceService(deps: ApiDeps): ResourceConnections {
+  let service = resourceConnections.get(deps);
+  if (!service) {
+    service = new ResourceConnections({ client: deps.runtime.client, identity: deps.config.identity,
+      identityCid: deps.identityCid, stateDir: deps.config.stateDir,
+      project: (descriptor, signal) => projectResourceView(deps, descriptor, signal) });
+    resourceConnections.set(deps, service);
+  }
+  return service;
 }
 
 const invocationStores = new WeakMap<ApiDeps, CommandInvocationStore>();
@@ -266,6 +282,21 @@ function inlineBase64(body: Record<string, unknown>): string {
   return value;
 }
 
+/**
+ * The person on this host: the Human root itself, or a permanent identity the daemon describes as a role
+ * under a root. Temporary identities and identities without a described root are neither.
+ */
+function humanIdentity(value: unknown): { rootCid?: string } | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const identity = value as Record<string, unknown>;
+  if (identity.temporary !== false || typeof identity.cid !== 'string') return undefined;
+  if (identity.isRoot === true) return {};
+  const rootCid = identity.rootCid;
+  if (identity.isRoot !== false || identity.described !== true || typeof identity.roleId !== 'string' || !identity.roleId
+      || typeof rootCid !== 'string' || !/^[a-f0-9]{64}$/i.test(rootCid) || rootCid.toLowerCase() === identity.cid.toLowerCase()) return undefined;
+  return { rootCid };
+}
+
 function publicIdentity(value: unknown): Readonly<Record<string, string>> {
   if (value === null || typeof value !== 'object') return {};
   const identity = value as Record<string, unknown>;
@@ -331,11 +362,20 @@ function beforeSequence(raw: string | undefined): number | undefined {
   return value;
 }
 
-async function listAllFiles(client: OursClient, peerCid: string): Promise<HistoryFile[]> {
+async function listAllFiles(client: OursClient, peerCid: string, signal?: AbortSignal, identity?: { cid: string; name: string }): Promise<HistoryFile[]> {
   const files: HistoryFile[] = [];
+  let bytes = 0;
   let before: number | undefined;
   for (;;) {
+    signal?.throwIfAborted();
     const page = await client.listFiles({ peer_cid: peerCid, before_seq: before, limit: 200 });
+    signal?.throwIfAborted();
+    if (signal) {
+      bytes += Buffer.byteLength(JSON.stringify(page.items.map(row => publicMediaRecord(row, identity!, 1))));
+      if (bytes > RESOURCE_ASSEMBLY_BYTES) throw new Error('resource assembly limit exceeded');
+      if (page.next_cursor !== null && (!page.items.length || !Number.isSafeInteger(page.next_cursor)
+          || (before !== undefined && page.next_cursor >= before))) throw new Error('invalid file continuation');
+    }
     files.push(...page.items);
     if (page.next_cursor === null) return files;
     before = page.next_cursor;
@@ -417,6 +457,13 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
 
   const subscription = deps.events.subscribe(deps.sseQueueLimit ?? 64);
   let closed = false;
+  let lastOutput = Date.now();
+  const heartbeatMs = deps.sseHeartbeatMs ?? 20_000;
+  const sendHint = (event: MessengerEvent, identity?: string) => {
+    const writable = writeSse(res, event, identity);
+    lastOutput = Date.now();
+    return writable;
+  };
   let drainWait: Promise<void> | null = null;
   let releaseDrain: (() => void) | null = null;
   const onDrain = () => {
@@ -447,14 +494,16 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
     // A heartbeat is disposable while the previous write is backpressured. It
     // must share the same drain barrier as event frames or it can become a
     // second unbounded producer in ServerResponse's internal buffer.
-    if (!closed && !res.destroyed && !drainWait && !res.write(': keepalive\n\n')) {
-      void waitForDrain();
+    if (!closed && !res.destroyed && !drainWait && Date.now()-lastOutput>=heartbeatMs) {
+      const writable = res.write(': keepalive\n\n');
+      lastOutput = Date.now();
+      if (!writable) void waitForDrain();
     }
-  }, deps.sseHeartbeatMs ?? 20_000);
+  }, heartbeatMs);
   heartbeat.unref?.();
 
   try {
-    if (!writeSse(res, { type: 'sync_required', reason: 'connected' }, deps.identityCid)) {
+    if (!sendHint({ type: 'sync_required', reason: 'connected' }, deps.identityCid)) {
       await waitForDrain();
     }
     while (!closed) {
@@ -465,7 +514,7 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
       // missed details to one overflow sync hint.
       if (drainWait) await drainWait;
       if (closed || res.destroyed) break;
-      if (!writeSse(res, event)) await waitForDrain();
+      if (!sendHint(event)) await waitForDrain();
     }
   } finally {
     clearInterval(heartbeat);
@@ -476,12 +525,100 @@ async function serveEvents(req: IncomingMessage, res: ServerResponse, deps: ApiD
   }
 }
 
+async function projectIdentityResource(client: OursClient, deps: ApiDeps) { return ({...publicIdentity(await client.currentIdentity()),humanProfile:readHumanProfile(deps.config.stateDir,deps.identityCid)}); }
+
+async function projectCommandResource(client: OursClient, deps: ApiDeps, params: Record<string, string>) {
+  if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
+  const peer = await resolveContact(client, params.contact);
+  return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
+}
+
+async function projectFilesResource(client: OursClient, deps: ApiDeps, params: Record<string, string>, signal?: AbortSignal) {
+  const peer = await resolveContact(client, params.contact);
+  const files = (await listAllFiles(client, peer.cid, signal, { cid: deps.identityCid, name: deps.config.identity })).reverse();
+  const versions = new Map<string, number>();
+  return {
+    contact: params.contact,
+    files: files.map((row) => {
+      const logicalName = row.filename.normalize('NFC').toLocaleLowerCase('en-US');
+      const version = (versions.get(logicalName) ?? 0) + 1;
+      versions.set(logicalName, version);
+      return publicMediaRecord(row, {
+        cid: deps.identityCid,
+        name: deps.config.identity,
+      }, version);
+    }),
+  };
+}
+
+/** The stream and HTTP routes share the same canonical serializers. */
+export async function projectResourceView(deps: ApiDeps, input: ResourceDescriptor, signal: AbortSignal): Promise<unknown> {
+  const descriptor = canonicalResourceDescriptor(input), client = deps.runtime.client;
+  signal.throwIfAborted();
+  switch (descriptor.resource) {
+    case 'contacts': return presentContacts(await client.listContacts());
+    case 'identity': return projectIdentityResource(client, deps);
+    case 'files': return projectFilesResource(client, deps, { contact: descriptor.entityId! }, signal);
+    case 'commands': return projectCommandResource(client, deps, { contact: descriptor.entityId! });
+    case 'messages': {
+      const peer = await resolveContact(client, descriptor.entityId!);
+      const page = await projectMessageWindow(client, peer.cid, peer.announcedName, descriptor.window!, signal);
+      return { ...page, contact: descriptor.entityId! };
+    }
+  }
+}
+
 /** `undefined` from a handler means "already responded" (used by the raw-bytes route). */
 const ROUTES: Record<string, Handler> = {
   // ---- live metadata invalidations (canonical state remains REST/MUFL) ------
-  'GET /api/events': async ({ req, res, deps }) => {
+  'GET /api/events': async ({ req, res, deps, query }) => {
+    if (query.get('resources') === '1') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive', 'x-accel-buffering': 'no' });
+      res.flushHeaders?.();
+      const connection = resourceService(deps).open(res);
+      const close = () => connection.close();
+      req.once('close', close);
+      try { await connection.closed; } finally { req.removeListener('close', close); connection.close(); }
+      return undefined;
+    }
     await serveEvents(req, res, deps);
     return undefined;
+  },
+
+  'POST /api/resource-subscriptions': async ({ req, res, deps, body }) => {
+    const connectionId = str(body, 'connectionId'), viewId = str(body, 'viewId');
+    const epoch = body.subscriptionEpoch as number;
+    if (deps.config.typedCommands === false && (body.descriptor as ResourceDescriptor | undefined)?.resource === 'commands') {
+      throw new HttpError(404, 'Typed commands are disabled');
+    }
+    const controller = new AbortController();
+    let installed = false;
+    const cleanup = () => {
+      req.removeListener('aborted', abort);
+      res.removeListener('close', responseClosed);
+      res.removeListener('finish', cleanup);
+    };
+    const abort = () => {
+      controller.abort();
+      if (installed) resourceService(deps).remove(connectionId, viewId, epoch);
+      cleanup();
+    };
+    req.once('aborted', abort);
+    const responseClosed = () => { if (!res.writableFinished) abort(); };
+    res.once('close', responseClosed);
+    res.once('finish', cleanup);
+    try {
+      const registered = await resourceService(deps).register(connectionId, viewId, epoch, body.descriptor, controller.signal);
+      installed = true;
+      if (req.aborted || res.destroyed) { abort(); return undefined; }
+      return registered;
+    } catch (error) { if (controller.signal.aborted) return undefined; throw error; }
+    finally { if (controller.signal.aborted || res.writableFinished || res.destroyed) cleanup(); }
+  },
+  'DELETE /api/resource-subscriptions': async ({ deps, body }) => {
+    resourceService(deps).remove(str(body, 'connectionId'), str(body, 'viewId'), body.subscriptionEpoch as number);
+    return { removed: true };
   },
 
   // ---- messaging -----------------------------------------------------------
@@ -502,11 +639,7 @@ const ROUTES: Record<string, Handler> = {
     return { wire_id: wireId, delivery: 'tracked' };
   },
 
-  'GET /api/contacts/:contact/commands': async ({ client, deps, params }) => {
-    if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
-    const peer = await resolveContact(client, params.contact);
-    return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
-  },
+  'GET /api/contacts/:contact/commands': async ({ client, deps, params }) => projectCommandResource(client, deps, params),
 
   'POST /api/commands/send': async ({ client, deps, body }) => {
     if (deps.config.typedCommands === false) throw new HttpError(404, 'Typed commands are disabled');
@@ -669,8 +802,13 @@ const ROUTES: Record<string, Handler> = {
   'POST /api/contacts/add': async ({ client, body }) =>
     client.addContact({ invite: str(body, 'invite'), name: optStr(body, 'name') }),
 
-  'POST /api/contacts/remove': async ({ client, body }) =>
-    client.removeContact({ contact: str(body, 'contact') }),
+  'POST /api/contacts/remove': async ({ client, body, deps }) => {
+    const contact = str(body, 'contact');
+    const canonical = deps.retireContactNotifications ? (await resolveContact(client, contact)).cid : contact;
+    const result = await client.removeContact({ contact: canonical });
+    deps.retireContactNotifications?.(canonical);
+    return result;
+  },
 
   'POST /api/contacts/rename': async ({ client, body }) =>
     client.renameContact({ contact: str(body, 'contact'), name: str(body, 'name') }),
@@ -706,7 +844,78 @@ const ROUTES: Record<string, Handler> = {
   // ---- identity / profile --------------------------------------------------
   // The old browser surface called the read half `getProfileName`; the name is a
   // field on this result.
-  'GET /api/identity': async ({ client }) => publicIdentity(await client.currentIdentity()),
+  'GET /api/identity': async ({ client, deps }) => projectIdentityResource(client, deps),
+
+  'POST /api/identity/profile': async ({ client,deps,body }) => {
+    if(!humanIdentity(await client.currentIdentity()))throw bad('Human profile requires the Human root or a permanent identity under it');
+    let profile;try{profile=workspaceProfile(body);}catch{throw bad('Profile requires printable text up to 100 characters');}
+    return writeHumanProfile(deps.config.stateDir,deps.identityCid,profile);
+  },
+
+  // Who the person is on this host. A Messenger that runs as the Human root can sign the workspace proof
+  // itself; one that runs as the person's own identity under that root names the root the daemon describes
+  // for it, and the proof is then signed by that root outside Messenger.
+  'GET /api/workspace/enrollment-identity': async ({client}) => {
+    const identity=await client.currentIdentity(),human=humanIdentity(identity);
+    if(!human)throw bad('Workspace proof requires the bound Human root or a permanent identity under it');
+    return human.rootCid===undefined?{cid:identity.cid,preserveProfile:true,optionalWorkspaceProfileV1:true}:{cid:identity.cid,rootCid:human.rootCid,preserveProfile:true,optionalWorkspaceProfileV1:true};
+  },
+  // First-party setup operation: daemon signs the command using this bound root.
+  'POST /api/workspace/unregister': async ({ client,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace retirement requires the bound Human root');
+    const rootCid=str(body,'rootCid').toUpperCase(),serverCid=str(body,'serverCid').toUpperCase();
+    if(!/^[A-F0-9]{64}$/.test(rootCid) || !/^[A-F0-9]{64}$/.test(serverCid) || identity.cid.toUpperCase()!==rootCid)throw bad('Workspace retirement identity mismatch');
+    const command:Record<string,string|number|Record<string,string>>={type:'ours.app.unregister-workspace.v1'};
+    for(const key of ['workspaceId','hostWorkspaceId','operationNonce']) {
+      const value=str(body,key);if(!/^[A-Za-z0-9_-]{43}$/.test(value))throw bad('Invalid workspace retirement');command[key]=value;
+    }
+    if(body.operationExpiresAt!==undefined) {
+      if(!Number.isSafeInteger(body.operationExpiresAt) || Number(body.operationExpiresAt)<=0 || Number(body.operationExpiresAt)>Date.now()+86400000)throw bad('Invalid retirement deadline');
+      command.operationExpiresAt=Number(body.operationExpiresAt);
+    }
+    if(body.replacement!==undefined) {
+      const replacement=body.replacement as Record<string,unknown>;
+      if(!replacement || typeof replacement!=='object' || Object.keys(replacement).length!==3
+        || !['workspaceId','accountId','nonce'].every(key=>typeof replacement[key]==='string' && /^[A-Za-z0-9_-]{43}$/.test(replacement[key] as string)))throw bad('Invalid replacement challenge');
+      command.replacement=Object.fromEntries(['workspaceId','accountId','nonce'].map(key=>[key,replacement[key] as string]));
+    }
+    if(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid))throw bad('Original enrollment contact is not ready');
+    const outcome=await client.sendCommand({contact:serverCid,command:'unregister-workspace',arguments:command});
+    if(!('sent' in outcome) || !outcome.sent)throw bad('Workspace retirement was not sent');
+    return {submitted:true,rootCid:identity.cid};
+  },
+
+  'POST /api/workspace/enroll': async ({ client,deps,body }) => {
+    const identity=await client.currentIdentity();
+    if(!identity.isRoot || identity.temporary)throw bad('Workspace proof requires the bound Human root');
+    const serverCid=str(body,'serverCid').toUpperCase();
+    if(!/^[A-F0-9]{64}$/.test(serverCid) || !/^[A-Za-z0-9_-]{43}$/.test(str(body,'hostWorkspaceId')))throw bad('Invalid workspace proof');
+    const challenge=body.challenge as Record<string,unknown>;
+    if(!challenge || !['nonce','workspaceId','accountId'].every(k=>typeof challenge[k]==='string' && /^[A-Za-z0-9_-]{43}$/.test(String(challenge[k]))) || !Number.isFinite(challenge.expiresAt) || Number(challenge.expiresAt)<=Date.now() || Number(challenge.expiresAt)>Date.now()+16*60000)throw bad('Workspace challenge expired or invalid');
+    const preserveProfile=optBool(body,'preserveProfile')===true;
+    let humanProfile;
+    if(!preserveProfile)try{humanProfile=workspaceProfile(body);}catch{throw bad('Name and Surname require printable text up to 100 characters');}
+    const invitation=str(body,'invitation');if(invitation.length>8192)throw bad('Workspace invitation too large');
+    if(humanProfile)writeHumanProfile(deps.config.stateDir,deps.identityCid,humanProfile);
+    // A retained authenticated peer can carry another signed challenge. The
+    // one-time invitation may already have been used by registration retirement.
+    const connected=preserveProfile && (await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid);
+    if(!connected) {
+      const peer=await client.addContact({invite:invitation});
+      if(peer.cid.toUpperCase()!==serverCid)throw bad('Enrollment server identity mismatch');
+    }
+    const contactDeadline=Date.now()+10000;
+    while(!(await client.listContacts()).contacts.some(contact=>contact.container_id.toUpperCase()===serverCid)) {
+      if(Date.now()>=contactDeadline)throw bad('Enrollment contact is not ready; obtain a fresh setup payload before retrying');
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const argumentsValue={type:'ours.app.bind-workspace.v1',accountId:String(challenge.accountId),workspaceId:String(challenge.workspaceId),nonce:String(challenge.nonce),hostWorkspaceId:String(body.hostWorkspaceId)};
+    const outcome=await client.sendCommand({contact:serverCid,command:'bind-workspace',arguments:argumentsValue});
+    if(!('sent' in outcome) || !outcome.sent)throw bad('Workspace proof was not sent');
+    const invite=await client.generateInvite({mode:'public'});
+    return {submitted:true,rootCid:identity.cid,ownerInvite:invite.blob};
+  },
 
   'GET /api/identities': async ({ client }) => client.listIdentities(),
 
@@ -725,23 +934,7 @@ const ROUTES: Record<string, Handler> = {
   // ---- files ---------------------------------------------------------------
   'GET /api/files/incoming': async ({ client }) => client.listIncomingFiles(),
 
-  'GET /api/conversations/:contact/files': async ({ client, deps, params }) => {
-    const peer = await resolveContact(client, params.contact);
-    const files = (await listAllFiles(client, peer.cid)).reverse();
-    const versions = new Map<string, number>();
-    return {
-      contact: params.contact,
-      files: files.map((row) => {
-        const logicalName = row.filename.normalize('NFC').toLocaleLowerCase('en-US');
-        const version = (versions.get(logicalName) ?? 0) + 1;
-        versions.set(logicalName, version);
-        return publicMediaRecord(row, {
-          cid: deps.identityCid,
-          name: deps.config.identity,
-        }, version);
-      }),
-    };
-  },
+  'GET /api/conversations/:contact/files': async ({ client, deps, params }) => projectFilesResource(client, deps, params),
 
   'POST /api/files/fetch': async ({ client, body }) => {
     const ids = body.wire_ids;
@@ -967,6 +1160,32 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       req,
       url.pathname.startsWith('/api/push/') ? MAX_PUSH_BODY_BYTES : MAX_HTTP_BODY_BYTES,
     );
+    const resourceHeaderNames = ['x-resource-connection', 'x-resource-view', 'x-resource-epoch', 'x-resource-baseline'];
+    const resourceHeaders = resourceHeaderNames.map(name => rawHeaderValues(req, name));
+    if (resourceHeaders.some(values => values.length > 0)) {
+      if (method !== 'GET' || resourceHeaders.some(values => values.length !== 1)) throw new ResourceBindingError(409, 'incomplete resource binding');
+      const [connectionId, viewId, epoch, baselineId] = resourceHeaders.map(values => values[0]);
+      const baseline = await resourceService(deps).bound(connectionId, viewId, Number(epoch), baselineId);
+      const descriptor = baseline.descriptor;
+      const route = descriptor.resource === 'contacts' ? 'GET /api/contacts'
+        : descriptor.resource === 'identity' ? 'GET /api/identity'
+          : descriptor.resource === 'commands' ? 'GET /api/contacts/:contact/commands'
+            : descriptor.resource === 'files' ? 'GET /api/conversations/:contact/files' : 'GET /api/conversations/:contact/page';
+      const allowedQuery = descriptor.resource === 'messages' && [...url.searchParams.keys()].every(key => key === 'limit')
+        && (!url.searchParams.has('limit') || (url.searchParams.getAll('limit').length === 1 && Number(url.searchParams.get('limit')) === descriptor.window!.limit));
+      if (hit.key !== route || (descriptor.entityId !== undefined && descriptor.entityId !== hit.params.contact)
+          || (url.searchParams.size > 0 && !allowedQuery)) throw new ResourceBindingError(409, 'resource read descriptor mismatch');
+      res.setHeader('X-Resource-Connection', connectionId);
+      res.setHeader('X-Resource-View', viewId);
+      res.setHeader('X-Resource-Epoch', epoch);
+      res.setHeader('X-Resource-Baseline', baselineId);
+      res.setHeader('X-Resource-Producer', baseline.producerGeneration);
+      res.setHeader('X-Resource-Revision', String(baseline.revision));
+      res.setHeader('X-Resource-Source-Generation', baseline.source.producerGeneration);
+      res.setHeader('X-Resource-Source-Position', String(baseline.source.position));
+      sendJson(res, 200, baseline.payload);
+      return;
+    }
     const out = await ROUTES[hit.key]({
       deps,
       client: deps.runtime.client,
@@ -983,6 +1202,8 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
     // content. Only fixed code/message pairs from the central allowlist survive.
     if (isOursError(e)) {
       sendJson(res, 400, { error: publicEngineError(e.code) });
+    } else if (e instanceof ResourceBindingError) {
+      sendJson(res, e.status, { error: { code: 'RESOURCE_BINDING', message: e.message } });
     } else if (e instanceof HttpError) {
       const code = e.status === 403 ? 'FORBIDDEN'
         : e.status === 415 ? 'UNSUPPORTED_MEDIA_TYPE'

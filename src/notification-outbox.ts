@@ -1,0 +1,124 @@
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+export type ContactTarget = { kind: 'contact'; contactId: string };
+export interface NotificationInput { eventId: string; title: string; body: string; target: ContactTarget; anchor?: { kind: 'messenger-message'; wireId: string }; }
+interface Entry { id: string; value: unknown; payload?: NotificationInput; operation?: 'delete-target'; targetVersion?: 1; }
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const closed = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
+const text = (value: unknown, max: number): value is string => typeof value === 'string' && !!value.trim() && value.length <= max;
+export const contactId = (value: unknown): value is string => text(value, 512) && !/[\/\\\x00-\x1f\x7f]/.test(value) && value !== '.' && value !== '..';
+export const contactIdentity = (id: string): string => /^[a-f0-9]{64}$/i.test(id) ? id.toUpperCase() : id;
+export function contactTarget(value: unknown): value is ContactTarget {
+  return object(value) && closed(value, ['kind', 'contactId']) && value.kind === 'contact' && contactId(value.contactId);
+}
+function notificationInput(value: unknown): value is NotificationInput {
+  if (!object(value) || !closed(value, ['eventId', 'title', 'body', 'target', 'anchor']) || !text(value.eventId, 512)
+    || !text(value.title, 160) || !text(value.body, 512) || !contactTarget(value.target)) return false;
+  return value.anchor === undefined || (object(value.anchor) && closed(value.anchor, ['kind', 'wireId'])
+    && value.anchor.kind === 'messenger-message' && text(value.anchor.wireId, 1024) && !/[\x00-\x1f\x7f]/.test(value.anchor.wireId));
+}
+const cleanup = (value: unknown): value is { target: ContactTarget } => object(value) && closed(value, ['target']) && contactTarget(value.target);
+const has = (entry: object, key: string) => Object.hasOwn(entry, key);
+// An entry is sent only when it is an object with a string ID: as a typed contact cleanup, with a
+// frozen payload that is the closed typed contract or, with no payload field at all, carrying the
+// current version marker. Anything else, including null or scalar entries, is never read further,
+// projected, sent or changed.
+const supported = (entry: unknown): entry is Entry => object(entry) && typeof entry.id === 'string'
+  && (has(entry, 'operation') ? entry.operation === 'delete-target' && cleanup(entry.value)
+    : has(entry, 'payload') ? notificationInput(entry.payload)
+    : entry.targetVersion === 1);
+const same = (id: string) => (entry: unknown) => supported(entry) && entry.id === id;
+export interface ProducerConfig { origin: string; token: string; }
+export function producerConfig(env: NodeJS.ProcessEnv = process.env): ProducerConfig | undefined {
+  const origin = env.OURS_NOTIFICATIONS_ORIGIN, token = env.OURS_NOTIFICATIONS_PRODUCER_TOKEN;
+  if (!origin && !token) return;
+  if (!origin || !token || token.length < 32) throw new Error('notifications producer requires origin and scoped token');
+  const url = new URL(origin);
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin || url.username || url.password) throw new Error('invalid notification service origin');
+  if (url.protocol === 'http:' && !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)) throw new Error('notification credentials require HTTPS or loopback');
+  return { origin, token };
+}
+
+/** Durable producer queue. Service dedupe makes crash-after-acceptance replay safe. */
+export class NotificationOutbox {
+  private entries: Entry[];
+  cursor?: number;
+  checkpoint?: unknown;
+  private running?: Promise<void>;
+  private timer: ReturnType<typeof setInterval>;
+  constructor(private readonly file: string, private readonly config: ProducerConfig,
+    private readonly project: (value: unknown, id: string) => Promise<NotificationInput | undefined>,
+    private readonly warn: (message: string) => void = () => {},
+    private readonly shouldRetire?: (target: ContactTarget) => Promise<boolean | undefined>) {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { entries: [] };
+    // Only the current state shape is read; anything else is refused and left unchanged on disk.
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved) || !Array.isArray(saved.entries)) throw new Error('Unsupported notification outbox state');
+    this.entries = saved.entries;
+    this.cursor = saved.cursor;
+    this.checkpoint = saved.checkpoint;
+    this.timer = setInterval(() => { void this.drain(); }, 3000); this.timer.unref();
+  }
+  private persist(entries: Entry[], cursor = this.cursor, checkpoint = this.checkpoint): void {
+    const tmp = this.file + '.tmp', fd = openSync(tmp, 'w', 0o600);
+    try { writeFileSync(fd, JSON.stringify({ entries, cursor, checkpoint })); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(tmp, this.file);
+    const dir = openSync(dirname(this.file), 'r');
+    try { fsyncSync(dir); } finally { closeSync(dir); }
+    this.entries = entries; this.cursor = cursor; this.checkpoint = checkpoint;
+  }
+  advance(cursor: number): void { this.persist(this.entries, cursor); }
+  saveCheckpoint(checkpoint: unknown): void { this.persist(this.entries, this.cursor, checkpoint); }
+  enqueue(id: string, value: unknown, cursor = this.cursor): boolean {
+    if (this.entries.some(same(id))) { if (cursor !== this.cursor) this.advance(cursor!); return true; }
+    if (this.entries.filter(supported).length >= 2000) return false;
+    this.persist([...this.entries, { id, value, targetVersion: 1 }], cursor);
+    return true;
+  }
+  retireTarget(target: ContactTarget, matches: (value: unknown, payload?: NotificationInput) => boolean): void {
+    if (!contactTarget(target)) throw new Error('Invalid notification target');
+    const id = `delete-target:${contactIdentity(target.contactId)}`;
+    const retained = this.entries.filter(entry => !supported(entry) || entry.operation === 'delete-target' || !matches(entry.value, entry.payload));
+    if (!retained.some(same(id))) retained.push({ id, value: { target }, operation: 'delete-target' });
+    // A cleanup request must survive service outage and cannot be dropped by send capacity limits.
+    this.persist(retained);
+  }
+  drain(): Promise<void> {
+    return this.running ??= this.drainOnce().finally(() => { this.running = undefined; });
+  }
+  private async drainOnce(): Promise<void> {
+    let attempts = 0;
+    for (const entry of [...this.entries]) {
+      if (!supported(entry)) continue;
+      if (attempts >= 32) break;
+      try {
+        if (!this.entries.some(same(entry.id))) continue;
+        if (entry.operation === 'delete-target' && this.shouldRetire) {
+          const retire = await this.shouldRetire((entry.value as {target:ContactTarget}).target);
+          // An unknown contact stays queued without blocking unrelated typed work.
+          if (retire === undefined) continue;
+          if (!retire) { attempts++; this.persist(this.entries.filter(current => !same(entry.id)(current))); continue; }
+        }
+        const value = entry.operation === 'delete-target'
+          ? entry.value : entry.payload ?? await this.project(entry.value, entry.id);
+        if (!this.entries.some(same(entry.id))) continue;
+        if (value === undefined) { this.persist(this.entries.filter(current => !same(entry.id)(current))); continue; }
+        if (entry.operation ? !cleanup(value) : !notificationInput(value)) continue;
+        attempts++;
+        // Freeze the canonical projection before any network attempt. A crash
+        // after service acceptance must replay the identical dedupe payload.
+        if (!entry.operation && !entry.payload) this.persist(this.entries.map(e => same(entry.id)(e) ? { ...e, payload: value as NotificationInput } : e));
+        const response = await fetch(this.config.origin + (entry.operation === 'delete-target' ? '/api/v1/delete-target' : '/api/v1/send'), {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
+          headers: { Authorization: `Bearer ${this.config.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(value),
+        });
+        await response.body?.cancel();
+        if (!response.ok) throw new Error('notification service rejected event');
+        this.persist(this.entries.filter(e => !same(entry.id)(e)));
+      } catch { this.warn('Notification producer delivery pending; retrying from durable outbox'); break; }
+    }
+  }
+  async close(): Promise<void> { clearInterval(this.timer); await this.running; }
+}

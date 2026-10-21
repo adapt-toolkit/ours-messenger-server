@@ -26,11 +26,11 @@ let server;
 
 try {
   const { OursClient } = daemon.sdk;
-  const provision = new OursClient({ url: daemon.url, leaseToken: 'catalog-provision' });
+  const provision = new OursClient({ ...daemon.clientOptions, leaseToken: 'catalog-provision' });
   const me = await provision.createRootIdentity({
     name: 'Me', bio: 'messenger', exposeLocal: true, localAutoAccept: true, skipIfRootExists: false,
   });
-  const peer = new OursClient({ url: daemon.url, leaseToken: 'catalog-peer' });
+  const peer = new OursClient({ ...daemon.clientOptions, leaseToken: 'catalog-peer' });
   const peerIdentity = await peer.createIdentity({
     name: 'Peer', bio: 'recipient', exposeLocal: true, localAutoAccept: true,
   });

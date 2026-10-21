@@ -12,12 +12,31 @@ invalidations; the browser rebuilds durable truth from REST snapshots.
 
 ## Shared daemon and identity
 
-`start()` calls the SDK's client-only `attachOursClient`, using the standard
-`OURS_CONFIG`, `OURS_STATE_DIR`, `OURS_PORT`, endpoint, and API-token selection.
-The SDK verifies that the endpoint belongs to the expected state directory
-before sending credentials. Messenger then calls `chooseIdentity` for exactly
-`OURS_MESSENGER_IDENTITY`; it never creates an identity or chooses one
-implicitly.
+For V1, set all three variables: `OURS_DAEMON_URL` (HTTP endpoint),
+`OURS_DAEMON_ID` (expected daemon instance ID), and
+`OURS_DAEMON_CREDENTIAL_PATH` (protected current API-token file).
+The same SDK client handles identity operations and complete notification pages.
+It checks daemon selection, refuses redirects and rereads the token file on
+each request, including after an official CLI token update. Partial selection
+fails before attachment; API errors never activate legacy selection.
+
+One opaque process owner survives ordinary reconnect and daemon restart.
+Messenger binds exactly `OURS_MESSENGER_IDENTITY`, preserving its existing
+permanent identity; it never implicitly provisions or forces takeover.
+When all three V1 inputs are absent, the existing SDK local configuration
+selection remains temporary compatibility. Its removal is post-V1 work.
+
+Example against an already provisioned V1 daemon (use the endpoint, instance ID
+and protected credential path supplied by your deployment):
+
+```bash
+OURS_DAEMON_URL=http://127.0.0.1:38351 \
+OURS_DAEMON_ID='<daemon-instance-id>' \
+OURS_DAEMON_CREDENTIAL_PATH=/srv/messenger/daemon-token \
+OURS_MESSENGER_IDENTITY='Ada@server' \
+OURS_MESSENGER_PUBLIC_ORIGIN=http://127.0.0.1:8420 \
+node dist/cli.js serve
+```
 
 The shared daemon owns identity keys, MUFL protocol state, message/file history,
 and file blobs. Messenger owns only its public HTTP server and application state
@@ -28,20 +47,24 @@ but does not stop the daemon.
 Startup is transactional: a daemon-attach, identity-bind, application-store,
 watcher, or listener failure closes the public server if present, stops the
 watcher, releases the lease, and preserves existing state. Normal `close()` is
-idempotent and follows the same ordered path.
+idempotent and follows the same ordered path. It waits for admitted HTTP work,
+notification watching and delivery before retiring the owner and closing the
+SDK transport. An incomplete owner release rejects close and makes CLI shutdown
+exit unsuccessfully; repeated close calls retain that result.
 
 ## Running
 
-Install and start the shared daemon with `@ours.network/cli`, create the identity
-there, then start messenger with the same daemon selection:
+Install and start the shared daemon with `@ours.network/daemon`, create the identity
+there, then start messenger with the same daemon selection. The following
+example uses the temporary local configuration path:
 
 ```bash
 npm install
 npm run build
 
-# One-time host setup. These commands come from @ours.network/cli.
-ours config setup --port 3070 --state-dir /srv/ours
-ours daemon start
+# One-time host setup: daemon lifecycle is separate from API client commands.
+ours-daemon config setup --port 3070 --state-dir /srv/ours
+ours-daemon start
 ours identity create-root --name 'Ada@server'
 
 OURS_MESSENGER_STATE_DIR=/srv/ours-messenger \
@@ -72,11 +95,11 @@ OURS_MESSENGER_VAPID_PRIVATE_KEY optional secret; never expose to the browser
 OURS_MESSENGER_VAPID_SUBJECT     default mailto:admin@localhost
 ```
 
-The production build is an installable React 18 + TypeScript PWA emitted by Vite under
-`dist/web`: `index.html` is no-cache, while content-hashed `/assets/*` are served
-immutable with explicit MIME types and `nosniff`. During frontend-only work,
-`npm run dev` starts Vite on loopback and proxies `/api` and `/mcp` to the
-messenger server; use `npm run dev:server` for the backend process.
+The browser application is built in the standalone `ours-web` repository. Set
+`OURS_MESSENGER_WEB_DIR` to its `dist/web` directory if this server should host
+that artifact; without it the API remains available and frontend routes report
+503. Static hosting keeps `index.html` uncached and hashed assets immutable.
+Use `npm run dev:server` for backend development.
 
 Every state-changing HTTP request must carry `Content-Type: application/json`,
 an exact single `Origin` equal to `OURS_MESSENGER_PUBLIC_ORIGIN`, and
@@ -111,9 +134,7 @@ The focused client does not persist messages, identities, receipts, or API
 responses in browser storage. Its service worker caches only the application
 shell and static assets for offline launch; all `/api/*` requests bypass it.
 
-The web UI and its same-origin transport adapter are maintained together in
-this repository; their presentation scope and transport exclusions are recorded
-in `web/src/CANONICAL_UI_PROVENANCE.md`. The interface
+The web UI and its same-origin transport adapter now live in the standalone `ours-web` repository. This repository builds only the Messenger backend. To optionally serve a separately built frontend, set `OURS_MESSENGER_WEB_DIR` to its `dist/web` directory; otherwise deploy the API behind the same-origin frontend gateway. The interface
 includes grouped identity-root contacts; contact add, approval, rename and
 removal; one-time/public invite creation and revocation; public bio editing;
 message and attachment replies; drag/drop/paste and picker uploads with bounded
@@ -290,10 +311,11 @@ conversation reads, graceful lease release, bundle execution, token redaction,
 `/mcp` 404, programmatic shutdown and partial-start rollback, receipt semantics,
 REST/WebPush encryption and full payloads, reply correlation, immutable media and
 version round-trips, hostile top-level media navigation, exact voice MIME/bytes,
-sandboxed previews, corrupt push-state preservation/recovery, PWA cache
-isolation/installability/offline launch in Chromium, SSE backpressure and
-reconnect, cursor paging with stable scroll anchoring, invite-dialog reopen,
-focused-client contracts and the exact-dialog read gate.
+sandboxed preview responses, corrupt push-state preservation/recovery and SSE
+backpressure. UI, PWA, browser layout, and client read-gate tests live in `ours-web`.
+The optional `tests/v1-live-push.integration.mjs` service integration requires
+Firefox, public Autopush egress, and an explicit `OURS_MESSENGER_WEB_DIR` pointing
+to a separately built frontend; it is outside the default local test suite.
 
 ## SDK lifecycle boundary
 
@@ -301,3 +323,119 @@ Messenger imports only the public client surface of `@ours.network/sdk`.
 Bundle-contract tests reject daemon/native/MUFL artifacts and embedded-runtime
 imports. Process signals stop the messenger HTTP application and release its
 identity lease; daemon lifecycle remains exclusively under the ours CLI.
+
+### Retained messenger session
+
+With complete V1 selection and the available Linux activation primitive, messenger
+retains one logical owner in private
+`owner-session.json` and holds the stable `owner-session.lock` descriptor for its
+entire active lifetime. The existing `flock` utility must support this filesystem;
+a competing activation refuses before daemon attachment. Foreground/container
+restart with the same state continues the nonterminal owner and permanent identity.
+The lock is not process-death evidence, and restart does not replay ambiguous sends.
+
+After existing work drains, normal shutdown saves terminal intent before the
+official bounded SDK release. Incomplete acknowledgement preserves that same
+intent; ordinary startup completes it before creating a fresh logical owner.
+Changed daemon/credential-path/identity selection cannot retarget saved state.
+Corrupt or unsafe state is preserved and refused. Keep the lock file and its inode.
+
+This recovery is qualified initially for the tested Linux Docker local-volume
+profile. Existing legacy/non-Linux entrypoints without retained V1 state keep their prior
+behavior. On Linux, an absent `flock` executable also preserves the original
+process-session behavior only when no owner record exists; V1 daemon selection
+stays unchanged. Contention, invalid state and other activation errors refuse;
+there is no unlocked resume or fallback after a daemon/API failure.
+A saved V1 owner cannot resume through an unqualified or legacy path. Native,
+bind-mount and other runtime conformance remains required; no utility is installed
+automatically. The state contains owner/selection/terminal metadata, not API-token
+bytes. Existing push/VAPID/cursor state and live-push requirements remain unchanged.
+
+## Container-runtime checks
+
+After the normal build, `npm run test:offline` includes the existing owner-session
+and V1 runtime tests. They exercise lifecycle, explicit selection and notification
+behavior with temporary fixtures. For the built server plus installed selected CLI/SDK and local development broker,
+run `node tests/v1-messenger.integration.mjs lifecycle` (also supports `crash` and
+`incomplete`). `node tests/v1-live-push.integration.mjs` additionally requires
+Playwright Firefox and public HTTPS/WSS access to Mozilla Autopush; keep it outside
+offline checks. `MESSENGER_V1_DIST` selects an alternative prepared build directory.
+Package test results alone do not establish complete Compose or live push acceptance.
+
+### Build with selected SDK and CLI archives
+
+Run in the build container with Node 22+, npm and tar available:
+
+```sh
+node scripts/build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tgz --cli /artifacts/ours.network-cli-2.7.2.tgz --out-dir /artifacts/consumer
+```
+
+The recipe validates package names, installs and builds in disposable staging,
+then writes one complete portable npm archive. Stdout is a JSON object with its
+actual `filename`; build/npm logs go to stderr. Normal source manifests, locks
+and installed dependencies are preserved. The installer must install the same
+selected SDK and CLI archives alongside this package; its final dependency
+versions come from those archives. Existing bundling choices are unchanged.
+
+Git source provenance is captured before staging. For source-only input, supply
+`OURS_MESSENGER_BUILD_SHA` (full source commit) and truthful
+`OURS_MESSENGER_BUILD_CLEAN=1` for a clean snapshot, as required by `build.mjs`.
+`OURS_MESSENGER_RELEASE_BUILD=1` retains the existing clean-source gate.
+
+Focused build/install verification (two real builds, including changed bytes
+under identical input names and versions, plus a missing-vendor negative check):
+
+```sh
+node scripts/check-build-selected.mjs --sdk /artifacts/ours.network-sdk-3.7.2.tgz --cli /artifacts/ours.network-cli-2.7.2.tgz
+```
+
+For development against the selected, unpublished SDK/CLI sources, see [selected-source development](docs/selected-source-development.md).
+
+### Gateway mount path
+
+Set `OURS_MESSENGER_BASE_PATH=/base/messenger/` when a reverse proxy strips that prefix before forwarding to Messenger. `OURS_MESSENGER_PUBLIC_ORIGIN` remains the exact external origin, for example `https://ours.example`, with no path. Assets, API requests, browser routes, service-worker scope and presence WebSockets retain the configured mount. `ours-messenger-server capabilities` reports `messenger.gateway-prefix-v1`.
+
+Messenger still has no application authentication. Use the installer's loopback gateway or an authenticated external proxy/tunnel. A shared gateway origin trusts every hosted application; path prefixes and Cowork's separate server-token prompt do not isolate or authenticate Messenger. Keep backend ports private and use the installer documentation's browser-authenticated entry configuration.
+
+### Fleet web application
+
+The live local Fleet application is available at `/fleet`; Messenger remains at `/chats`.
+Use the companion Fleet gateway and its local password/session authentication.
+See [Fleet setup and verification](docs/FLEET-PREVIEW.md) for connection requirements,
+current coverage and limitations. `npm run test:fleet` runs the current isolated fixture gates.
+The older mock walkthrough and its browser tests describe an earlier design stage.
+
+
+### Dedicated notification service
+
+Set `OURS_NOTIFICATIONS_ORIGIN` and a Messenger-scoped `OURS_NOTIFICATIONS_PRODUCER_TOKEN` to forward incoming messages/files to [ours-notifications](https://github.com/adapt-toolkit/ours-notifications). Both settings must be provided together. The canonical watcher durably queues notifications even without a local push binding, freezes projected content before its first HTTP attempt, and retries the same payload after outages/restarts. Keep the Messenger state directory across restarts. When configured, new events use the dedicated service; legacy pending push jobs may finish. Existing standalone push endpoints remain for compatibility.
+
+Workspace enrollment supports optional `preserveProfile: true` on its protected POST endpoint. This skips human profile creation/replacement (including an absent profile); root checks and the signed binding command remain mandatory. The protected enrollment-identity response advertises `preserveProfile: true` so clients can fail closed against older servers. Omitted/false keeps fresh-host account profile setup.
+
+Messenger may run as the Human root or as a permanent identity under it. For the latter, the enrollment-identity response also carries `rootCid`, the root the daemon describes for the bound identity; `POST /api/identity/profile` accepts both. Only a Messenger bound to the root itself signs the workspace binding on `POST /api/workspace/enroll`; for an identity under the root the caller obtains that signature from the root outside Messenger.
+
+After successful contact removal, the notification producer durably retires that
+conversation through the notification service's scoped `/api/v1/delete-target`
+route. Pending sends for that contact are removed; cleanup follows any already
+inflight send and retries after service outages or restart. Watch replay confirms
+absence against a complete contacts/pending inventory before dropping an event.
+Inventory errors preserve the queue. The gateway and notification service must
+support this producer lifecycle route before source cleanup can be delivered.
+
+Profile-preserving workspace enrollment reuses an already authenticated contact
+with the exact pinned enrollment server CID. This permits a fresh signed account
+challenge after the one-time invitation was used for registration retirement;
+account-side invitation provenance or an exact signed replacement handoff still
+controls proof acceptance.
+
+`POST /api/workspace/unregister` carries the first-party retirement command when
+Messenger already holds the Human root lease. It requires local API/CSRF
+authentication, a permanent root matching `rootCid`, the exact ready enrollment
+server contact, and well-formed workspace/host/nonce identifiers. An optional
+three-field replacement challenge is forwarded unchanged. The account service
+owns retirement authorization and cleanup; this route only sends the signed
+command and acknowledges submission.
+
+Conversation notifications use `/fleet/chats/contacts/:contactId`, escaping the ID once and preserving the matching message anchor. Contact retirement matches canonical contact identity independent of filters and anchors. Deploy the app, notification service, and producers together: old query-based conversation links are intentionally unsupported. Previously frozen delivery URLs replay unchanged for idempotency, and unsupported persisted cleanup URLs remain pending without being sent or blocking canonical cleanup. Contact lifecycle authorization and inventory checks still apply.
+
+Full resource SSE delivery and registered initial reads are documented in [docs/resource-delivery.md](docs/resource-delivery.md).

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { serveApi } from '../src/api.ts';
 import { MAX_HTML_PREVIEW_BYTES, transformHtmlPreview } from '../src/html-preview-transform.ts';
-import { HTML_PREVIEW_CSP } from '../web/src/ui/htmlPreviewCore.mjs';
+import { HTML_PREVIEW_CSP } from '../src/html-preview-policy.mjs';
 import { MessengerEventBus } from '../src/events.ts';
 
 class Request extends EventEmitter {

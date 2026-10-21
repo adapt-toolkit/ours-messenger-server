@@ -183,3 +183,76 @@ export function startWatcher(
     },
   };
 }
+
+export interface ResourceObserverHandle {
+  readonly ready: Promise<void>;
+  readonly healthy: boolean;
+  readonly generation: string | undefined;
+  stop(): Promise<void>;
+}
+
+/** Independent from durable push observation: neither notification long-poll
+ * success nor browser keepalives certify this committed resource source. SDK
+ * resourceEvents owns its opening and 45-second producer-coverage deadlines. */
+export function startResourceObserver(
+  client: Pick<OursClient, 'resourceEvents'>,
+  identity: string,
+  callbacks: {
+    committed(frame: import('@ours.network/sdk').IdentityResourceFrame): void;
+    failed(error: Error): void;
+  },
+): ResourceObserverHandle {
+  const controller = new AbortController();
+  let healthy = false;
+  let failed = false;
+  let lastCoverage = 0;
+  let generation: string | undefined;
+  let readyResolve!: () => void;
+  let readyReject!: (error: Error) => void;
+  let readySettled = false;
+  const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+  // Ownership may be disposed before anyone awaits startup. The caller still
+  // receives the original rejection; this prevents an unhandled orphan promise.
+  void ready.catch(() => {});
+  const fail = (error: Error) => {
+    if (failed) return;
+    failed = true;
+    healthy = false;
+    if (!readySettled) { readySettled = true; readyReject(error); }
+    if (!controller.signal.aborted) callbacks.failed(error);
+  };
+  const loop = (async () => {
+    try {
+      for await (const frame of client.resourceEvents(identity, { signal: controller.signal })) {
+        if (controller.signal.aborted) break;
+        if (frame.kind === 'resync' || (generation !== undefined && generation !== frame.producerGeneration)) {
+          throw new Error('resource source continuity lost');
+        }
+        lastCoverage = Date.now();
+        if (frame.kind === 'ready') {
+          generation = frame.producerGeneration;
+          healthy = true;
+          if (!readySettled) { readySettled = true; readyResolve(); }
+        }
+        callbacks.committed(frame);
+      }
+      if (!controller.signal.aborted) fail(new Error('resource source ended'));
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error('resource source failed'));
+    } finally { healthy = false; }
+  })();
+  return { ready, get healthy() {
+      if (healthy && Date.now() - lastCoverage >= 45_000) {
+        fail(new Error('resource source coverage expired'));
+        controller.abort();
+      }
+      return healthy;
+    }, get generation() { return generation; },
+    async stop() {
+      healthy = false;
+      controller.abort();
+      if (!readySettled) { readySettled = true; readyReject(new Error('resource source aborted')); }
+      await loop;
+    },
+  };
+}

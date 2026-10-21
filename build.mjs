@@ -2,7 +2,6 @@
 // Outputs:
 //   dist/cli.js       ← the entrypoint (bin: ours-messenger-server)
 //   dist/chunks/*     ← lazily loaded server/SDK graph (`--help` stays light)
-//   dist/web/*        ← the focused same-origin messenger client
 //
 // Run via `npm run build`.
 //
@@ -10,9 +9,9 @@
 // contains the SDK HTTP client, but never the daemon engine, MUFL packets,
 // evaluator WASM, or native ADAPT bindings.
 
+import { buildTimestamp } from './scripts/build-epoch.mjs';
 import { build } from 'esbuild';
-import { build as viteBuild } from 'vite';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +21,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, 'dist');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const releaseBuild = process.env.OURS_MESSENGER_RELEASE_BUILD === '1';
+const versionTime = buildTimestamp(process.env.SOURCE_DATE_EPOCH);
 
 function command(args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -57,6 +57,9 @@ await build({
   target: 'node20',
   format: 'esm',
   splitting: true,
+  // Bundled CommonJS dependencies still require Node builtins in every split
+  // ESM chunk. Keep this import alias distinct from bundled SDK identifiers.
+  banner: { js: 'import { createRequire as __messengerCreateRequire } from "node:module"; const require = __messengerCreateRequire(import.meta.url);' },
   define: {
     __MESSENGER_BUILD_INFO__: JSON.stringify(buildInfo),
   },
@@ -65,20 +68,3 @@ await build({
   chunkNames: 'chunks/[name]-[hash]',
   logLevel: 'info',
 });
-
-await viteBuild({
-  configFile: resolve(root, 'vite.config.ts'),
-  define: { __MESSENGER_WEB_BUILD_SHA__: JSON.stringify(sha) },
-});
-
-const serviceWorkerPath = resolve(dist, 'web', 'sw.js');
-const serviceWorkerPlaceholder = '__MESSENGER_BUILD_SHA__';
-const serviceWorker = await readFile(serviceWorkerPath, 'utf8');
-if (serviceWorker.split(serviceWorkerPlaceholder).length !== 2) {
-  throw new Error('service worker must contain exactly one build SHA placeholder');
-}
-await writeFile(serviceWorkerPath, serviceWorker.replace(serviceWorkerPlaceholder, sha));
-await writeFile(
-  resolve(dist, 'web', 'version.json'),
-  JSON.stringify({ sha, time: new Date().toISOString() }) + '\n',
-);

@@ -7,8 +7,8 @@ import { startHarnessDaemon, until } from './harness.mjs';
 const daemon = await startHarnessDaemon('shared-e2e');
 try {
   const { OursClient } = daemon.sdk;
-  const provision = new OursClient({ url: daemon.url, leaseToken: 'provision' });
-  const peer = new OursClient({ url: daemon.url, leaseToken: 'peer' });
+  const provision = new OursClient({ ...daemon.clientOptions, leaseToken: 'provision' });
+  const peer = new OursClient({ ...daemon.clientOptions, leaseToken: 'peer' });
 
   const human = await provision.createRootIdentity({
     name: 'Human', bio: 'messenger identity', expose_local: true,
@@ -18,7 +18,7 @@ try {
   const peerIdentity = await peer.createIdentity({
     name: 'Peer', bio: 'sender', expose_local: true, local_auto_accept: true,
   });
-  const messenger = new OursClient({ url: daemon.url, leaseToken: 'messenger' });
+  const messenger = new OursClient({ ...daemon.clientOptions, leaseToken: 'messenger' });
   await messenger.chooseIdentity({ name: 'Human', force: false });
   assert.equal((await messenger.currentIdentity()).cid, human.info.cid);
 
@@ -45,8 +45,9 @@ try {
   const durable = await messenger.listHistory({ peer_cid: peerIdentity.info.cid });
   assert.equal(durable.items.at(0)?.text, 'persisted outside the packet');
   assert.equal(durable.items.at(0)?.inbox_state, 'read');
-  assert.equal(existsSync(join(daemon.stateDir, 'Human', 'history.sqlite3')), true,
-    'identity history is stored in the daemon filesystem');
+  assert.equal(['history.sqlite3', 'history-postgresql.json'].some(name =>
+    existsSync(join(daemon.stateDir, 'Human', name))), true,
+    'identity history retains either its SQLite database or PostgreSQL binding in the daemon state directory');
 
   await messenger.releaseLease();
   assert.equal((await peer.version()).stateDir, daemon.stateDir,
