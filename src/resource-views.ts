@@ -85,7 +85,7 @@ export function* resourceFrames(envelope: ResourceEnvelope): Generator<ResourceW
 
 export interface ResourceDescriptor {
   readonly viewId: string;
-  readonly resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands';
+  readonly resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands' | 'activity';
   readonly entityId?: string;
   readonly window?: { readonly limit: number; readonly retainedPages: number; readonly oldestSequence?: number };
 }
@@ -96,7 +96,7 @@ export function canonicalResourceDescriptor(value: unknown): ResourceDescriptor 
   const row = value as Record<string, unknown>;
   if (Object.keys(row).some(key => !['viewId', 'resource', 'entityId', 'window'].includes(key))
       || typeof row.viewId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(row.viewId)
-      || !['contacts', 'identity', 'messages', 'files', 'commands'].includes(String(row.resource))) return invalid();
+      || !['contacts', 'identity', 'messages', 'files', 'commands', 'activity'].includes(String(row.resource))) return invalid();
   const resource = row.resource as ResourceDescriptor['resource'];
   const scoped = ['messages', 'files', 'commands'].includes(resource);
   if (scoped ? typeof row.entityId !== 'string' || !row.entityId : row.entityId !== undefined) return invalid();
@@ -114,6 +114,41 @@ export function canonicalResourceDescriptor(value: unknown): ResourceDescriptor 
       ...(w.oldestSequence === undefined ? {} : { oldestSequence: w.oldestSequence as number }) };
   }
   return { viewId: row.viewId, resource, ...(scoped ? { entityId: row.entityId as string } : {}), ...(window ? { window } : {}) };
+}
+
+/** At most this many contacts are read at once while projecting activity. */
+export const ACTIVITY_READERS = 4;
+export type ContactActivity = { readonly at: string } | { readonly unavailable: true };
+
+/**
+ * Each contact's last activity: the date of its newest stored history row (by sequence),
+ * the same row a conversation window ends with, files included. A chat list orders by it
+ * without opening any conversation. One newest-row read per contact; a contact without
+ * history has `at: ''`. A contact whose read fails is `unavailable` and never blocks the
+ * others, so a client keeps the time it already knew.
+ */
+export async function projectActivity(
+  client: Pick<OursClient, 'listContacts' | 'listHistory'>,
+  signal?: AbortSignal,
+): Promise<{ activity: Record<string, ContactActivity> }> {
+  const { contacts } = await client.listContacts();
+  signal?.throwIfAborted();
+  const activity: Record<string, ContactActivity> = {};
+  const queue = contacts.map(contact => contact.container_id);
+  const reader = async () => {
+    for (let cid = queue.shift(); cid !== undefined; cid = queue.shift()) {
+      signal?.throwIfAborted();
+      try {
+        const newest = (await client.listHistory({ peer_cid: cid, limit: 1 })).items[0];
+        activity[cid] = { at: typeof newest?.date === 'string' ? newest.date : '' };
+      } catch {
+        activity[cid] = { unavailable: true };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(ACTIVITY_READERS, queue.length) }, reader));
+  signal?.throwIfAborted();
+  return { activity: Object.fromEntries(contacts.map(contact => [contact.container_id, activity[contact.container_id]])) };
 }
 
 export interface MessageResourceSnapshot extends ConversationPage { readonly oldestSequence: number | null }

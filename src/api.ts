@@ -1,5 +1,5 @@
 import { ResourceConnections, ResourceBindingError } from './resource-connections.js';
-import { canonicalResourceDescriptor, projectMessageWindow, RESOURCE_ASSEMBLY_BYTES, type ResourceDescriptor } from './resource-views.js';
+import { canonicalResourceDescriptor, projectActivity, projectMessageWindow, RESOURCE_ASSEMBLY_BYTES, type ResourceDescriptor } from './resource-views.js';
 import { readHumanProfile, writeHumanProfile, workspaceProfile } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
@@ -560,6 +560,7 @@ export async function projectResourceView(deps: ApiDeps, input: ResourceDescript
     case 'identity': return projectIdentityResource(client, deps);
     case 'files': return projectFilesResource(client, deps, { contact: descriptor.entityId! }, signal);
     case 'commands': return projectCommandResource(client, deps, { contact: descriptor.entityId! });
+    case 'activity': return projectActivity(client, signal);
     case 'messages': {
       const peer = await resolveContact(client, descriptor.entityId!);
       const page = await projectMessageWindow(client, peer.cid, peer.announcedName, descriptor.window!, signal);
@@ -794,6 +795,9 @@ const ROUTES: Record<string, Handler> = {
 
   // ---- contacts ------------------------------------------------------------
   'GET /api/contacts': async ({ client }) => presentContacts(await client.listContacts()),
+
+  // Last activity per contact for chat-list ordering; no message or file content.
+  'GET /api/activity': async ({ client }) => projectActivity(client),
 
   // The old browser surface called this `listContactRoots`. It is not a separate
   // operation: roots ride along on the contacts view.
@@ -1168,6 +1172,7 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       const baseline = await resourceService(deps).bound(connectionId, viewId, Number(epoch), baselineId);
       const descriptor = baseline.descriptor;
       const route = descriptor.resource === 'contacts' ? 'GET /api/contacts'
+        : descriptor.resource === 'activity' ? 'GET /api/activity'
         : descriptor.resource === 'identity' ? 'GET /api/identity'
           : descriptor.resource === 'commands' ? 'GET /api/contacts/:contact/commands'
             : descriptor.resource === 'files' ? 'GET /api/conversations/:contact/files' : 'GET /api/conversations/:contact/page';

@@ -54,7 +54,7 @@ The exported `ResourceDescriptor` shape is:
 ```ts
 interface ResourceDescriptor {
   viewId: string; // 1..128 ASCII letters/digits/_/-
-  resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands';
+  resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands' | 'activity';
   entityId?: string; // existing read's contact identifier/name, required for peer views
   window?: {
     limit: number; // messages only, existing read limit 1..200; default 50
@@ -63,6 +63,16 @@ interface ResourceDescriptor {
   };
 }
 ```
+
+`activity` is identity-wide, like `contacts`, and its bound read is
+`GET /api/activity`: `{ activity: { [contactCid]: { at } | { unavailable: true } } }`
+in contact-list order. `at` is the date of the contact's newest stored history row
+(by sequence, file rows included), or `''` without history; it carries no message
+content. Projection reads one newest row per contact, at most four at once, so its
+cost stays proportional to the contact count. A contact whose read fails is
+`unavailable` without failing the others; clients keep the time they already knew.
+Services without this resource refuse the descriptor with 400 `invalid resource
+descriptor` and answer `GET /api/activity` with 404.
 
 No arbitrary paths, filter/sort queries or extra keys are accepted. The current
 canonical reads expose no filter/sort parameters. Typed-command disabled mode
