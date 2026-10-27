@@ -153,18 +153,27 @@ function slots(client: object) {
   };
 }
 
-// Like history reads, a contact list read cannot be cancelled: projections share the one
-// in flight, so a held list never adds another.
-const contactLists = new WeakMap<object, ReturnType<OursClient['listContacts']>>();
-function contactList(client: Pick<OursClient, 'listContacts'>) {
-  let listing = contactLists.get(client);
-  if (!listing) {
-    listing = client.listContacts();
-    contactLists.set(client, listing);
-    const settled = () => { if (contactLists.get(client) === listing) contactLists.delete(client); };
-    listing.then(settled, settled); // an abandoned list read may still fail later
+// Like history reads, a contact list read cannot be cancelled: at most one is in flight
+// per client. A projection may only use a read that started after it did, so a list
+// sampled before its source capture is never certified under it; an older read in
+// flight is waited out, within the projection's budget, before a fresh one starts.
+type ContactListing = { readonly epoch: number; readonly read: ReturnType<OursClient['listContacts']> };
+const contactLists = new WeakMap<object, ContactListing>();
+let listingEpoch = 0;
+async function contactList(client: Pick<OursClient, 'listContacts'>, since: number, ended: Promise<void>) {
+  for (;;) {
+    const current = contactLists.get(client);
+    if (current && current.epoch > since) return current.read;
+    if (!current) {
+      const listing = { epoch: ++listingEpoch, read: client.listContacts() };
+      contactLists.set(client, listing);
+      const settled = () => { if (contactLists.get(client) === listing) contactLists.delete(client); };
+      listing.read.then(settled, settled); // an abandoned list read may still fail later
+      return listing.read;
+    }
+    const waited = await Promise.race([current.read.then(() => true, () => true), ended.then(() => false)]);
+    if (!waited) return undefined;
   }
-  return listing;
 }
 
 /**
@@ -183,6 +192,7 @@ export async function projectActivity(
   deadlineMs = ACTIVITY_DEADLINE_MS,
 ): Promise<{ activity: Record<string, ContactActivity> }> {
   signal?.throwIfAborted();
+  const since = listingEpoch;
   // One budget from projection start covers the contact list and every history read.
   let timer: ReturnType<typeof setTimeout> | undefined, stop = () => {};
   const ended = new Promise<void>(resolve => {
@@ -196,7 +206,7 @@ export async function projectActivity(
   let contacts: Array<{ container_id: string }> = [];
   try {
     // A held contact list is not an empty one: the projection fails instead.
-    const listing = contactList(client);
+    const listing = contactList(client, since, ended);
     const listed = await Promise.race([listing, ended.then(() => undefined)]);
     signal?.throwIfAborted();
     if (!listed) throw new Error('activity contact list unavailable');

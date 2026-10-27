@@ -122,6 +122,52 @@ assert.equal(reads.length, 1, 'no reader starts a contact after cancellation');
   await assert.rejects(projectActivity(fake, AbortSignal.abort()), { name: 'AbortError' });
 }
 
+// A list read that began before a projection is never its answer: the projection waits
+// for it to settle, then reads the list again, with still one list read in flight.
+{
+  let roster = ['A'], lists = 0, inFlight = 0, most = 0;
+  const releases = [];
+  const changing = {
+    listContacts() {
+      lists++; inFlight++; most = Math.max(most, inFlight);
+      const sampled = roster.map(container_id => ({ container_id }));
+      return new Promise(resolve => releases.push(() => { inFlight--; resolve({ contacts: sampled, roots: [] }); }));
+    },
+    async listHistory() { return { items: [] }; },
+  };
+  const earlier = projectActivity(changing, undefined, 60_000);
+  roster = ['A', 'B'];
+  const later = projectActivity(changing, undefined, 60_000);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(lists, 1, 'the later projection does not start a second list read alongside the first');
+  releases.shift()();
+  assert.deepEqual(Object.keys((await earlier).activity), ['A']);
+  while (!releases.length) await new Promise(resolve => setTimeout(resolve, 1));
+  releases.shift()();
+  assert.deepEqual(Object.keys((await later).activity), ['A', 'B'], 'the later projection sees the contact added after the earlier read began');
+  assert.equal(lists, 2);
+  assert.equal(most, 1, 'never more than one list read in flight');
+  // Projections waiting out the same older read share the one fresh read after it.
+  const first = projectActivity(changing, undefined, 60_000);
+  const waiting = [projectActivity(changing, undefined, 60_000), projectActivity(changing, undefined, 60_000)];
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(lists, 3);
+  releases.shift()();
+  await first;
+  while (!releases.length) await new Promise(resolve => setTimeout(resolve, 1));
+  releases.shift()();
+  for (const projection of waiting) assert.deepEqual(Object.keys((await projection).activity), ['A', 'B']);
+  assert.equal(lists, 4, 'both waiting projections use one fresh read');
+  // Waiting out an older read stays inside the deadline and starts nothing late.
+  const held = projectActivity(changing, undefined, 60_000);
+  const expiring = projectActivity(changing, undefined, 30);
+  await assert.rejects(expiring, /contact list unavailable/);
+  releases.shift()();
+  await held;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(lists, 5, 'the expired projection never starts its own read after the older one settles');
+}
+
 // The descriptor registers, and its bound GET serves the same registered capture.
 const stateDir = mkdtempSync(join(tmpdir(), 'resource-activity-'));
 let wake;

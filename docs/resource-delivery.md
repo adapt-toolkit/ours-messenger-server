@@ -74,8 +74,10 @@ proportional to the contact count. At most four of these reads are in flight per
 daemon client, across projections: a read cannot be cancelled once sent, so a held
 read keeps its slot until it settles. A contact whose read fails, or has not
 finished within five seconds of projection start, is `unavailable` without holding
-back the others; a contact list not read within that time fails the projection, and projections
-share one contact list read in flight; clients keep the time they already knew. No read starts after that
+back the others; a contact list not read within that time fails the projection. At most one contact
+list read is in flight per client; a projection only uses one that started after the
+projection did, so a list sampled before its source capture is never certified under
+it, and waits out an older one within the same deadline before reading again; clients keep the time they already knew. No read starts after that
 deadline, after the view's retirement, or after an unbound reader disconnects.
 Services without this resource refuse the descriptor with 400 `invalid resource
 descriptor` and answer `GET /api/activity` with 404.
