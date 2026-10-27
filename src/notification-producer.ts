@@ -39,6 +39,8 @@ export class MessengerNotificationProducer {
       event: record.event, sender_id: record.sender_id, wire_id: record.wire_id,
       ...(typeof record.sender_name === 'string' ? { sender_name: record.sender_name.slice(0, 512) } : {}),
     });
+    // Only a durably persisted entry is delivered; the recovery timer still covers failures.
+    if (admitted) this.outbox.prompt();
     return { status: admitted ? 'queued' : 'saturated' };
   }
   retireContact(cid: string): void {
