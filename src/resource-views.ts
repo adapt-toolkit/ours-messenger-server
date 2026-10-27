@@ -153,6 +153,20 @@ function slots(client: object) {
   };
 }
 
+// Like history reads, a contact list read cannot be cancelled: projections share the one
+// in flight, so a held list never adds another.
+const contactLists = new WeakMap<object, ReturnType<OursClient['listContacts']>>();
+function contactList(client: Pick<OursClient, 'listContacts'>) {
+  let listing = contactLists.get(client);
+  if (!listing) {
+    listing = client.listContacts();
+    contactLists.set(client, listing);
+    const settled = () => { if (contactLists.get(client) === listing) contactLists.delete(client); };
+    listing.then(settled, settled); // an abandoned list read may still fail later
+  }
+  return listing;
+}
+
 /**
  * Each contact's last activity: the date of its newest stored message row (by sequence),
  * the same row a conversation window ends with. Files live in their own store and are
@@ -182,8 +196,7 @@ export async function projectActivity(
   let contacts: Array<{ container_id: string }> = [];
   try {
     // A held contact list is not an empty one: the projection fails instead.
-    const listing = client.listContacts();
-    listing.catch(() => {}); // an abandoned list read may still fail later
+    const listing = contactList(client);
     const listed = await Promise.race([listing, ended.then(() => undefined)]);
     signal?.throwIfAborted();
     if (!listed) throw new Error('activity contact list unavailable');
