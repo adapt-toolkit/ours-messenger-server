@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NotificationOutbox } from '../src/notification-outbox.ts';
 
@@ -84,6 +84,28 @@ try {
       assert.ok(await until(() => seen.some(row => row.id === 'p7'), 1000), 'prompt delivery resumes after recovery');
       await prompt.close(); assert.equal(prompt.enqueue('p8', {}), true); prompt.prompt();
       await until(() => false, 200); assert.equal(seen.some(row => row.id === 'p8'), false, 'a closed outbox starts no pass');
+      // A burst keeps the per-pass limit: one follow-up pass sends at most 32, the rest wait for recovery.
+      const burst = new NotificationOutbox(join(dir, 'burst.json'), { origin: `http://127.0.0.1:${gate.address().port}`, token: 'p'.repeat(40) }, project);
+      outboxes.push(burst);
+      const before = seen.length;
+      for (let i = 0; i < 40; i++) { assert.equal(burst.enqueue(`b${i}`, {}), true); burst.prompt(); }
+      assert.ok(await until(() => seen.length - before === 33, 1500));
+      await until(() => false, 300);
+      assert.equal(seen.length - before, 33, 'first pass plus one 32-attempt follow-up');
+      assert.ok(await until(() => seen.length - before === 40, 4000), 'the recovery tick delivers the remainder');
+      assert.deepEqual(seen.slice(before).map(row => row.id), Array.from({ length: 40 }, (_, i) => `b${i}`));
+      // A record that could not be persisted is never sent.
+      const { MessengerNotificationProducer } = await import('../src/notification-producer.ts');
+      const locked = join(dir, 'locked'); mkdirSync(locked, { mode: 0o700 });
+      const producer = new MessengerNotificationProducer(locked, { origin: `http://127.0.0.1:${gate.address().port}`, token: 'p'.repeat(40) }, 'USER', {}, () => {});
+      outboxes.push(producer);
+      chmodSync(locked, 0o500);
+      try {
+        const sent = seen.length;
+        assert.throws(() => producer.admit({ event: 'message_received', sender_id: 'PEER', wire_id: 'UNPERSISTED' }));
+        await until(() => false, 300);
+        assert.equal(seen.length, sent, 'a failed persist sends nothing');
+      } finally { chmodSync(locked, 0o700); }
     } finally { gate.closeAllConnections(); gate.close(); }
   }
   console.log('Notification outbox sends only the typed contract and refuses unsupported state');
