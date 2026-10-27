@@ -168,6 +168,24 @@ assert.equal(reads.length, 1, 'no reader starts a contact after cancellation');
   assert.equal(lists, 5, 'the expired projection never starts its own read after the older one settles');
 }
 
+// An owner that ends in the same turn its wait is granted starts no list read.
+{
+  let lists = 0, release;
+  const racing = {
+    listContacts() { lists++; return new Promise(resolve => { release = () => resolve({ contacts: [], roots: [] }); }); },
+    async listHistory() { return { items: [] }; },
+  };
+  const older = projectActivity(racing, undefined, 60_000);
+  const owner = new AbortController();
+  const joiner = projectActivity(racing, owner.signal, 60_000);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  release(); owner.abort();
+  await assert.rejects(joiner, { name: 'AbortError' });
+  await older;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(lists, 1, 'the aborted joiner dispatches no fresh list read');
+}
+
 // The descriptor registers, and its bound GET serves the same registered capture.
 const stateDir = mkdtempSync(join(tmpdir(), 'resource-activity-'));
 let wake;

@@ -160,8 +160,11 @@ function slots(client: object) {
 type ContactListing = { readonly epoch: number; readonly read: ReturnType<OursClient['listContacts']> };
 const contactLists = new WeakMap<object, ContactListing>();
 let listingEpoch = 0;
-async function contactList(client: Pick<OursClient, 'listContacts'>, since: number, ended: Promise<void>) {
+async function contactList(client: Pick<OursClient, 'listContacts'>, since: number, ended: Promise<void>, live: () => boolean) {
   for (;;) {
+    // Checked synchronously before any use or dispatch: a wait can be granted in the same
+    // turn its owner ends.
+    if (!live()) return undefined;
     const current = contactLists.get(client);
     if (current && current.epoch > since) return current.read;
     if (!current) {
@@ -194,9 +197,9 @@ export async function projectActivity(
   signal?.throwIfAborted();
   const since = listingEpoch;
   // One budget from projection start covers the contact list and every history read.
-  let timer: ReturnType<typeof setTimeout> | undefined, stop = () => {};
+  let timer: ReturnType<typeof setTimeout> | undefined, stop = () => {}, expired = false;
   const ended = new Promise<void>(resolve => {
-    timer = setTimeout(resolve, deadlineMs);
+    timer = setTimeout(() => { expired = true; resolve(); }, deadlineMs);
     stop = () => resolve();
     signal?.addEventListener('abort', stop, { once: true });
   });
@@ -206,7 +209,7 @@ export async function projectActivity(
   let contacts: Array<{ container_id: string }> = [];
   try {
     // A held contact list is not an empty one: the projection fails instead.
-    const listing = contactList(client, since, ended);
+    const listing = contactList(client, since, ended, () => !expired && !signal?.aborted);
     const listed = await Promise.race([listing, ended.then(() => undefined)]);
     signal?.throwIfAborted();
     if (!listed) throw new Error('activity contact list unavailable');
@@ -215,7 +218,7 @@ export async function projectActivity(
     const reader = async () => {
       for (;;) {
         if (!await pool.acquire()) return;
-        const cid = open && !signal?.aborted ? queue.shift() : undefined;
+        const cid = open && !expired && !signal?.aborted ? queue.shift() : undefined;
         if (cid === undefined) return pool.release();
         try {
           const newest = (await client.listHistory({ peer_cid: cid, limit: 1 })).items[0];
