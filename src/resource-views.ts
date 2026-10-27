@@ -121,8 +121,9 @@ export const ACTIVITY_READERS = 4;
 export type ContactActivity = { readonly at: string } | { readonly unavailable: true };
 
 /**
- * Each contact's last activity: the date of its newest stored history row (by sequence),
- * the same row a conversation window ends with, files included. A chat list orders by it
+ * Each contact's last activity: the date of its newest stored message row (by sequence),
+ * the same row a conversation window ends with. Files live in their own store and are
+ * not part of it, as in that window. A chat list orders by it
  * without opening any conversation. One newest-row read per contact; a contact without
  * history has `at: ''`. A contact whose read fails is `unavailable` and never blocks the
  * others, so a client keeps the time it already knew.

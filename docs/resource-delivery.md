@@ -66,8 +66,9 @@ interface ResourceDescriptor {
 
 `activity` is identity-wide, like `contacts`, and its bound read is
 `GET /api/activity`: `{ activity: { [contactCid]: { at } | { unavailable: true } } }`
-in contact-list order. `at` is the date of the contact's newest stored history row
-(by sequence, file rows included), or `''` without history; it carries no message
+in contact-list order. `at` is the date of the contact's newest stored message row
+(by sequence; files are a separate store and do not count, as in the messages
+window), or `''` without messages; it carries no message
 content. Projection reads one newest row per contact, at most four at once, so its
 cost stays proportional to the contact count. A contact whose read fails is
 `unavailable` without failing the others; clients keep the time they already knew.

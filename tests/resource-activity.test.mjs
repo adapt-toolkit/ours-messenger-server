@@ -17,7 +17,7 @@ for (const descriptor of [{ viewId: 'a', resource: 'activity', entityId: 'peer' 
 // contact neither blocks nor erases the others.
 const rows = {
   A: [{ date: '2026-10-27T10:00:00.000Z', message_kind: 'text' }],
-  B: [{ date: '2026-10-27T11:00:00.000Z', message_kind: 'file' }],
+  B: [{ date: '2026-10-27T11:00:00.000Z', message_kind: 'text' }],
   EMPTY: [],
   FAIL: null,
   ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`P${i}`, [{ date: `2026-10-2${i}T00:00:00.000Z` }]])),
@@ -26,6 +26,7 @@ const order = Object.keys(rows);
 const reads = [];
 let active = 0, peak = 0;
 const fake = {
+  async listFiles() { throw new Error('files are not activity'); },
   async listContacts() { return { contacts: order.map(container_id => ({ container_id, name: container_id })), roots: [] }; },
   async listHistory(params) {
     reads.push(params); active++; peak = Math.max(peak, active);
@@ -38,7 +39,7 @@ const fake = {
 const projected = await projectActivity(fake);
 assert.deepEqual(Object.keys(projected.activity), order, 'contact order is the contact list order');
 assert.deepEqual(projected.activity.A, { at: '2026-10-27T10:00:00.000Z' });
-assert.deepEqual(projected.activity.B, { at: '2026-10-27T11:00:00.000Z' }, 'a newest file row is activity');
+assert.deepEqual(projected.activity.B, { at: '2026-10-27T11:00:00.000Z' });
 assert.deepEqual(projected.activity.EMPTY, { at: '' });
 assert.deepEqual(projected.activity.FAIL, { unavailable: true });
 assert.equal(projected.activity.P7.at, '2026-10-27T00:00:00.000Z');
