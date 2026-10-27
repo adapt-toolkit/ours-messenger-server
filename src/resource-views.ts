@@ -159,40 +159,49 @@ function slots(client: object) {
  * not part of it, as in that window. A chat list orders by it without opening any
  * conversation. One newest-row read per contact; a contact without messages has `at: ''`.
  * A contact whose read fails, or has not finished by the deadline, is `unavailable` and
- * never holds back the others, so a client keeps the time it already knew. No read
- * starts after the deadline or cancellation.
+ * never holds back the others, so a client keeps the time it already knew. The deadline
+ * runs from projection start and covers the contact list: a list not read by then fails
+ * the projection. No read starts after the deadline or cancellation.
  */
 export async function projectActivity(
   client: Pick<OursClient, 'listContacts' | 'listHistory'>,
   signal?: AbortSignal,
   deadlineMs = ACTIVITY_DEADLINE_MS,
 ): Promise<{ activity: Record<string, ContactActivity> }> {
-  const { contacts } = await client.listContacts();
   signal?.throwIfAborted();
-  const pool = slots(client);
-  const activity: Record<string, ContactActivity> = {};
-  const queue = contacts.map(contact => contact.container_id);
-  let open = true;
-  const reader = async () => {
-    for (;;) {
-      if (!await pool.acquire()) return;
-      const cid = open && !signal?.aborted ? queue.shift() : undefined;
-      if (cid === undefined) return pool.release();
-      try {
-        const newest = (await client.listHistory({ peer_cid: cid, limit: 1 })).items[0];
-        activity[cid] = { at: typeof newest?.date === 'string' ? newest.date : '' };
-      } catch {
-        activity[cid] = { unavailable: true };
-      } finally { pool.release(); }
-    }
-  };
+  // One budget from projection start covers the contact list and every history read.
   let timer: ReturnType<typeof setTimeout> | undefined, stop = () => {};
   const ended = new Promise<void>(resolve => {
     timer = setTimeout(resolve, deadlineMs);
     stop = () => resolve();
     signal?.addEventListener('abort', stop, { once: true });
   });
+  const pool = slots(client);
+  const activity: Record<string, ContactActivity> = {};
+  let open = true;
+  let contacts: Array<{ container_id: string }> = [];
   try {
+    // A held contact list is not an empty one: the projection fails instead.
+    const listing = client.listContacts();
+    listing.catch(() => {}); // an abandoned list read may still fail later
+    const listed = await Promise.race([listing, ended.then(() => undefined)]);
+    signal?.throwIfAborted();
+    if (!listed) throw new Error('activity contact list unavailable');
+    contacts = listed.contacts;
+    const queue = contacts.map(contact => contact.container_id);
+    const reader = async () => {
+      for (;;) {
+        if (!await pool.acquire()) return;
+        const cid = open && !signal?.aborted ? queue.shift() : undefined;
+        if (cid === undefined) return pool.release();
+        try {
+          const newest = (await client.listHistory({ peer_cid: cid, limit: 1 })).items[0];
+          activity[cid] = { at: typeof newest?.date === 'string' ? newest.date : '' };
+        } catch {
+          activity[cid] = { unavailable: true };
+        } finally { pool.release(); }
+      }
+    };
     await Promise.race([Promise.all(Array.from({ length: Math.min(ACTIVITY_READERS, queue.length) }, reader)), ended]);
   } finally {
     open = false;

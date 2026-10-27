@@ -98,6 +98,27 @@ assert.equal(reads.length, 1, 'no reader starts a contact after cancellation');
   assert.equal(started.length, 6);
 }
 
+// The deadline and cancellation also cover the contact list: a held list fails the
+// projection rather than reporting no contacts, and no history read follows it.
+{
+  let releaseList, historyReads = 0;
+  const heldList = {
+    listContacts: () => new Promise((resolve, reject) => { releaseList = reject; }),
+    async listHistory() { historyReads++; return { items: [] }; },
+  };
+  const started = performance.now();
+  await assert.rejects(projectActivity(heldList, undefined, 30), /contact list unavailable/);
+  assert.ok(performance.now() - started < 500, 'the deadline runs from projection start');
+  const owner = new AbortController();
+  const cancelled = projectActivity(heldList, owner.signal, 60_000);
+  owner.abort();
+  await assert.rejects(cancelled, { name: 'AbortError' });
+  releaseList(new Error('late list failure'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(historyReads, 0);
+  await assert.rejects(projectActivity(fake, AbortSignal.abort()), { name: 'AbortError' });
+}
+
 // The descriptor registers, and its bound GET serves the same registered capture.
 const stateDir = mkdtempSync(join(tmpdir(), 'resource-activity-'));
 let wake;
