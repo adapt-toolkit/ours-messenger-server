@@ -56,6 +56,48 @@ await assert.rejects(cancelled, { name: 'AbortError' });
 await new Promise(resolve => setTimeout(resolve, 30));
 assert.equal(reads.length, 1, 'no reader starts a contact after cancellation');
 
+// A held read cannot be cancelled: the projection publishes the others at its deadline,
+// the held read keeps its slot, and later projections share the same four slots.
+{
+  const held = new Set(['H1']);
+  const releases = [];
+  let inFlight = 0, most = 0, started = [];
+  const holding = {
+    async listContacts() { return { contacts: ['H1', 'A', 'B', 'C', 'D', 'E'].map(container_id => ({ container_id })), roots: [] }; },
+    async listHistory({ peer_cid }) {
+      started.push(peer_cid); inFlight++; most = Math.max(most, inFlight);
+      try {
+        if (held.has(peer_cid)) await new Promise(resolve => releases.push(resolve));
+        return { items: [{ date: `2026-10-27T00:00:00.000Z` }] };
+      } finally { inFlight--; }
+    },
+  };
+  const first = await projectActivity(holding, undefined, 50);
+  assert.deepEqual(first.activity.H1, { unavailable: true }, 'the held contact is unavailable');
+  assert.ok(['A', 'B', 'C', 'D', 'E'].every(cid => first.activity[cid].at), 'the others publish despite the held read');
+  assert.equal(inFlight, 1, 'the held read is still in flight');
+  // Every read is held now: one slot is taken, so the next projection can start only three.
+  for (const cid of ['A', 'B', 'C', 'D', 'E']) held.add(cid);
+  started = [];
+  const second = await projectActivity(holding, undefined, 50);
+  assert.equal(started.length, 3, 'the abandoned held read still counts toward the cap');
+  assert.ok(Object.values(second.activity).every(entry => entry.unavailable), 'nothing finished by the deadline');
+  assert.equal(most, ACTIVITY_READERS, 'never more than four reads in flight');
+  started = [];
+  const third = await projectActivity(holding, undefined, 50);
+  assert.equal(started.length, 0, 'all slots held: no new read starts');
+  assert.ok(Object.values(third.activity).every(entry => entry.unavailable));
+  held.clear();
+  for (const release of releases.splice(0)) release();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(inFlight, 0);
+  assert.equal(started.length, 0, 'withdrawn readers of ended projections start nothing when slots free up');
+  started = [];
+  const recovered = await projectActivity(holding, undefined, 1000);
+  assert.ok(Object.values(recovered.activity).every(entry => entry.at), 'slots return once held reads settle');
+  assert.equal(started.length, 6);
+}
+
 // The descriptor registers, and its bound GET serves the same registered capture.
 const stateDir = mkdtempSync(join(tmpdir(), 'resource-activity-'));
 let wake;
@@ -96,7 +138,20 @@ try {
   assert.deepEqual(Object.keys((await bound.json()).activity), order);
   assert.equal((await fetch(base + '/api/contacts', { headers: binding })).status, 409, 'an activity binding authorizes only its own read');
   assert.equal((await fetch(base + '/api/activity?limit=1', { headers: binding })).status, 409, 'activity takes no query');
+  // A reader that goes away starts no further contact reads.
+  const releases = [];
+  let reads = 0;
+  client.listHistory = async () => { reads++; await new Promise(resolve => releases.push(resolve)); return { items: [] }; };
+  const leaving = new AbortController();
+  const answer = fetch(base + '/api/activity', { signal: leaving.signal }).catch(error => error);
+  while (reads < ACTIVITY_READERS) await new Promise(resolve => setTimeout(resolve, 5));
+  leaving.abort();
+  assert.equal((await answer).name, 'AbortError');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  for (const release of releases.splice(0)) release();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(reads, ACTIVITY_READERS, 'no contact read starts after the request is gone');
 } finally {
   stream.abort(); server.closeAllConnections(); server.close(); rmSync(stateDir, { recursive: true, force: true });
 }
-console.log('resource-activity: newest-row activity per contact, capped reads, isolated failures, bound GET');
+console.log('resource-activity: newest message time per contact, four reads at most, held and failed contacts isolated, bound GET, request-owned reads');

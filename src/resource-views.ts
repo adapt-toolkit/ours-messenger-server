@@ -116,40 +116,93 @@ export function canonicalResourceDescriptor(value: unknown): ResourceDescriptor 
   return { viewId: row.viewId, resource, ...(scoped ? { entityId: row.entityId as string } : {}), ...(window ? { window } : {}) };
 }
 
-/** At most this many contacts are read at once while projecting activity. */
+/** At most this many activity reads are in flight per client, across projections. */
 export const ACTIVITY_READERS = 4;
+/** A projection publishes what it has by then; contacts still unread are unavailable. */
+export const ACTIVITY_DEADLINE_MS = 5000;
 export type ContactActivity = { readonly at: string } | { readonly unavailable: true };
+
+// History reads cannot be cancelled once sent, so a held read keeps its slot until it
+// settles, also after its projection has published without it.
+type Waiter = (granted: boolean) => void;
+const activitySlots = new WeakMap<object, { active: number; waiters: Waiter[] }>();
+function slots(client: object) {
+  let pool = activitySlots.get(client);
+  if (!pool) activitySlots.set(client, (pool = { active: 0, waiters: [] }));
+  const owned = pool, mine = new Set<Waiter>();
+  return {
+    /** False once withdrawn: the projection ended while this reader still waited. */
+    acquire: async (): Promise<boolean> => {
+      while (owned.active >= ACTIVITY_READERS) {
+        const granted = await new Promise<boolean>(resolve => { mine.add(resolve); owned.waiters.push(resolve); });
+        if (!granted) return false;
+      }
+      owned.active++;
+      return true;
+    },
+    release: () => {
+      owned.active--;
+      const next = owned.waiters.shift();
+      if (next) { mine.delete(next); next(true); }
+    },
+    withdraw: () => {
+      owned.waiters = owned.waiters.filter(waiter => !mine.has(waiter));
+      for (const waiter of mine) waiter(false);
+      mine.clear();
+    },
+  };
+}
 
 /**
  * Each contact's last activity: the date of its newest stored message row (by sequence),
  * the same row a conversation window ends with. Files live in their own store and are
- * not part of it, as in that window. A chat list orders by it
- * without opening any conversation. One newest-row read per contact; a contact without
- * history has `at: ''`. A contact whose read fails is `unavailable` and never blocks the
- * others, so a client keeps the time it already knew.
+ * not part of it, as in that window. A chat list orders by it without opening any
+ * conversation. One newest-row read per contact; a contact without messages has `at: ''`.
+ * A contact whose read fails, or has not finished by the deadline, is `unavailable` and
+ * never holds back the others, so a client keeps the time it already knew. No read
+ * starts after the deadline or cancellation.
  */
 export async function projectActivity(
   client: Pick<OursClient, 'listContacts' | 'listHistory'>,
   signal?: AbortSignal,
+  deadlineMs = ACTIVITY_DEADLINE_MS,
 ): Promise<{ activity: Record<string, ContactActivity> }> {
   const { contacts } = await client.listContacts();
   signal?.throwIfAborted();
+  const pool = slots(client);
   const activity: Record<string, ContactActivity> = {};
   const queue = contacts.map(contact => contact.container_id);
+  let open = true;
   const reader = async () => {
-    for (let cid = queue.shift(); cid !== undefined; cid = queue.shift()) {
-      signal?.throwIfAborted();
+    for (;;) {
+      if (!await pool.acquire()) return;
+      const cid = open && !signal?.aborted ? queue.shift() : undefined;
+      if (cid === undefined) return pool.release();
       try {
         const newest = (await client.listHistory({ peer_cid: cid, limit: 1 })).items[0];
         activity[cid] = { at: typeof newest?.date === 'string' ? newest.date : '' };
       } catch {
         activity[cid] = { unavailable: true };
-      }
+      } finally { pool.release(); }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(ACTIVITY_READERS, queue.length) }, reader));
+  let timer: ReturnType<typeof setTimeout> | undefined, stop = () => {};
+  const ended = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, deadlineMs);
+    stop = () => resolve();
+    signal?.addEventListener('abort', stop, { once: true });
+  });
+  try {
+    await Promise.race([Promise.all(Array.from({ length: Math.min(ACTIVITY_READERS, queue.length) }, reader)), ended]);
+  } finally {
+    open = false;
+    pool.withdraw();
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+  }
   signal?.throwIfAborted();
-  return { activity: Object.fromEntries(contacts.map(contact => [contact.container_id, activity[contact.container_id]])) };
+  return { activity: Object.fromEntries(contacts.map(contact =>
+    [contact.container_id, activity[contact.container_id] ?? { unavailable: true }])) };
 }
 
 export interface MessageResourceSnapshot extends ConversationPage { readonly oldestSequence: number | null }

@@ -797,7 +797,12 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/contacts': async ({ client }) => presentContacts(await client.listContacts()),
 
   // Last activity per contact for chat-list ordering; no message or file content.
-  'GET /api/activity': async ({ client }) => projectActivity(client),
+  'GET /api/activity': async ({ client, res }) => {
+    // A reader that goes away starts no further contact reads.
+    const lifetime = new AbortController();
+    res.once('close', () => lifetime.abort());
+    return projectActivity(client, lifetime.signal);
+  },
 
   // The old browser surface called this `listContactRoots`. It is not a separate
   // operation: roots ride along on the contacts view.

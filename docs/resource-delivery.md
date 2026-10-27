@@ -69,9 +69,13 @@ interface ResourceDescriptor {
 in contact-list order. `at` is the date of the contact's newest stored message row
 (by sequence; files are a separate store and do not count, as in the messages
 window), or `''` without messages; it carries no message
-content. Projection reads one newest row per contact, at most four at once, so its
-cost stays proportional to the contact count. A contact whose read fails is
-`unavailable` without failing the others; clients keep the time they already knew.
+content. Projection reads one newest row per contact, so its cost stays
+proportional to the contact count. At most four of these reads are in flight per
+daemon client, across projections: a read cannot be cancelled once sent, so a held
+read keeps its slot until it settles. A contact whose read fails, or has not
+finished within five seconds of projection start, is `unavailable` without holding
+back the others; clients keep the time they already knew. No read starts after that
+deadline, after the view's retirement, or after an unbound reader disconnects.
 Services without this resource refuse the descriptor with 400 `invalid resource
 descriptor` and answer `GET /api/activity` with 404.
 
