@@ -42,6 +42,8 @@ export interface ReceiptsResult {
 
 export interface ConversationPage {
   readonly contact: string;
+  /** Present only on the explicit canonical-peer read contract, including empty pages. */
+  readonly peer?: { readonly kind: 'cid'; readonly cid: string };
   /** Oldest first, as the engine orders them. */
   readonly messages: readonly ConversationMessage[];
   /** Total entries in the conversation, not in this page. */

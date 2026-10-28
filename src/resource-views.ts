@@ -87,6 +87,7 @@ export interface ResourceDescriptor {
   readonly viewId: string;
   readonly resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands' | 'activity';
   readonly entityId?: string;
+  readonly addressing?: 'cid';
   readonly window?: { readonly limit: number; readonly retainedPages: number; readonly oldestSequence?: number };
 }
 /** Canonical supported read shapes only. Entity names remain data, never paths. */
@@ -94,12 +95,14 @@ export function canonicalResourceDescriptor(value: unknown): ResourceDescriptor 
   const invalid = (): never => { throw new Error('invalid resource descriptor'); };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid();
   const row = value as Record<string, unknown>;
-  if (Object.keys(row).some(key => !['viewId', 'resource', 'entityId', 'window'].includes(key))
+  if (Object.keys(row).some(key => !['viewId', 'resource', 'entityId', 'window', 'addressing'].includes(key))
       || typeof row.viewId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(row.viewId)
       || !['contacts', 'identity', 'messages', 'files', 'commands', 'activity'].includes(String(row.resource))) return invalid();
   const resource = row.resource as ResourceDescriptor['resource'];
   const scoped = ['messages', 'files', 'commands'].includes(resource);
   if (scoped ? typeof row.entityId !== 'string' || !row.entityId : row.entityId !== undefined) return invalid();
+  if (row.addressing !== undefined && (row.addressing !== 'cid'
+      || !['messages', 'files'].includes(resource) || !/^[a-f0-9]{64}$/i.test(String(row.entityId)))) return invalid();
   if (resource !== 'messages' && row.window !== undefined) return invalid();
   let window: ResourceDescriptor['window'];
   if (resource === 'messages') {
@@ -113,7 +116,8 @@ export function canonicalResourceDescriptor(value: unknown): ResourceDescriptor 
     window = { limit: w.limit as number, retainedPages: w.retainedPages as number,
       ...(w.oldestSequence === undefined ? {} : { oldestSequence: w.oldestSequence as number }) };
   }
-  return { viewId: row.viewId, resource, ...(scoped ? { entityId: row.entityId as string } : {}), ...(window ? { window } : {}) };
+  return { viewId: row.viewId, resource, ...(scoped ? { entityId: row.entityId as string } : {}),
+    ...(row.addressing === 'cid' ? { addressing: 'cid' as const } : {}), ...(window ? { window } : {}) };
 }
 
 /** At most this many activity reads are in flight per client, across projections. */
@@ -256,6 +260,7 @@ export async function projectMessageWindow(
   announcedContact: string,
   window: NonNullable<ResourceDescriptor['window']>,
   signal: AbortSignal,
+  options: { readonly preview?: false } = {},
 ): Promise<MessageResourceSnapshot> {
   let before: number | undefined;
   const rows: HistoryMessage[] = [];
@@ -269,7 +274,7 @@ export async function projectMessageWindow(
         || (before !== undefined && page.next_cursor >= before))) throw new Error('invalid history continuation');
     const selected = window.oldestSequence === undefined ? page.items : page.items.filter(row => row.seq >= window.oldestSequence!);
     totalBytes += Buffer.byteLength(JSON.stringify(projectHistoryPage(contact, { items: selected, next_cursor: null },
-      { total: 0, unread: 0 }, { announcedContact }).messages));
+      { total: 0, unread: 0 }, { announcedContact, ...options }).messages));
     if (totalBytes > RESOURCE_ASSEMBLY_BYTES) throw new Error('resource assembly limit exceeded');
     rows.push(...selected);
     next = page.next_cursor;
@@ -287,7 +292,7 @@ export async function projectMessageWindow(
   if (ids.has('') || ids.size !== rows.length) throw new Error('message view lacks stable IDs');
   const summary = await client.getHistorySummary({ peer_cid: contact });
   signal.throwIfAborted();
-  return { ...projectHistoryPage(contact, { items: rows, next_cursor: next }, summary, { announcedContact }),
+  return { ...projectHistoryPage(contact, { items: rows, next_cursor: next }, summary, { announcedContact, ...options }),
     oldestSequence: rows.at(-1)?.seq ?? window.oldestSequence ?? null };
 }
 

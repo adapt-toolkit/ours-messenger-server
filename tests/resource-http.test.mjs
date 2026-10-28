@@ -27,6 +27,7 @@ const client = {
  async resourcePosition() { return { protocolVersion: 1, producerGeneration: 'source', position }; },
  async listContacts() { return { contacts: [{ container_id: 'peer', name: 'peer' }] }; },
  async listHistory() { return { items: [], next_cursor: null }; },
+ async listFiles() { return { items: [], next_cursor: null }; },
  async getHistorySummary() { return { total: 0, unread: 0 }; },
  async currentIdentity() {
   if (race) { race = false; position++; wake({protocolVersion:1,producerGeneration:'source',position,kind:'committed'}); }
@@ -120,6 +121,29 @@ try {
  assert.equal((await fetch(base+'/api/conversations/peer/page?limit=50&preview=none', {headers:messagesBinding})).status,409,
   'unbound preview opt-in must not loosen the resource descriptor contract');
  await fetch(base+'/api/resource-subscriptions', {method:'DELETE',headers,body:JSON.stringify({connectionId,viewId:'messages',subscriptionEpoch:1})});
+ // Strict descriptors bind only to strict paths, and legacy views cannot impersonate them.
+ const pin='B'.repeat(64);
+ for (const resource of ['messages','files']) for (const addressing of ['cid', undefined]) {
+  const viewId=(addressing ? 'strict-peer-' : 'legacy-peer-')+resource;
+  const descriptor={viewId,resource,entityId:pin,...(resource==='messages' ? {window:{limit:50,retainedPages:1}} : {}),
+   ...(addressing ? {addressing} : {})};
+  const installed=await fetch(base+'/api/resource-subscriptions',{method:'POST',headers,
+   body:JSON.stringify({connectionId,viewId,subscriptionEpoch:1,descriptor})});
+  assert.equal(installed.status,200);const control=await installed.json();
+  const bound={'X-Resource-Connection':connectionId,'X-Resource-View':viewId,
+   'X-Resource-Epoch':'1','X-Resource-Baseline':control.baselineId};
+  const selected=addressing ? 'peers' : 'conversations';
+  const other=addressing ? 'conversations' : 'peers';
+  const tail=resource==='messages' ? 'page?limit=50' : 'files';
+  const read=await fetch(`${base}/api/${selected}/${pin}/${tail}`,{headers:bound});
+  assert.equal(read.status,200);
+  assert.deepEqual((await read.json()).peer,addressing ? {kind:'cid',cid:pin} : undefined);
+  assert.equal((await fetch(`${base}/api/${other}/${pin}/${tail}`,{headers:bound})).status,409);
+  assert.equal((await fetch(`${base}/api/${selected}/${'C'.repeat(64)}/${tail}`,{headers:bound})).status,409);
+  assert.equal((await fetch(`${base}/api/${selected}/${pin}/${tail}${resource==='messages' ? '&' : '?'}preview=none`,{headers:bound})).status,409);
+  await fetch(base+'/api/resource-subscriptions',{method:'DELETE',headers,
+   body:JSON.stringify({connectionId,viewId,subscriptionEpoch:1})});
+ }
  console.log('resource-http: same-origin controls, registered initial GET, complete payloads and local profile commits passed');
 } finally {
  abort.abort(); await reader?.cancel().catch(()=>{});
