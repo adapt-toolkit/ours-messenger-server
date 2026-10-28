@@ -54,7 +54,7 @@ The exported `ResourceDescriptor` shape is:
 ```ts
 interface ResourceDescriptor {
   viewId: string; // 1..128 ASCII letters/digits/_/-
-  resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands';
+  resource: 'contacts' | 'identity' | 'messages' | 'files' | 'commands' | 'activity';
   entityId?: string; // existing read's contact identifier/name, required for peer views
   window?: {
     limit: number; // messages only, existing read limit 1..200; default 50
@@ -63,6 +63,24 @@ interface ResourceDescriptor {
   };
 }
 ```
+
+`activity` is identity-wide, like `contacts`, and its bound read is
+`GET /api/activity`: `{ activity: { [contactCid]: { at } | { unavailable: true } } }`
+in contact-list order. `at` is the date of the contact's newest stored message row
+(by sequence; files are a separate store and do not count, as in the messages
+window), or `''` without messages; it carries no message
+content. Projection reads one newest row per contact, so its cost stays
+proportional to the contact count. At most four of these reads are in flight per
+daemon client, across projections: a read cannot be cancelled once sent, so a held
+read keeps its slot until it settles. A contact whose read fails, or has not
+finished within five seconds of projection start, is `unavailable` without holding
+back the others; a contact list not read within that time fails the projection. At most one contact
+list read is in flight per client; a projection only uses one that started after the
+projection did, so a list sampled before its source capture is never certified under
+it, and waits out an older one within the same deadline before reading again; clients keep the time they already knew. No read starts after that
+deadline, after the view's retirement, or after an unbound reader disconnects.
+Services without this resource refuse the descriptor with 400 `invalid resource
+descriptor` and answer `GET /api/activity` with 404.
 
 No arbitrary paths, filter/sort queries or extra keys are accepted. The current
 canonical reads expose no filter/sort parameters. Typed-command disabled mode

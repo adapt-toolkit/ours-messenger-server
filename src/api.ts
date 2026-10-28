@@ -1,5 +1,5 @@
 import { ResourceConnections, ResourceBindingError } from './resource-connections.js';
-import { canonicalResourceDescriptor, projectMessageWindow, RESOURCE_ASSEMBLY_BYTES, type ResourceDescriptor } from './resource-views.js';
+import { canonicalResourceDescriptor, projectActivity, projectMessageWindow, RESOURCE_ASSEMBLY_BYTES, type ResourceDescriptor } from './resource-views.js';
 import { readHumanProfile, writeHumanProfile, workspaceProfile } from './workspace-profile.js';
 // The browser surface projected from the shared daemon's durable history.
 //
@@ -333,6 +333,7 @@ function publicFetchedFiles(value: unknown): Readonly<Record<string, unknown>> {
 export function presentContacts(value: Awaited<ReturnType<OursClient['listContacts']>>) {
   return {
     ...value,
+    capabilities: { canonicalPeerReads: 1 as const },
     contacts: value.contacts.map((contact) => ({
       ...contact,
       display_name: contactDisplayName(contact.name) as string,
@@ -351,6 +352,54 @@ async function resolveContact(client: OursClient, contact: string): Promise<{
   const contacts = await client.listContacts();
   const row = contacts.contacts.find((item) => item.container_id === contact || item.name === contact);
   return { cid: row?.container_id ?? contact, announcedName: row?.name ?? contact };
+}
+
+type CanonicalPeer = NonNullable<import('./conversation.js').ConversationPage['peer']>;
+function canonicalPeer(cid: string): CanonicalPeer {
+  if (!/^[a-f0-9]{64}$/i.test(cid)) throw bad('peer CID must be exactly 64 hexadecimal characters');
+  return { kind: 'cid', cid };
+}
+
+/** Explicit CID callers never consult the mutable name/alias directory. */
+async function projectConversationPage(client: OursClient, contact: string, query: URLSearchParams, pin?: CanonicalPeer) {
+  if (pin && [...query.keys()].some(key => !['before', 'limit', 'preview'].includes(key) || query.getAll(key).length !== 1))
+    throw bad('invalid peer page query');
+  const previews = query.getAll('preview');
+  if (previews.length > 1 || (previews.length === 1 && previews[0] !== 'none')) {
+    throw bad('preview must be omitted or exactly none');
+  }
+  const omitPreview = !!pin || previews.length === 1;
+  const rawLimit = query.get('limit');
+  const limit = rawLimit === null ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    throw new ConversationPageError(`limit must be an integer in 1..200, got ${String(rawLimit)}`);
+  }
+  const peer = pin ? { cid: pin.cid, announcedName: '' } : await resolveContact(client, contact);
+  const before = beforeSequence(query.get('before') ?? undefined);
+  const [history, summary, newest] = await Promise.all([
+    client.listHistory({ peer_cid: peer.cid, before_seq: before, limit }),
+    client.getHistorySummary({ peer_cid: peer.cid }),
+    before === undefined || omitPreview ? Promise.resolve(null) : client.listHistory({ peer_cid: peer.cid, limit: 1 }),
+  ]);
+  const projected = projectHistoryPage(contact, history, summary, {
+    announcedContact: peer.announcedName, ...(omitPreview ? { preview: false as const } : {}),
+  });
+  return { ...projected,
+    ...(newest ? { preview: projectHistoryPage(contact, newest, summary, { announcedContact: peer.announcedName }).preview } : {}),
+    ...(pin ? { peer: pin } : {}),
+  };
+}
+
+async function markPeerRead(client: OursClient, contact: string, cid: string) {
+  const unread = (await client.listIncomingMessages()).filter((row) => row.from.id === cid);
+  let marked = 0;
+  for (let offset = 0; offset < unread.length; offset += 200) {
+    const wireIds = unread.slice(offset, offset + 200).map((row) => row.wire_id);
+    if (wireIds.length === 0) continue;
+    const result = await client.getMessages({ wire_ids: wireIds });
+    marked += result.messages.length;
+  }
+  return { contact, marked };
 }
 
 function beforeSequence(raw: string | undefined): number | undefined {
@@ -533,12 +582,13 @@ async function projectCommandResource(client: OursClient, deps: ApiDeps, params:
   return projectCatalog(peer.cid, await client.listContactCommands({ contact: peer.cid }));
 }
 
-async function projectFilesResource(client: OursClient, deps: ApiDeps, params: Record<string, string>, signal?: AbortSignal) {
-  const peer = await resolveContact(client, params.contact);
+async function projectFilesResource(client: OursClient, deps: ApiDeps, params: Record<string, string>, signal?: AbortSignal, pin?: CanonicalPeer) {
+  const peer = pin ? { cid: pin.cid } : await resolveContact(client, params.contact);
   const files = (await listAllFiles(client, peer.cid, signal, { cid: deps.identityCid, name: deps.config.identity })).reverse();
   const versions = new Map<string, number>();
   return {
     contact: params.contact,
+    ...(pin ? { peer: pin } : {}),
     files: files.map((row) => {
       const logicalName = row.filename.normalize('NFC').toLocaleLowerCase('en-US');
       const version = (versions.get(logicalName) ?? 0) + 1;
@@ -558,12 +608,15 @@ export async function projectResourceView(deps: ApiDeps, input: ResourceDescript
   switch (descriptor.resource) {
     case 'contacts': return presentContacts(await client.listContacts());
     case 'identity': return projectIdentityResource(client, deps);
-    case 'files': return projectFilesResource(client, deps, { contact: descriptor.entityId! }, signal);
+    case 'files': return projectFilesResource(client, deps, { contact: descriptor.entityId! }, signal,
+      descriptor.addressing === 'cid' ? canonicalPeer(descriptor.entityId!) : undefined);
     case 'commands': return projectCommandResource(client, deps, { contact: descriptor.entityId! });
+    case 'activity': return projectActivity(client, signal);
     case 'messages': {
-      const peer = await resolveContact(client, descriptor.entityId!);
-      const page = await projectMessageWindow(client, peer.cid, peer.announcedName, descriptor.window!, signal);
-      return { ...page, contact: descriptor.entityId! };
+      const pin = descriptor.addressing === 'cid' ? canonicalPeer(descriptor.entityId!) : undefined;
+      const peer = pin ? { cid: pin.cid, announcedName: '' } : await resolveContact(client, descriptor.entityId!);
+      const page = await projectMessageWindow(client, peer.cid, peer.announcedName, descriptor.window!, signal, pin ? { preview: false } : {});
+      return { ...page, contact: descriptor.entityId!, ...(pin ? { peer: pin } : {}) };
     }
   }
 }
@@ -730,30 +783,17 @@ const ROUTES: Record<string, Handler> = {
     };
   },
 
-  'GET /api/conversations/:contact/page': async ({ client, params, query }) => {
-    const contact = params.contact;
-    const rawLimit = query.get('limit');
-    const limit = rawLimit === null ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-      throw new ConversationPageError(`limit must be an integer in 1..200, got ${String(rawLimit)}`);
-    }
-    const peer = await resolveContact(client, contact);
-    const before = beforeSequence(query.get('before') ?? undefined);
-    const [history, summary, newest] = await Promise.all([
-      client.listHistory({
-        peer_cid: peer.cid,
-        before_seq: before,
-        limit,
-      }),
-      client.getHistorySummary({ peer_cid: peer.cid }),
-      before === undefined ? Promise.resolve(null) : client.listHistory({ peer_cid: peer.cid, limit: 1 }),
-    ]);
-    const projected = projectHistoryPage(contact, history, summary, { announcedContact: peer.announcedName });
-    if (!newest) return projected;
-    return {
-      ...projected,
-      preview: projectHistoryPage(contact, newest, summary, { announcedContact: peer.announcedName }).preview,
-    };
+  'GET /api/conversations/:contact/page': async ({ client, params, query }) =>
+    projectConversationPage(client, params.contact, query),
+
+  // Distinct strict paths fail before mutation on an older service; never alias-fallback.
+  'GET /api/peers/:cid/page': async ({ client, params, query }) =>
+    projectConversationPage(client, params.cid, query, canonicalPeer(params.cid)),
+  'GET /api/peers/:cid/files': async ({ client, deps, params }) =>
+    projectFilesResource(client, deps, { contact: params.cid }, undefined, canonicalPeer(params.cid)),
+  'POST /api/peers/:cid/read': async ({ client, params }) => {
+    const peer = canonicalPeer(params.cid);
+    return { ...await markPeerRead(client, peer.cid, peer.cid), peer };
   },
 
   'GET /api/conversations/:contact/receipts': async ({ client, params }) => {
@@ -776,15 +816,7 @@ const ROUTES: Record<string, Handler> = {
   // THE HUMAN READ EVENT. The only thing in this server that emits a read receipt.
   'POST /api/conversations/:contact/read': async ({ client, params }) => {
     const peer = await resolveContact(client, params.contact);
-    const unread = (await client.listIncomingMessages()).filter((row) => row.from.id === peer.cid);
-    let marked = 0;
-    for (let offset = 0; offset < unread.length; offset += 200) {
-      const wireIds = unread.slice(offset, offset + 200).map((row) => row.wire_id);
-      if (wireIds.length === 0) continue;
-      const result = await client.getMessages({ wire_ids: wireIds });
-      marked += result.messages.length;
-    }
-    return { contact: params.contact, marked };
+    return markPeerRead(client, params.contact, peer.cid);
   },
 
   // The non-consuming inbox summary. Metadata only — it does NOT hand over bodies
@@ -794,6 +826,14 @@ const ROUTES: Record<string, Handler> = {
 
   // ---- contacts ------------------------------------------------------------
   'GET /api/contacts': async ({ client }) => presentContacts(await client.listContacts()),
+
+  // Last activity per contact for chat-list ordering; no message or file content.
+  'GET /api/activity': async ({ client, res }) => {
+    // A reader that goes away starts no further contact reads.
+    const lifetime = new AbortController();
+    res.once('close', () => lifetime.abort());
+    return projectActivity(client, lifetime.signal);
+  },
 
   // The old browser surface called this `listContactRoots`. It is not a separate
   // operation: roots ride along on the contacts view.
@@ -1167,13 +1207,16 @@ export async function serveApi(req: IncomingMessage, res: ServerResponse, deps: 
       const [connectionId, viewId, epoch, baselineId] = resourceHeaders.map(values => values[0]);
       const baseline = await resourceService(deps).bound(connectionId, viewId, Number(epoch), baselineId);
       const descriptor = baseline.descriptor;
-      const route = descriptor.resource === 'contacts' ? 'GET /api/contacts'
+      const route = descriptor.addressing === 'cid'
+        ? descriptor.resource === 'files' ? 'GET /api/peers/:cid/files' : 'GET /api/peers/:cid/page'
+        : descriptor.resource === 'contacts' ? 'GET /api/contacts'
+        : descriptor.resource === 'activity' ? 'GET /api/activity'
         : descriptor.resource === 'identity' ? 'GET /api/identity'
           : descriptor.resource === 'commands' ? 'GET /api/contacts/:contact/commands'
             : descriptor.resource === 'files' ? 'GET /api/conversations/:contact/files' : 'GET /api/conversations/:contact/page';
       const allowedQuery = descriptor.resource === 'messages' && [...url.searchParams.keys()].every(key => key === 'limit')
         && (!url.searchParams.has('limit') || (url.searchParams.getAll('limit').length === 1 && Number(url.searchParams.get('limit')) === descriptor.window!.limit));
-      if (hit.key !== route || (descriptor.entityId !== undefined && descriptor.entityId !== hit.params.contact)
+      if (hit.key !== route || (descriptor.entityId !== undefined && descriptor.entityId !== (hit.params.cid ?? hit.params.contact))
           || (url.searchParams.size > 0 && !allowedQuery)) throw new ResourceBindingError(409, 'resource read descriptor mismatch');
       res.setHeader('X-Resource-Connection', connectionId);
       res.setHeader('X-Resource-View', viewId);

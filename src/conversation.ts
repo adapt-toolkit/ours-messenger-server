@@ -42,6 +42,8 @@ export interface ReceiptsResult {
 
 export interface ConversationPage {
   readonly contact: string;
+  /** Present only on the explicit canonical-peer read contract, including empty pages. */
+  readonly peer?: { readonly kind: 'cid'; readonly cid: string };
   /** Oldest first, as the engine orders them. */
   readonly messages: readonly ConversationMessage[];
   /** Total entries in the conversation, not in this page. */
@@ -158,7 +160,7 @@ export function projectHistoryPage(
   contact: string,
   history: HistoryPage<HistoryMessage>,
   summary: { readonly total: number; readonly unread: number },
-  opts: { readonly announcedContact?: string } = {},
+  opts: { readonly announcedContact?: string; readonly preview?: false } = {},
 ): ConversationPage {
   const messages: ConversationMessage[] = history.items.map((row) => ({
     dir: row.direction,
@@ -181,6 +183,6 @@ export function projectHistoryPage(
     unread: summary.unread,
     hasMore: history.next_cursor !== null,
     nextBefore: history.next_cursor === null ? null : String(history.next_cursor),
-    preview: previewOf(opts.announcedContact ?? contact, messages.at(-1)),
+    preview: opts.preview === false ? '' : previewOf(opts.announcedContact ?? contact, messages.at(-1)),
   };
 }

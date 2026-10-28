@@ -122,6 +122,23 @@ selectively consumes only those wire IDs. The general consuming `getMessages`
 operation is intentionally absent from the REST surface. Duplicate calls are
 harmless because only unread-to-read transitions produce receipt wire IDs.
 
+Passive `GET /api/conversations/:contact/page` callers that do not display a chat-list
+preview may pass `preview=none`. The response keeps `preview: ''` and all rows, counts,
+receipts and cursors; older pages avoid the extra newest-message lookup. Omit the option
+for the existing latest-message preview. Contact name/CID resolution is unchanged.
+This opt-in applies to unbound REST pages; resource-bound reads keep their descriptor shape.
+
+Contacts snapshots advertise `capabilities.canonicalPeerReads: 1`. Clients with an
+authoritative CID can opt into `GET /api/peers/:cid/page`, `GET /api/peers/:cid/files`
+and `POST /api/peers/:cid/read`. These paths validate an exact 64-character hexadecimal
+CID and bypass name/contact enumeration, even after contact removal. Passive replies
+include `peer: {kind: "cid", cid}`; page previews are omitted. The read command retains
+the existing mutation-intent checks and consumes only unread wire IDs from that exact CID.
+Messages/files resource descriptors opt in with `addressing: "cid"`; their bound reads
+must use the matching peer path, with no change to legacy descriptor/query matching.
+An older server's missing route must not trigger a legacy read fallback. Existing
+name-based/default routes and send/file/command semantics remain unchanged.
+
 `GET /api/events` is a bounded SSE invalidation stream:
 
 - every connection begins with `sync_required(reason=connected)`;
