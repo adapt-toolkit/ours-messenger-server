@@ -158,7 +158,7 @@ export function projectHistoryPage(
   contact: string,
   history: HistoryPage<HistoryMessage>,
   summary: { readonly total: number; readonly unread: number },
-  opts: { readonly announcedContact?: string } = {},
+  opts: { readonly announcedContact?: string; readonly preview?: false } = {},
 ): ConversationPage {
   const messages: ConversationMessage[] = history.items.map((row) => ({
     dir: row.direction,
@@ -181,6 +181,6 @@ export function projectHistoryPage(
     unread: summary.unread,
     hasMore: history.next_cursor !== null,
     nextBefore: history.next_cursor === null ? null : String(history.next_cursor),
-    preview: previewOf(opts.announcedContact ?? contact, messages.at(-1)),
+    preview: opts.preview === false ? '' : previewOf(opts.announcedContact ?? contact, messages.at(-1)),
   };
 }

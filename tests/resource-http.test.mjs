@@ -25,6 +25,9 @@ const client = {
   } finally { stopped = true; resolveStopped(); }
  },
  async resourcePosition() { return { protocolVersion: 1, producerGeneration: 'source', position }; },
+ async listContacts() { return { contacts: [{ container_id: 'peer', name: 'peer' }] }; },
+ async listHistory() { return { items: [], next_cursor: null }; },
+ async getHistorySummary() { return { total: 0, unread: 0 }; },
  async currentIdentity() {
   if (race) { race = false; position++; wake({protocolVersion:1,producerGeneration:'source',position,kind:'committed'}); }
   return { cid: identityCid, name: `Name${position}`, bio: 'Bio' };
@@ -106,6 +109,17 @@ try {
  const remove = await fetch(base+'/api/resource-subscriptions',{method:'DELETE',headers,body:JSON.stringify({connectionId,viewId:'self',subscriptionEpoch:2})});
  assert.equal(remove.status,200);
  assert.equal((await fetch(base+'/api/identity',{headers:binding})).status,409);
+ const messages = { connectionId, viewId: 'messages', subscriptionEpoch: 1,
+  descriptor: { viewId: 'messages', resource: 'messages', entityId: 'peer', window: { limit: 50, retainedPages: 1 } } };
+ const messagesControl = await fetch(base+'/api/resource-subscriptions', {method:'POST',headers,body:JSON.stringify(messages)});
+ assert.equal(messagesControl.status,200);
+ const messagesBaseline = await messagesControl.json();
+ const messagesBinding = { 'X-Resource-Connection':connectionId, 'X-Resource-View':'messages',
+  'X-Resource-Epoch':'1', 'X-Resource-Baseline':messagesBaseline.baselineId };
+ assert.equal((await fetch(base+'/api/conversations/peer/page?limit=50', {headers:messagesBinding})).status,200);
+ assert.equal((await fetch(base+'/api/conversations/peer/page?limit=50&preview=none', {headers:messagesBinding})).status,409,
+  'unbound preview opt-in must not loosen the resource descriptor contract');
+ await fetch(base+'/api/resource-subscriptions', {method:'DELETE',headers,body:JSON.stringify({connectionId,viewId:'messages',subscriptionEpoch:1})});
  console.log('resource-http: same-origin controls, registered initial GET, complete payloads and local profile commits passed');
 } finally {
  abort.abort(); await reader?.cancel().catch(()=>{});

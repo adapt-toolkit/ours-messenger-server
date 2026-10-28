@@ -733,6 +733,11 @@ const ROUTES: Record<string, Handler> = {
 
   'GET /api/conversations/:contact/page': async ({ client, params, query }) => {
     const contact = params.contact;
+    const previewOptions = query.getAll('preview');
+    if (previewOptions.length > 1 || (previewOptions.length === 1 && previewOptions[0] !== 'none')) {
+      throw bad('preview must be omitted or exactly none');
+    }
+    const omitPreview = previewOptions.length === 1;
     const rawLimit = query.get('limit');
     const limit = rawLimit === null ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
@@ -747,9 +752,12 @@ const ROUTES: Record<string, Handler> = {
         limit,
       }),
       client.getHistorySummary({ peer_cid: peer.cid }),
-      before === undefined ? Promise.resolve(null) : client.listHistory({ peer_cid: peer.cid, limit: 1 }),
+      before === undefined || omitPreview ? Promise.resolve(null) : client.listHistory({ peer_cid: peer.cid, limit: 1 }),
     ]);
-    const projected = projectHistoryPage(contact, history, summary, { announcedContact: peer.announcedName });
+    const projected = projectHistoryPage(contact, history, summary, {
+      announcedContact: peer.announcedName,
+      ...(omitPreview ? { preview: false as const } : {}),
+    });
     if (!newest) return projected;
     return {
       ...projected,
