@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@ours.network/cli": "4.0.1",
-    "@ours.network/daemon": "5.0.0",
+    "@ours.network/daemon": "5.0.1",
     "@playwright/test": "^1.62.1",
     "@types/node": "^20.14.0",
     "@types/web-push": "^3.6.4",
