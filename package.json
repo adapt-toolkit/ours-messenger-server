@@ -41,13 +41,13 @@
   },
   "dependencies": {
     "@eslint-community/regexpp": "4.12.2",
-    "@ours.network/sdk": "5.0.0",
+    "@ours.network/sdk": "5.0.1",
     "parse5": "^8.0.1",
     "web-push": "^3.6.7",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@ours.network/cli": "4.0.0",
+    "@ours.network/cli": "4.0.1",
     "@ours.network/daemon": "5.0.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^20.14.0",
