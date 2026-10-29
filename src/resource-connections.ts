@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OursClient, IdentityResourcePosition } from '@ours.network/sdk';
 import { subscribeHumanProfile } from './workspace-profile.js';
 import { startResourceObserver, type ResourceObserverHandle } from './watch.js';
-import { abortableProjection, canonicalResourceDescriptor, captureResourceProjection, messageProjectionDelta, type ResourceDescriptor, type MessageResourceSnapshot } from './resource-views.js';
+import { ACTIVITY_DEADLINE_MS, abortableProjection, canonicalResourceDescriptor, captureResourceProjection, messageProjectionDelta, type ResourceDescriptor, type MessageResourceSnapshot } from './resource-views.js';
 import type { ServerResponse } from 'node:http';
 import { resourceFrames, RESOURCE_ASSEMBLY_BYTES, RESOURCE_PENDING_BYTES, type ResourceEnvelope, type ResourceCoverage } from './resource-views.js';
 
@@ -133,6 +133,15 @@ interface ResourceView {
   localRevision: number;
   qualifiedAt?: number;
 }
+interface ActivityRead {
+  readonly source: IdentityResourcePosition;
+  readonly controller: AbortController;
+  readonly users: Set<symbol>;
+  promise: Promise<unknown>;
+  settled: boolean;
+}
+const sameSource = (a: IdentityResourcePosition, b: IdentityResourcePosition) =>
+  a.producerGeneration === b.producerGeneration && a.position === b.position;
 interface Connection {
   id: string;
   controller: AbortController;
@@ -156,14 +165,72 @@ export class ResourceBindingError extends Error {
  * never a credential. Browser authorization remains the deployment boundary. */
 export class ResourceConnections {
   readonly #connections = new Map<string, Connection>();
+  #activityRead?: ActivityRead;
   readonly producerGeneration = randomUUID();
   constructor(readonly deps: {
     client: OursClient;
     identity: string;
     identityCid: string;
     stateDir: string;
-    project(descriptor: ResourceDescriptor, signal: AbortSignal): Promise<unknown>;
+    project(descriptor: ResourceDescriptor, signal: AbortSignal, source?: IdentityResourcePosition): Promise<unknown>;
   }) {}
+
+  /** Ordinary and bound demands share only pending work in this service scope.
+   * Every new demand crosses the bound SDK API; source position is not a lease. */
+  async activity(signal: AbortSignal, bound?: { connection: Connection; view: ResourceView; source?: IdentityResourcePosition },
+    deadlineMs = ACTIVITY_DEADLINE_MS): Promise<unknown> {
+    signal.throwIfAborted();
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new Error('activity metadata unavailable')), deadlineMs);
+    try { return await this.#readActivity(AbortSignal.any([signal, deadline.signal]), bound); }
+    finally { clearTimeout(timer); }
+  }
+
+  async #readActivity(signal: AbortSignal, bound?: { connection: Connection; view: ResourceView; source?: IdentityResourcePosition }): Promise<unknown> {
+    signal.throwIfAborted();
+    const source = await abortableProjection(this.deps.client.resourcePosition(this.deps.identity, { signal }), signal);
+    signal.throwIfAborted();
+    if (bound?.source && !sameSource(bound.source, source)) throw new Error('activity baseline changed');
+    let read = this.#activityRead;
+    if (read && (read.settled || read.controller.signal.aborted || !sameSource(read.source, source))) {
+      // Already-admitted storage work still owns its slot until it drains.
+      // A later genuine demand can start fresh; this request schedules no retry.
+      throw new Error('activity prior source still draining');
+    }
+    if (!read) {
+      read = { source, controller: new AbortController(), users: new Set(),
+        promise: undefined!, settled: false };
+      const owned = read;
+      this.#activityRead = owned;
+      owned.promise = Promise.resolve().then(() => {
+        owned.controller.signal.throwIfAborted();
+        return this.deps.project({ viewId: 'activity', resource: 'activity' }, owned.controller.signal, source);
+      }).finally(() => {
+        owned.settled = true;
+        if (this.#activityRead === owned && !owned.users.size) this.#activityRead = undefined;
+      });
+      // Last-reader retirement does not make a late RPC rejection unobserved.
+      void owned.promise.catch(() => {});
+    }
+    const owned = read, user = Symbol('activity reader');
+    owned.users.add(user);
+    try {
+      const payload = await abortableProjection(owned.promise, signal);
+      const after = await abortableProjection(this.deps.client.resourcePosition(this.deps.identity, { signal }), signal);
+      signal.throwIfAborted();
+      if (!sameSource(source, after)) throw new Error('activity source changed');
+      if (bound) {
+        if (!this.#current(bound.connection, bound.view)) throw new Error('activity owner retired');
+      }
+      return payload;
+    } finally {
+      owned.users.delete(user);
+      if (!owned.users.size) {
+        owned.controller.abort();
+        if (owned.settled && this.#activityRead === owned) this.#activityRead = undefined;
+      }
+    }
+  }
 
   open(response: ServerResponse): { connectionId: string; close(): void; closed: Promise<void> } {
     const id = randomUUID(), controller = new AbortController();
@@ -275,6 +342,21 @@ export class ResourceConnections {
     if (!view || view.epoch !== epoch || view.baselineId !== baselineId) throw new ResourceBindingError(409, 'resource binding mismatch');
     const baseline = await view.initial;
     if (!this.#current(connection, view) || view.failed || !connection.observer.healthy) throw new ResourceBindingError(409, 'resource binding retired');
+    if (view.descriptor.resource === 'activity') {
+      // The identity observer cannot authorize a connector lease. Re-read via
+      // the bound SDK API even at the same source; never serve an old capture.
+      try {
+        const payload = await this.activity(view.controller.signal, { connection, view, source: baseline.source });
+        if (!this.#current(connection, view) || view.failed || !connection.observer.healthy
+            || !view.covered || !sameSource(baseline.source, view.covered))
+          throw new Error('activity baseline changed');
+        return { ...baseline, payload };
+      } catch {
+        view.failed = true;
+        this.#retire(view);
+        throw new ResourceBindingError(409, 'resource activity binding retired');
+      }
+    }
     return baseline;
   }
 
@@ -351,7 +433,9 @@ export class ResourceConnections {
       if (view.dirty && this.#current(connection, view)) {
         view.dirty = false;
         const captured = await captureResourceProjection(this.deps.client, this.deps.identity, async () => {
-          const payload = await this.deps.project(view.descriptor, view.controller.signal);
+          const payload = view.descriptor.resource === 'activity'
+            ? await this.activity(view.controller.signal, { connection, view })
+            : await this.deps.project(view.descriptor, view.controller.signal);
           const delta = view.descriptor.resource === 'messages' && view.payload !== undefined
             ? await messageProjectionDelta(this.deps.client, view.payload as MessageResourceSnapshot,
               payload as MessageResourceSnapshot, view.controller.signal) : undefined;

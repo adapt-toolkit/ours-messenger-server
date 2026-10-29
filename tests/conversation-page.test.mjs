@@ -112,12 +112,12 @@ t.eq(tail.unread, 3, 'unread counts unread INBOUND across the whole conversation
 const typed = projectHistoryPage('CID-PEER', {
   items: [
     {
-      direction: 'in', text: '{"ok":true,"result":{"value":0}}', body: '{"ok":true,"result":{"value":0}}',
+      seq: 12, direction: 'in', text: '{"ok":true,"result":{"value":0}}', body: '{"ok":true,"result":{"value":0}}',
       message_kind: 'command_result', date: 'D2', inbox_state: 'unread', delivery_state: null,
       wire_id: 'RESULT', reply_to: { wire_id: 'COMMAND' }, peer: { id: 'CID-PEER', name: 'Peer' },
     },
     {
-      direction: 'out', text: '{"command":"notes.create","arguments":{"":""}}',
+      seq: 7, direction: 'out', text: '{"command":"notes.create","arguments":{"":""}}',
       body: '{"command":"notes.create","arguments":{"":""}}', message_kind: 'command', date: 'D1',
       inbox_state: 'read', delivery_state: 'delivered', wire_id: 'COMMAND', reply_to: null,
       peer: { id: 'CID-PEER', name: 'Peer' },
@@ -125,6 +125,9 @@ const typed = projectHistoryPage('CID-PEER', {
   ],
   next_cursor: null,
 }, { total: 2, unread: 1 });
+t.eq(typed.oldestSequence,7,'canonical history exposes actual stored lower sequence independently of continuation');
+t.eq(projectHistoryPage('CID-PEER',{items:[],next_cursor:null},{total:0,unread:0}).oldestSequence,null,
+  'empty canonical page has no invented lower sequence');
 t.eq(typed.messages.map((message) => message.message_kind), ['command', 'command_result'],
   'typed history stays in ordinary chronological order');
 t.eq(typed.messages[0].typed, { kind: 'command', command: 'notes.create', arguments: { '': '' } },

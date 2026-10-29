@@ -120,128 +120,24 @@ export function canonicalResourceDescriptor(value: unknown): ResourceDescriptor 
     ...(row.addressing === 'cid' ? { addressing: 'cid' as const } : {}), ...(window ? { window } : {}) };
 }
 
-/** At most this many activity reads are in flight per client, across projections. */
-export const ACTIVITY_READERS = 4;
-/** A projection publishes what it has by then; contacts still unread are unavailable. */
-export const ACTIVITY_DEADLINE_MS = 5000;
 export type ContactActivity = { readonly at: string } | { readonly unavailable: true };
+/** Preserve the existing request-owned activity budget; no periodic work. */
+export const ACTIVITY_DEADLINE_MS = 5000;
 
-// History reads cannot be cancelled once sent, so a held read keeps its slot until it
-// settles, also after its projection has published without it.
-type Waiter = (granted: boolean) => void;
-const activitySlots = new WeakMap<object, { active: number; waiters: Waiter[] }>();
-function slots(client: object) {
-  let pool = activitySlots.get(client);
-  if (!pool) activitySlots.set(client, (pool = { active: 0, waiters: [] }));
-  const owned = pool, mine = new Set<Waiter>();
-  return {
-    /** False once withdrawn: the projection ended while this reader still waited. */
-    acquire: async (): Promise<boolean> => {
-      while (owned.active >= ACTIVITY_READERS) {
-        const granted = await new Promise<boolean>(resolve => { mine.add(resolve); owned.waiters.push(resolve); });
-        if (!granted) return false;
-      }
-      owned.active++;
-      return true;
-    },
-    release: () => {
-      owned.active--;
-      const next = owned.waiters.shift();
-      if (next) { mine.delete(next); next(true); }
-    },
-    withdraw: () => {
-      owned.waiters = owned.waiters.filter(waiter => !mine.has(waiter));
-      for (const waiter of mine) waiter(false);
-      mine.clear();
-    },
-  };
-}
-
-// Like history reads, a contact list read cannot be cancelled: at most one is in flight
-// per client. A projection may only use a read that started after it did, so a list
-// sampled before its source capture is never certified under it; an older read in
-// flight is waited out, within the projection's budget, before a fresh one starts.
-type ContactListing = { readonly epoch: number; readonly read: ReturnType<OursClient['listContacts']> };
-const contactLists = new WeakMap<object, ContactListing>();
-let listingEpoch = 0;
-async function contactList(client: Pick<OursClient, 'listContacts'>, since: number, ended: Promise<void>, live: () => boolean) {
-  for (;;) {
-    // Checked synchronously before any use or dispatch: a wait can be granted in the same
-    // turn its owner ends.
-    if (!live()) return undefined;
-    const current = contactLists.get(client);
-    if (current && current.epoch > since) return current.read;
-    if (!current) {
-      const listing = { epoch: ++listingEpoch, read: client.listContacts() };
-      contactLists.set(client, listing);
-      const settled = () => { if (contactLists.get(client) === listing) contactLists.delete(client); };
-      listing.read.then(settled, settled); // an abandoned list read may still fail later
-      return listing.read;
-    }
-    const waited = await Promise.race([current.read.then(() => true, () => true), ended.then(() => false)]);
-    if (!waited) return undefined;
-  }
-}
-
-/**
- * Each contact's last activity: the date of its newest stored message row (by sequence),
- * the same row a conversation window ends with. Files live in their own store and are
- * not part of it, as in that window. A chat list orders by it without opening any
- * conversation. One newest-row read per contact; a contact without messages has `at: ''`.
- * A contact whose read fails, or has not finished by the deadline, is `unavailable` and
- * never holds back the others, so a client keeps the time it already knew. The deadline
- * runs from projection start and covers the contact list: a list not read by then fails
- * the projection. No read starts after the deadline or cancellation.
- */
+/** Metadata-only SDK operation. Unsupported daemons fail explicitly; no body-history fallback. */
 export async function projectActivity(
-  client: Pick<OursClient, 'listContacts' | 'listHistory'>,
+  client: Pick<OursClient, 'getContactActivity'>,
   signal?: AbortSignal,
-  deadlineMs = ACTIVITY_DEADLINE_MS,
+  expectedSource?: IdentityResourcePosition,
 ): Promise<{ activity: Record<string, ContactActivity> }> {
   signal?.throwIfAborted();
-  const since = listingEpoch;
-  // One budget from projection start covers the contact list and every history read.
-  let timer: ReturnType<typeof setTimeout> | undefined, stop = () => {}, expired = false;
-  const ended = new Promise<void>(resolve => {
-    timer = setTimeout(() => { expired = true; resolve(); }, deadlineMs);
-    stop = () => resolve();
-    signal?.addEventListener('abort', stop, { once: true });
-  });
-  const pool = slots(client);
-  const activity: Record<string, ContactActivity> = {};
-  let open = true;
-  let contacts: Array<{ container_id: string }> = [];
-  try {
-    // A held contact list is not an empty one: the projection fails instead.
-    const listing = contactList(client, since, ended, () => !expired && !signal?.aborted);
-    const listed = await Promise.race([listing, ended.then(() => undefined)]);
-    signal?.throwIfAborted();
-    if (!listed) throw new Error('activity contact list unavailable');
-    contacts = listed.contacts;
-    const queue = contacts.map(contact => contact.container_id);
-    const reader = async () => {
-      for (;;) {
-        if (!await pool.acquire()) return;
-        const cid = open && !expired && !signal?.aborted ? queue.shift() : undefined;
-        if (cid === undefined) return pool.release();
-        try {
-          const newest = (await client.listHistory({ peer_cid: cid, limit: 1 })).items[0];
-          activity[cid] = { at: typeof newest?.date === 'string' ? newest.date : '' };
-        } catch {
-          activity[cid] = { unavailable: true };
-        } finally { pool.release(); }
-      }
-    };
-    await Promise.race([Promise.all(Array.from({ length: Math.min(ACTIVITY_READERS, queue.length) }, reader)), ended]);
-  } finally {
-    open = false;
-    pool.withdraw();
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', stop);
-  }
+  // Once admitted, this RPC remains owned until it settles. Cancelling a
+  // projection suppresses publication, not synchronous provider SQL.
+  const snapshot = await client.getContactActivity();
   signal?.throwIfAborted();
-  return { activity: Object.fromEntries(contacts.map(contact =>
-    [contact.container_id, activity[contact.container_id] ?? { unavailable: true }])) };
+  if (expectedSource && (snapshot.source.producerGeneration !== expectedSource.producerGeneration
+      || snapshot.source.position !== expectedSource.position)) throw new Error('activity source changed');
+  return { activity: snapshot.activity };
 }
 
 export interface MessageResourceSnapshot extends ConversationPage { readonly oldestSequence: number | null }

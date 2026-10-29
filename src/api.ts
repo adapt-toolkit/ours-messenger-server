@@ -76,7 +76,7 @@ function resourceService(deps: ApiDeps): ResourceConnections {
   if (!service) {
     service = new ResourceConnections({ client: deps.runtime.client, identity: deps.config.identity,
       identityCid: deps.identityCid, stateDir: deps.config.stateDir,
-      project: (descriptor, signal) => projectResourceView(deps, descriptor, signal) });
+      project: (descriptor, signal, source) => projectResourceView(deps, descriptor, signal, source) });
     resourceConnections.set(deps, service);
   }
   return service;
@@ -602,7 +602,8 @@ async function projectFilesResource(client: OursClient, deps: ApiDeps, params: R
 }
 
 /** The stream and HTTP routes share the same canonical serializers. */
-export async function projectResourceView(deps: ApiDeps, input: ResourceDescriptor, signal: AbortSignal): Promise<unknown> {
+export async function projectResourceView(deps: ApiDeps, input: ResourceDescriptor, signal: AbortSignal,
+  source?: import('@ours.network/sdk').IdentityResourcePosition): Promise<unknown> {
   const descriptor = canonicalResourceDescriptor(input), client = deps.runtime.client;
   signal.throwIfAborted();
   switch (descriptor.resource) {
@@ -611,7 +612,7 @@ export async function projectResourceView(deps: ApiDeps, input: ResourceDescript
     case 'files': return projectFilesResource(client, deps, { contact: descriptor.entityId! }, signal,
       descriptor.addressing === 'cid' ? canonicalPeer(descriptor.entityId!) : undefined);
     case 'commands': return projectCommandResource(client, deps, { contact: descriptor.entityId! });
-    case 'activity': return projectActivity(client, signal);
+    case 'activity': return projectActivity(client, signal, source);
     case 'messages': {
       const pin = descriptor.addressing === 'cid' ? canonicalPeer(descriptor.entityId!) : undefined;
       const peer = pin ? { cid: pin.cid, announcedName: '' } : await resolveContact(client, descriptor.entityId!);
@@ -828,11 +829,11 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/contacts': async ({ client }) => presentContacts(await client.listContacts()),
 
   // Last activity per contact for chat-list ordering; no message or file content.
-  'GET /api/activity': async ({ client, res }) => {
-    // A reader that goes away starts no further contact reads.
+  'GET /api/activity': async ({ deps, res }) => {
+    // A reader detaches without cancelling other current bound/HTTP owners.
     const lifetime = new AbortController();
     res.once('close', () => lifetime.abort());
-    return projectActivity(client, lifetime.signal);
+    return resourceService(deps).activity(lifetime.signal);
   },
 
   // The old browser surface called this `listContactRoots`. It is not a separate
