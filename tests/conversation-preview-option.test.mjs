@@ -37,6 +37,8 @@ async function read(query) {
 try {
   const baseline = await read('?limit=50&before=100');
   assert.equal(baseline.status, 200);
+  assert.equal(baseline.value.oldestSequence,80,'public HTTP page carries actual lower sequence, independent from nextBefore70');
+  assert.equal(baseline.value.nextBefore,'70');
   assert.equal(baseline.value.preview, 'latest');
   assert.deepEqual(calls, [['contacts'],
     ['history', { peer_cid: a, before_seq: 100, limit: 50 }],
@@ -53,6 +55,15 @@ try {
   assert.equal(initial.value.preview, '');
   assert.equal(initial.value.messages[0].text, 'latest');
   assert.equal(calls.filter(call => call[0] === 'history').length, 1);
+  calls.length = 0;
+  const strictResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/peers/${b}/page?before=100&preview=none`);
+  assert.equal(strictResponse.status,200);
+  const strictPage = await strictResponse.json();
+  assert.deepEqual(strictPage.peer,{kind:'cid',cid:b});
+  assert.equal(strictPage.oldestSequence,80,'strict canonical CID page exposes actual lower sequence too');
+  assert.equal(strictPage.nextBefore,'70','continuation and lower bound are distinct metadata');
+  assert.deepEqual(calls,[['history',{peer_cid:b,before_seq:100,limit:50}],['summary',{peer_cid:b}]],
+    'canonical CID projection does not resolve the colliding legacy alias');
   for (const query of ['?preview=', '?preview=false', '?preview=NONE', '?preview=none&preview=none', '?preview=none&preview=']) {
     assert.equal((await read(query)).status, 400, query);
     assert.deepEqual(calls, [], 'invalid opt-in is rejected before SDK work');

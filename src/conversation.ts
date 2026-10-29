@@ -68,6 +68,8 @@ export interface ConversationPage {
    * a pre-1.4 row with no stable id — see `cursorFor`.
    */
   readonly nextBefore: string | null;
+  /** Inclusive stored sequence lower bound; absent on array-only legacy projections. */
+  readonly oldestSequence?: number | null;
 }
 
 export class ConversationPageError extends Error {
@@ -182,6 +184,7 @@ export function projectHistoryPage(
     total: summary.total,
     unread: summary.unread,
     hasMore: history.next_cursor !== null,
+    oldestSequence: history.items.at(-1)?.seq ?? null,
     nextBefore: history.next_cursor === null ? null : String(history.next_cursor),
     preview: opts.preview === false ? '' : previewOf(opts.announcedContact ?? contact, messages.at(-1)),
   };
