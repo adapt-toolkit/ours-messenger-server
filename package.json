@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@eslint-community/regexpp": "4.12.2",
-    "@ours.network/sdk": "5.1.0",
+    "@ours.network/sdk": "5.2.0",
     "parse5": "^8.0.1",
     "web-push": "^3.6.7",
     "ws": "^8.21.0"
